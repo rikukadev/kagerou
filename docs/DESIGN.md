@@ -65,6 +65,22 @@ Adapter)で SSR サーバーをそのまま包めば静的アセットも Lambda
 劣るが確認用途には無関係。つまりハイブリッドは driver ではなく **stack テンプレート
 の書き方の問題**に倒し、kagerou はテンプレートの中身を知らないという境界を守る。
 
+### 2.5 AWS のカテゴリで見た組み合わせ
+
+環境の構成要素を AWS の分類そのままに 2 軸で見ると、責務の境界が一番はっきりする:
+
+| 軸 | 一時化の手段(例) | 誰の責務か |
+|---|---|---|
+| **Compute / 配信** | Lambda+LWA(`stack`)、常設 Lambda+振り分け(`shared`)、S3+CF(`static`)、将来 ECS Fargate | **kagerou の driver** |
+| **データ** | sashiki ブランチ(ZFS/FSx)、共有 RDS、Aurora fast clone、DynamoDB のテーブル/プレフィックス分離 | **backing service**(kagerou は env で繋ぐだけ) |
+
+- **driver はデータ軸を知らず、backing service は compute 軸を知らない**。
+  この直交性のおかげで「Lambda × sashiki」「Fargate × Aurora clone」…と
+  組み合わせが増えても、kagerou 側の実装は driver の数だけで済む
+- データ軸の一時化はサービスごとに流儀が違う(sashiki はブランチ、Aurora は
+  fast clone、DynamoDB はテーブル分け)。そこに kagerou は踏み込まない —
+  名前(`{name}`)と TTL の規約を提供して繋ぐだけ
+
 ## 3. アーキテクチャの選択肢
 
 ### 案 A: ステートレス CLI + AWS を真実の源にする(推し)
