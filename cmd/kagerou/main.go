@@ -31,7 +31,9 @@ func run(args []string, out *os.File) error {
 		return cmdDown(args[1:], out)
 	case "url":
 		return cmdURL(args[1:], out)
-	case "list", "reap":
+	case "list":
+		return cmdList(args[1:], out)
+	case "reap":
 		return fmt.Errorf("%s: not implemented yet (docs/DESIGN.md 参照)", args[0])
 	default:
 		usage()

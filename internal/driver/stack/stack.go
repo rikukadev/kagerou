@@ -168,9 +168,35 @@ func (d *Driver) Info(ctx context.Context, stackName string) (*Info, error) {
 	if err != nil || len(out.Stacks) == 0 {
 		return nil, fmt.Errorf("describe stack %s: %w", stackName, err)
 	}
-	s := out.Stacks[0]
+	return infoFromStack(out.Stacks[0]), nil
+}
+
+// List は kagerou 管理(kagerou:managed=true)のスタックを列挙する。
+// v0.1 は stack driver のみなので CFN の走査で足りる。Resource Groups
+// Tagging API への切り替えは非 CFN リソースを持つ driver が入るとき(§8)。
+func (d *Driver) List(ctx context.Context) ([]*Info, error) {
+	var infos []*Info
+	p := cloudformation.NewDescribeStacksPaginator(d.cfn, &cloudformation.DescribeStacksInput{})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("describe stacks: %w", err)
+		}
+		for _, s := range page.Stacks {
+			info := infoFromStack(s)
+			if info.Tags[TagManaged] != "true" || s.StackStatus == cfntypes.StackStatusDeleteComplete {
+				continue
+			}
+			infos = append(infos, info)
+		}
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Tags[TagName] < infos[j].Tags[TagName] })
+	return infos, nil
+}
+
+func infoFromStack(s cfntypes.Stack) *Info {
 	info := &Info{
-		StackName:    stackName,
+		StackName:    aws.ToString(s.StackName),
 		Status:       string(s.StackStatus),
 		CreationTime: aws.ToTime(s.CreationTime),
 		Outputs:      map[string]string{},
@@ -182,7 +208,7 @@ func (d *Driver) Info(ctx context.Context, stackName string) (*Info, error) {
 	for _, t := range s.Tags {
 		info.Tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
 	}
-	return info, nil
+	return info
 }
 
 // State は CFN ステータスを Environment JSON の state(CONTRACT §3)に写す。

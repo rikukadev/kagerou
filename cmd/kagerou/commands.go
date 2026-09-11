@@ -178,6 +178,41 @@ func cmdURL(args []string, out *os.File) error {
 	return err
 }
 
+func cmdList(args []string, out *os.File) error {
+	f, err := parseUpFlags("list", args)
+	if err != nil {
+		return err
+	}
+	// list は名前を取らないので loadConfigFor(名前検証つき)は通さない
+	cfg, err := config.LoadOrDefault(f.cfgPath)
+	if err != nil {
+		return err
+	}
+	drv, ctx, err := newDriver(cfg)
+	if err != nil {
+		return err
+	}
+	infos, err := drv.List(ctx)
+	if err != nil {
+		return err
+	}
+	if f.output == "json" {
+		envs := make([]map[string]any, 0, len(infos))
+		for _, info := range infos {
+			envs = append(envs, environmentJSON(info.Tags[stack.TagName], info))
+		}
+		return json.NewEncoder(out).Encode(envs)
+	}
+	for _, info := range infos {
+		u, _ := stack.URL(info.Outputs)
+		if _, err := fmt.Fprintf(out, "%s\t%s\t%s\t%s\n",
+			info.Tags[stack.TagName], info.State(), info.Tags[stack.TagExpiresAt], u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // environmentJSON は docs/CONTRACT.md §3 の Environment JSON を組む。
 // フィールドは追加のみ可(削除・改名は互換性破壊)。
 func environmentJSON(name string, info *stack.Info) map[string]any {
