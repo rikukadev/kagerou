@@ -71,14 +71,24 @@ runs:
             exit 1
           fi
         fi
+        case "$ver" in
+          v*) ;;
+          *) echo "最新リリースを解決できませんでした(リリース未作成?): $ver" >&2
+             echo "version を明示するか ref(go install)を使ってください" >&2
+             exit 1 ;;
+        esac
         asset="kagerou_${ver#v}_linux_${arch}.tar.gz"
         url="https://github.com/rikukadev/kagerou/releases/download/${ver}/${asset}"
         echo "installing kagerou ${ver} (${asset})"
+        # self-hosted runner は /usr/local/bin に書けないことがあるため RUNNER_TEMP に置く
+        bin="${RUNNER_TEMP}/kagerou-bin"
+        mkdir -p "$bin"
         tmp=$(mktemp -d)
         curl -fsSL "$url" -o "$tmp/k.tar.gz"
         tar -xzf "$tmp/k.tar.gz" -C "$tmp"
-        install -m 755 "$tmp/kagerou" /usr/local/bin/kagerou
-        kagerou version
+        install -m 755 "$tmp/kagerou" "$bin/kagerou"
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/kagerou" version
 
     # ref 指定時のみ go install(未リリースの main や PR を試す用)
     - uses: actions/setup-go@v7
@@ -89,7 +99,13 @@ runs:
     - name: Install kagerou (from source)
       if: inputs.ref != ''
       shell: bash
-      run: go install github.com/rikukadev/kagerou/cmd/kagerou@${{ inputs.ref }}
+      run: |
+        # self-hosted runner は ~/go/bin が PATH に無いことがあるため置き場を固定する
+        export GOBIN="${RUNNER_TEMP}/kagerou-bin"
+        mkdir -p "$GOBIN"
+        go install github.com/rikukadev/kagerou/cmd/kagerou@${{ inputs.ref }}
+        echo "$GOBIN" >> "$GITHUB_PATH"
+        "$GOBIN/kagerou" version
 
     - name: Run kagerou
       id: run
