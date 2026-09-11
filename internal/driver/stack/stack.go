@@ -41,6 +41,10 @@ var urlOutputKeys = []string{"KagerouUrl", "PreviewUrl"}
 
 const waitTimeout = 30 * time.Minute
 
+// MaxLifetime は touch(up ごとの TTL 延長)の上限。初回作成からこれを超えて
+// 延ばせない(無限延長の防止。DESIGN §8)。--ttl none の明示無期限には適用しない。
+const MaxLifetime = 30 * 24 * time.Hour
+
 type Driver struct {
 	cfn *cloudformation.Client
 }
@@ -97,6 +101,19 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 			return nil, fmt.Errorf("前回失敗したスタックの削除: %w", err)
 		}
 		status = ""
+	}
+
+	// touch の上限: 初回作成(存在しなければ今)から MaxLifetime を超えない
+	if in.ExpiresAt != nil {
+		base := time.Now()
+		if status != "" {
+			if info, err := d.Info(ctx, in.StackName); err == nil {
+				base = info.CreationTime
+			}
+		}
+		if limit := base.Add(MaxLifetime); in.ExpiresAt.After(limit) {
+			in.ExpiresAt = &limit
+		}
 	}
 
 	tags := buildTags(in)
@@ -192,6 +209,21 @@ func (d *Driver) List(ctx context.Context) ([]*Info, error) {
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Tags[TagName] < infos[j].Tags[TagName] })
 	return infos, nil
+}
+
+// Expired は kagerou:expires-at を過ぎた環境か判定する(reap の判定部)。
+// grace は削除までの猶予。タグが "none"・欠落・解釈不能なら回収しない
+// (壊れたタグで環境を消すより、残して人間に見せる方が安全)。
+func (i *Info) Expired(now time.Time, grace time.Duration) bool {
+	v := i.Tags[TagExpiresAt]
+	if v == "" || v == TTLNoneTagValue {
+		return false
+	}
+	exp, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return false
+	}
+	return now.After(exp.Add(grace))
 }
 
 func infoFromStack(s cfntypes.Stack) *Info {

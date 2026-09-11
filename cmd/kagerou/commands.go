@@ -213,6 +213,50 @@ func cmdList(args []string, out *os.File) error {
 	return nil
 }
 
+func cmdReap(args []string, out *os.File) error {
+	fs := flag.NewFlagSet("reap", flag.ContinueOnError)
+	cfgPath := fs.String("config", config.DefaultFile, "設定ファイル")
+	dryRun := fs.Bool("dry-run", false, "削除せず対象を表示するだけ")
+	grace := fs.Duration("grace", 0, "期限切れから削除までの猶予(例 1h)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		return err
+	}
+	drv, ctx, err := newDriver(cfg)
+	if err != nil {
+		return err
+	}
+	infos, err := drv.List(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, info := range infos {
+		if !info.Expired(now, *grace) {
+			continue
+		}
+		name := info.Tags[stack.TagName]
+		if *dryRun {
+			if _, err := fmt.Fprintf(out, "would reap\t%s\t(expired %s)\n", name, info.Tags[stack.TagExpiresAt]); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := drv.Down(ctx, info.StackName); err != nil {
+			// 1 件の失敗で全体を止めない(残りは回収する)。失敗は最後にまとめて返す
+			fmt.Fprintf(os.Stderr, "kagerou: reap %s: %v\n", name, err)
+			continue
+		}
+		if _, err := fmt.Fprintf(out, "reaped\t%s\t(expired %s)\n", name, info.Tags[stack.TagExpiresAt]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // environmentJSON は docs/CONTRACT.md §3 の Environment JSON を組む。
 // フィールドは追加のみ可(削除・改名は互換性破壊)。
 func environmentJSON(name string, info *stack.Info) map[string]any {

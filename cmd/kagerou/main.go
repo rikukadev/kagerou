@@ -34,7 +34,7 @@ func run(args []string, out *os.File) error {
 	case "list":
 		return cmdList(args[1:], out)
 	case "reap":
-		return fmt.Errorf("%s: not implemented yet (docs/DESIGN.md 参照)", args[0])
+		return cmdReap(args[1:], out)
 	default:
 		usage()
 		return fmt.Errorf("unknown subcommand %q", args[0])

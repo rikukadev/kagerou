@@ -178,6 +178,84 @@ func TestUpRejectsUndeclaredEnv(t *testing.T) {
 	}
 }
 
+func TestExpired(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	mk := func(v string) *Info { return &Info{Tags: map[string]string{TagExpiresAt: v}} }
+	cases := []struct {
+		info  *Info
+		grace time.Duration
+		want  bool
+	}{
+		{mk("2026-09-12T11:00:00Z"), 0, true},               // 期限切れ
+		{mk("2026-09-12T13:00:00Z"), 0, false},              // まだ生きてる
+		{mk("2026-09-12T11:30:00Z"), time.Hour, false},      // grace 内
+		{mk("2026-09-12T10:00:00Z"), time.Hour, true},       // grace を過ぎた
+		{mk(TTLNoneTagValue), 0, false},                     // 明示無期限
+		{mk("broken"), 0, false},                            // 壊れたタグは消さない
+		{&Info{Tags: map[string]string{}}, 0, false},        // タグ欠落
+	}
+	for i, tc := range cases {
+		if got := tc.info.Expired(now, tc.grace); got != tc.want {
+			t.Errorf("case %d: Expired = %v, want %v", i, got, tc.want)
+		}
+	}
+}
+
+func TestUpClampsTTLToMaxLifetime(t *testing.T) {
+	d, ctx := testDriver(t)
+	stackName := "kagerou-test-clamp"
+	t.Cleanup(func() { _ = d.Down(ctx, stackName) })
+
+	far := time.Now().Add(MaxLifetime + 240*time.Hour) // 上限超え
+	info, err := d.Up(ctx, UpInput{StackName: stackName, Name: "clamp", TemplateBody: testTemplate, ExpiresAt: &far})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp, err := time.Parse(time.RFC3339, info.Tags[TagExpiresAt])
+	if err != nil {
+		t.Fatalf("expires-at tag unparsable: %q", info.Tags[TagExpiresAt])
+	}
+	if exp.After(time.Now().Add(MaxLifetime + time.Minute)) {
+		t.Fatalf("expires-at not clamped: %s", exp)
+	}
+}
+
+func TestReapLifecycle(t *testing.T) {
+	d, ctx := testDriver(t)
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(24 * time.Hour)
+
+	expired := "kagerou-test-reap-expired"
+	alive := "kagerou-test-reap-alive"
+	t.Cleanup(func() { _ = d.Down(ctx, expired); _ = d.Down(ctx, alive) })
+	if _, err := d.Up(ctx, UpInput{StackName: expired, Name: "reap-expired", TemplateBody: testTemplate, ExpiresAt: &past}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Up(ctx, UpInput{StackName: alive, Name: "reap-alive", TemplateBody: testTemplate, ExpiresAt: &future}); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, info := range infos {
+		if info.Expired(now, 0) {
+			if err := d.Down(ctx, info.StackName); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if status, _ := d.stackStatus(ctx, expired); status != "" {
+		t.Errorf("expired stack not reaped: %s", status)
+	}
+	if status, _ := d.stackStatus(ctx, alive); status == "" {
+		t.Error("alive stack was reaped")
+	}
+}
+
 func TestEnvParamName(t *testing.T) {
 	cases := map[string]string{
 		"DB_HOST":  "EnvDbHost",
