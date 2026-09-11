@@ -237,3 +237,18 @@ v0.2 の筆頭候補。SSR フロントは v0.1 の `stack` + LWA テンプレ�
 - [ ] hooks の仕様: 失敗時に up を止めるか、タイムアウト、reap 時に post_down を呼ぶか
 - [ ] URL の発行方法: CFN Output 前提でよいか(shared driver を見据えると抽象化が要る)
 - [ ] リポジトリ構成(sashiki の 25 章に倣うか)と CI の初期セット
+
+## 9. テスト戦略
+
+3 層に分ける([rikuka.dev のエミュレータ比較](https://rikuka.dev/blog/aws-local-emulator-comparison)の
+結論に従う。LocalStack 無料版は 2026-03 に廃止済みのため候補にしない):
+
+1. **ユニット** — config / 名前検証 / TTL 解釈など純 Go の層。`make test`
+2. **AWS 結合(ローカル/CI)** — stack driver・タグ走査・reap を **moto server**
+   (無料、`docker run motoserver/moto`)に対して検証。kagerou 側は AWS SDK の
+   `AWS_ENDPOINT_URL` を尊重するだけで、エミュレータ専用コードは書かない。
+   `make test-aws` + CI ジョブ(#13)
+3. **実 AWS e2e** — moto がカバーしない領域(SAM 変換・実 URL 疎通)。
+   常設 CI にはせず手動 or nightly。sashiki-todo-demo の kagerou 化(#9)が兼ねる
+
+デプロイ系の機能は「実装と同じ PR に moto 結合テストが付いてくる」を規約にする。
