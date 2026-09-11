@@ -176,8 +176,9 @@ kagerou から見れば、sashiki のブランチも、共有の RDS も、SQLit
 
 ```yaml
 # kagerou.yaml
+project: todo                  # kagerou:project タグ(Backstage 連携の紐付けキー)
 driver: stack
-template: template.yaml        # stack driver: SAM/CFN テンプレート
+template: template.yaml        # stack driver: packaged 済み SAM/CFN テンプレート
 region: ap-northeast-1
 name_prefix: todo-             # スタック名は todo-pr-42 になる
 ttl: 72h                       # デフォルト寿命
@@ -227,16 +228,24 @@ kagerou reap --dry-run             # TTL 切れ・孤児の検出と削除
 v0.2 以降。優先順は需要次第だが、`static` は実装が最も薄く恩恵が広いので
 v0.2 の筆頭候補。SSR フロントは v0.1 の `stack` + LWA テンプレートで既に賄える。
 
-## 8. 未決事項(実装前に決める)
+## 8. 未決事項の解消状況
 
-- [ ] タグスキーマ(`kagerou:*`)の確定。CFN スタック以外のリソース(Route53 等)への付け方
-- [ ] stack driver が `--env` を届ける方法: (a) テンプレートに規約パラメータ(`KagerouEnv` 等)を要求する / (b) デプロイ後に `update-function-configuration` で注入(テンプレート無改造だが Lambda 限定)
-- [ ] `stack` driver の入力: SAM テンプレートを user 持ちにするか、kagerou がテンプレートを生成するか
-- [ ] TTL 延長のポリシー: PR 更新(synchronize)ごとに touch でよいか
-- [ ] `list` / reaper の走査コスト(タグ検索は Resource Groups Tagging API で足りるか)
-- [ ] hooks の仕様: 失敗時に up を止めるか、タイムアウト、reap 時に post_down を呼ぶか
-- [ ] URL の発行方法: CFN Output 前提でよいか(shared driver を見据えると抽象化が要る)
-- [ ] リポジトリ構成(sashiki の 25 章に倣うか)と CI の初期セット
+設計レビュー(2026-09-12、Backstage 連携観点)で大半を解消。外部が依存してよい
+契約は **docs/CONTRACT.md** に分離した(タグスキーマ / Environment JSON /
+名前制約 / env の届け方 / URL 規約)。
+
+- [x] タグスキーマ → CONTRACT §1 で凍結。`kagerou:managed / project / driver / source / version` を追加。スタック外リソースを持つ driver は個別に付ける責務
+- [x] `--env` の届け方 → テンプレートが宣言する **`Env<Key>` パラメータへ流す**(CONTRACT §4)。宣言が受け取り口なので「テンプレートの中身を知らない」境界を守れる。(b) デプロイ後注入案は Lambda 限定のため撤回
+- [x] テンプレートは user 持ち(packaged 済み)。kagerou は生成しない
+- [x] TTL 延長 → up ごとに touch。ただし**初回作成から 30 日を上限**にして無限延長を防ぐ(実装は #6)
+- [x] 走査コスト → `kagerou:managed=true` で絞れば Resource Groups Tagging API で十分(数百スタックでも 1〜2 ページ)
+- [x] hooks → `pre_up` 失敗は up を止める / `post_down` 失敗は記録して続行 / **reap も post_down を呼ぶ**(呼ばないと sashiki 側に孤児が残る経路になる)(実装は #7)
+- [x] URL → CFN Output 規約 `KagerouUrl` > `PreviewUrl`(CONTRACT §5)
+- [x] リポジトリ構成 / CI → #11 で確定(sashiki と同じツールチェーン)
+- [x] 環境名 → 小文字限定・63 文字・末尾ハイフン禁止に**最初から狭める**(Route53 ラベル / S3 プレフィックスを後で使うため。広げるのは安全、狭めるのは破壊)
+- [x] 同名 up の同時実行 → `*_IN_PROGRESS` なら安定を待ってから自分の変更を重ねる
+- [ ] reap の孤児検出: **既定は TTL のみ**。adapter への問い合わせは `--check-source github` のオプトイン(Reaper を Lambda 化しても GitHub トークンが要らないままにする)
+- [ ] `kagerou serve`(読み取り専用 HTTP、Lambda function URL)— Backstage プラグインの読み取り口。書き込みは workflow_dispatch 経由(CONTRACT §6)。v0.2
 
 ## 9. テスト戦略
 

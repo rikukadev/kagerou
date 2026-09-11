@@ -22,6 +22,7 @@ const DefaultFile = "kagerou.yaml"
 const TTLNone = "none"
 
 type Config struct {
+	Project    string            `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
 	Driver     string            `yaml:"driver"`
 	Template   string            `yaml:"template"`
 	Region     string            `yaml:"region"`
@@ -103,20 +104,20 @@ func ParseTTL(s string) (d time.Duration, hasTTL bool, err error) {
 	return d, true, nil
 }
 
-var nameRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9-]*$`)
+var nameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 
-// ValidateName は環境名の形式を検証する。CFN スタック名の制約
-// (英字始まり・英数字とハイフン)に合わせる。長さは prefix と合わせて
-// スタック名上限 128 に収まるよう控えめに 64 までとする。
+// ValidateName は環境名の形式を検証する(docs/CONTRACT.md §2)。
+// Route53 サブドメインラベル(63 文字)と S3 プレフィックスに後からそのまま
+// 使えるよう、最初から狭くしておく(広げるのは安全、狭めるのは既存名を壊す)。
 func ValidateName(name string) error {
 	if name == "" {
 		return errors.New("環境名が空")
 	}
-	if len(name) > 64 {
-		return fmt.Errorf("環境名 %q が長すぎる(64 文字まで)", name)
+	if len(name) > 63 {
+		return fmt.Errorf("環境名 %q が長すぎる(63 文字まで)", name)
 	}
 	if !nameRe.MatchString(name) {
-		return fmt.Errorf("環境名 %q が不正(英字始まり・英数字とハイフンのみ)", name)
+		return fmt.Errorf("環境名 %q が不正(小文字英字始まり・小文字英数字とハイフン・末尾ハイフン禁止)", name)
 	}
 	return nil
 }

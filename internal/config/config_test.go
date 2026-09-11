@@ -108,12 +108,12 @@ func TestParseTTL(t *testing.T) {
 }
 
 func TestValidateName(t *testing.T) {
-	for _, ok := range []string{"pr-42", "main", "a", "Feature-X2"} {
+	for _, ok := range []string{"pr-42", "main", "a", "feature-x2"} {
 		if err := ValidateName(ok); err != nil {
 			t.Errorf("ValidateName(%q) = %v, want nil", ok, err)
 		}
 	}
-	bad := []string{"", "42pr", "-lead", "pr_42", "pr.42", strings.Repeat("a", 65)}
+	bad := []string{"", "42pr", "-lead", "pr_42", "pr.42", "pr-", "Feature-X2", strings.Repeat("a", 64)}
 	for _, ng := range bad {
 		if err := ValidateName(ng); err == nil {
 			t.Errorf("ValidateName(%q) = nil, want error", ng)
