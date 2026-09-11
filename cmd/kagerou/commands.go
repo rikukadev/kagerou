@@ -11,6 +11,7 @@ import (
 
 	"github.com/rikukadev/kagerou/internal/config"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
+	"github.com/rikukadev/kagerou/internal/hooks"
 )
 
 // kvFlag は --env / --param の KEY=VALUE 繰り返し指定を集める。
@@ -93,10 +94,6 @@ func cmdUp(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Hooks.PreUp != "" || cfg.Hooks.PostDown != "" {
-		fmt.Fprintln(os.Stderr, "kagerou: warning: hooks は未実装(#7)。今は無視される")
-	}
-
 	body, err := os.ReadFile(cfg.Template)
 	if err != nil {
 		return fmt.Errorf("テンプレート: %w", err)
@@ -114,6 +111,10 @@ func cmdUp(args []string, out *os.File) error {
 
 	drv, ctx, err := newDriver(cfg)
 	if err != nil {
+		return err
+	}
+	// pre_up 失敗は up を止める(DESIGN §8)
+	if err := hooks.Run(ctx, "pre_up", cfg.Hooks.PreUp); err != nil {
 		return err
 	}
 	info, err := drv.Up(ctx, stack.UpInput{
@@ -147,7 +148,14 @@ func cmdDown(args []string, _ *os.File) error {
 	if err != nil {
 		return err
 	}
-	return drv.Down(ctx, cfg.StackName(f.name))
+	if err := drv.Down(ctx, cfg.StackName(f.name)); err != nil {
+		return err
+	}
+	// post_down 失敗は記録して続行(環境自体は消えている)
+	if err := hooks.Run(ctx, "post_down", cfg.Hooks.PostDown); err != nil {
+		fmt.Fprintf(os.Stderr, "kagerou: warning: %v\n", err)
+	}
+	return nil
 }
 
 func cmdURL(args []string, out *os.File) error {
@@ -246,9 +254,15 @@ func cmdReap(args []string, out *os.File) error {
 			continue
 		}
 		if err := drv.Down(ctx, info.StackName); err != nil {
-			// 1 件の失敗で全体を止めない(残りは回収する)。失敗は最後にまとめて返す
+			// 1 件の失敗で全体を止めない(残りは回収する)
 			fmt.Fprintf(os.Stderr, "kagerou: reap %s: %v\n", name, err)
 			continue
+		}
+		// reap でも post_down を呼ぶ(呼ばないと sashiki 側に孤児が残る経路になる)
+		if hook := cfg.ExpandName(name).Hooks.PostDown; hook != "" {
+			if err := hooks.Run(ctx, "post_down", hook); err != nil {
+				fmt.Fprintf(os.Stderr, "kagerou: warning: %v\n", err)
+			}
 		}
 		if _, err := fmt.Fprintf(out, "reaped\t%s\t(expired %s)\n", name, info.Tags[stack.TagExpiresAt]); err != nil {
 			return err
