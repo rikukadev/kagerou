@@ -92,21 +92,25 @@ kagerou の署名的な性質: **すべての環境は生まれた瞬間から�
 デモで実際に起きた問題への回答でもある: close イベントが失われると環境が
 リークする。イベント駆動だけに頼らず、**必ず Reaper が最後の網になる**。
 
-## 5. Backing services(env injection)
+## 5. 外部リソースの繋ぎ方(sashiki 連携もここに含まれる)
 
-kagerou は DB・キュー等の外部リソースを作らない。それらは 12-Factor で言う
-backing service であり、kagerou との接続は**環境変数の注入(env injection)**に
-限定する。sashiki は backing service の一例にすぎず、コード上の特別扱いはない:
+ルールは 1 行で言える: **kagerou は DB やキューを作らない。接続情報を環境変数で
+受け取って、環境に配るだけ。**
 
 ```
+# sashiki が作った DB ブランチに繋ぐ例。action の outputs を --env に横流しするだけ
 kagerou up --name pr-42 \
-  --env DB_HOST=... --env DB_USER=dev@pr-42 ...   # sashiki action の outputs をそのまま渡す
+  --env DB_HOST=... --env DB_USER=dev@pr-42 ...
 ```
 
-CI 側で outputs を配線するのが v0.x の答え。将来拡張するとしても、固有名フラグ
-(`--sashiki` 等)ではなく **`--env-from <command>`**(Kubernetes の `envFrom` に
-倣った汎用機構)とし、sashiki・RDS スナップショット・Neon などはその一例として
-ドキュメントに載せる。
+kagerou から見れば、sashiki のブランチも、共有の RDS も、SQLite 同梱も、
+すべて「env の出どころが違うだけ」で同じもの。だからコードに sashiki 専用の
+処理は存在しないし、`--sashiki` のような固有サービス名のフラグも作らない。
+
+将来足すとしたら汎用の `--env-from <command>`(指定コマンドを実行し、その出力を
+env として取り込む)まで。何と繋ぐかの具体例はデモとドキュメントの仕事にする。
+
+(この整理は 12-Factor の backing services の考え方そのまま)
 
 ## 6. セキュリティ(デモから引き継ぐ制約)
 
