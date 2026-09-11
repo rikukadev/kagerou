@@ -112,6 +112,40 @@ env として取り込む)まで。何と繋ぐかの具体例はデモとドキ
 
 (この整理は 12-Factor の backing services の考え方そのまま)
 
+## 5.5 CLI 素描(案 A 前提)
+
+リポジトリに `kagerou.yaml` を 1 つ置き、CI からの呼び出しは可変部分だけにする
+(samconfig.toml と同じ発想):
+
+```yaml
+# kagerou.yaml
+driver: stack
+template: template.yaml        # stack driver: SAM/CFN テンプレート
+region: ap-northeast-1
+name_prefix: todo-             # スタック名は todo-pr-42 になる
+ttl: 72h                       # デフォルト寿命
+tags:
+  team: rikuka                 # 全リソースに付く追加タグ
+```
+
+```bash
+# 作成/更新(冪等。既存なら update + TTL 延長)
+kagerou up --name pr-42 \
+  --env DB_HOST=10.0.1.5 --env DB_USER=dev@pr-42 \   # アプリに届ける環境変数
+  --param SubnetIds=subnet-xxx \                      # テンプレートのパラメータ
+  --wait --output json                                # {"name":"pr-42","url":"https://..."}
+
+kagerou down --name pr-42          # 冪等。無ければ成功
+kagerou list --output json         # タグから復元した一覧(name, url, expires-at)
+kagerou url --name pr-42           # URL だけ欲しい時(コメント投稿用)
+kagerou reap --dry-run             # TTL 切れ・孤児の検出と削除
+```
+
+- `--env`(アプリの語彙)と `--param`(インフラの語彙 = CFN parameter-overrides)を
+  分ける。sashiki 等の outputs は `--env` に流す
+- `list` / `reap` は状態ストアなしで動く: `kagerou:name` / `kagerou:expires-at`
+  タグを Resource Groups Tagging API で走査して復元する(案 A の肝)
+
 ## 6. セキュリティ(デモから引き継ぐ制約)
 
 - fork PR では動かさない(`head.repo == repository` の判定は adapter の責務)
@@ -133,6 +167,7 @@ env として取り込む)まで。何と繋ぐかの具体例はデモとドキ
 ## 8. 未決事項(実装前に決める)
 
 - [ ] タグスキーマ(`kagerou:*`)の確定。CFN スタック以外のリソース(Route53 等)への付け方
+- [ ] stack driver が `--env` を届ける方法: (a) テンプレートに規約パラメータ(`KagerouEnv` 等)を要求する / (b) デプロイ後に `update-function-configuration` で注入(テンプレート無改造だが Lambda 限定)
 - [ ] `stack` driver の入力: SAM テンプレートを user 持ちにするか、kagerou がテンプレートを生成するか
 - [ ] TTL 延長のポリシー: PR 更新(synchronize)ごとに touch でよいか
 - [ ] `list` / reaper の走査コスト(タグ検索は Resource Groups Tagging API で足りるか)
