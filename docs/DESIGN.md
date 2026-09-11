@@ -45,6 +45,16 @@ sashiki との関係 — **sashiki はオプショナルな隣人であり、依
 | app(PR ごとに SAM スタック) | `stack` | 分離が完全。作成に数分 |
 | app-shared(常設 Lambda + サブドメイン) | `shared` | 環境作成は URL 発行だけ。数秒 |
 | app-local(runner ホストの systemd) | `local` | AWS 不要。デモ・開発用 |
+| (デモ外)フロントエンドのみ | `static` | ビルド成果物を S3+CloudFront に配置して URL を配るだけ |
+
+なお用途は大きく 2 系統に分かれ、driver 選びの軸になる:
+
+1. **バックエンドあり**(RDS / sashiki 等に繋ぐ) — 本体は「compute を立てて env を
+   実行時に注入する」こと。`stack` / `shared` の世界
+2. **フロントエンドのみ** — 本体は「ビルド成果物の配置と URL 発行」。env は
+   ビルド時に焼き込まれる(Vite の `VITE_*` 等)ので実行時注入の概念がない。
+   `static` の世界(Vercel / Amplify の PR プレビューと同型)。環境 = S3 プレフィックス
+   なので作成は秒・コストほぼゼロ
 
 ## 3. アーキテクチャの選択肢
 
@@ -188,7 +198,9 @@ kagerou reap --dry-run             # TTL 切れ・孤児の検出と削除
 4. Publisher: PR コメント冪等更新(デモの marker 方式をそのまま昇華)
 5. Reaper: `kagerou reap` + サンプル cron workflow
 
-`shared` / `local` driver、Route53 サブドメイン管理は v0.2 以降。
+`static`(フロントエンド系)/ `shared` / `local` driver、Route53 サブドメイン管理は
+v0.2 以降。優先順は需要次第だが、`static` は実装が最も薄く恩恵が広いので
+v0.2 の筆頭候補。
 
 ## 8. 未決事項(実装前に決める)
 
