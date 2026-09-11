@@ -45,16 +45,25 @@ sashiki との関係 — **sashiki はオプショナルな隣人であり、依
 | app(PR ごとに SAM スタック) | `stack` | 分離が完全。作成に数分 |
 | app-shared(常設 Lambda + サブドメイン) | `shared` | 環境作成は URL 発行だけ。数秒 |
 | app-local(runner ホストの systemd) | `local` | AWS 不要。デモ・開発用 |
-| (デモ外)フロントエンドのみ | `static` | ビルド成果物を S3+CloudFront に配置して URL を配るだけ |
+| (デモ外)静的配信で完結するもの | `static` | ビルド成果物を S3+CloudFront に配置して URL を配るだけ |
 
-なお用途は大きく 2 系統に分かれ、driver 選びの軸になる:
+driver 選びの軸は「フロントエンドかどうか」**ではなく**、
+**「リクエスト処理に compute が要るか」**である:
 
-1. **バックエンドあり**(RDS / sashiki 等に繋ぐ) — 本体は「compute を立てて env を
-   実行時に注入する」こと。`stack` / `shared` の世界
-2. **フロントエンドのみ** — 本体は「ビルド成果物の配置と URL 発行」。env は
-   ビルド時に焼き込まれる(Vite の `VITE_*` 等)ので実行時注入の概念がない。
-   `static` の世界(Vercel / Amplify の PR プレビューと同型)。環境 = S3 プレフィックス
-   なので作成は秒・コストほぼゼロ
+1. **compute が要る** — API サーバーはもちろん、**SSR フロントエンド**
+   (Next.js SSR / Remix / Astro server)もこちら。サーバーとして動くので
+   実行時 env(API の URL、シークレット等)を持つ。`stack` / `shared` の世界
+2. **静的配信で完結する** — SSG や CSR の SPA。env はビルド時に焼き込まれる
+   (Vite の `VITE_*` 等)ので実行時注入の概念がない。`static` の世界
+   (Vercel / Amplify の PR プレビューと同型)。環境 = S3 プレフィックスなので
+   作成は秒・コストほぼゼロ
+
+SSR の本番構成は compute + 静的アセット + CDN の複合(open-next 型)になりがち
+だが、**プレビュー環境では「全部 Lambda で受ける」に倒す**。LWA(Lambda Web
+Adapter)で SSR サーバーをそのまま包めば静的アセットも Lambda が返し、環境 =
+スタック 1 個の単純さが保てる(sashiki-todo-demo がまさにこの形)。性能は本番構成に
+劣るが確認用途には無関係。つまりハイブリッドは driver ではなく **stack テンプレート
+の書き方の問題**に倒し、kagerou はテンプレートの中身を知らないという境界を守る。
 
 ## 3. アーキテクチャの選択肢
 
@@ -198,9 +207,9 @@ kagerou reap --dry-run             # TTL 切れ・孤児の検出と削除
 4. Publisher: PR コメント冪等更新(デモの marker 方式をそのまま昇華)
 5. Reaper: `kagerou reap` + サンプル cron workflow
 
-`static`(フロントエンド系)/ `shared` / `local` driver、Route53 サブドメイン管理は
+`static`(静的配信専用)/ `shared` / `local` driver、Route53 サブドメイン管理は
 v0.2 以降。優先順は需要次第だが、`static` は実装が最も薄く恩恵が広いので
-v0.2 の筆頭候補。
+v0.2 の筆頭候補。SSR フロントは v0.1 の `stack` + LWA テンプレートで既に賄える。
 
 ## 8. 未決事項(実装前に決める)
 
