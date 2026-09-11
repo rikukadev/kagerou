@@ -97,11 +97,20 @@ kagerou の署名的な性質: **すべての環境は生まれた瞬間から�
 ルールは 1 行で言える: **kagerou は DB やキューを作らない。接続情報を環境変数で
 受け取って、環境に配るだけ。**
 
-```
-# sashiki が作った DB ブランチに繋ぐ例。action の outputs を --env に横流しするだけ
+```bash
+# sashiki が作った DB ブランチに繋ぐ例。接続情報を --env に横流しするだけ
+out=$(sashiki create pr-42 --json)
 kagerou up --name pr-42 \
-  --env DB_HOST=... --env DB_USER=dev@pr-42 ...
+  --env DB_HOST=$(echo "$out" | jq -r .host) \
+  --env DB_PORT=$(echo "$out" | jq -r .port) \
+  --env DB_USER=$(echo "$out" | jq -r .user)
+
+# 片付けは対で(どちらも冪等・TTL でも両方蒸発する)
+kagerou down --name pr-42 && sashiki delete pr-42
 ```
+
+GitHub Actions では sashiki action の outputs を kagerou action の env 入力に渡す
+2 ステップになる(デモの preview.yml 約 260 行の中核がここに畳まれる)。
 
 kagerou から見れば、sashiki のブランチも、共有の RDS も、SQLite 同梱も、
 すべて「env の出どころが違うだけ」で同じもの。だからコードに sashiki 専用の
