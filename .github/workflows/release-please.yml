@@ -1,0 +1,21 @@
+name: release-please
+
+# sashiki と同じリリース運用: main への push ごとに Conventional Commits を
+# 集計して Release PR を開き続け、マージでタグ + GitHub Release を作る。
+# goreleaser(バイナリ配布)は配布物が意味を持つ段階になったら追加する。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
