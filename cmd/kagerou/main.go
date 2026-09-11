@@ -23,8 +23,8 @@ func run(args []string, out *os.File) error {
 	}
 	switch args[0] {
 	case "version", "--version":
-		fmt.Fprintln(out, "kagerou", version)
-		return nil
+		_, err := fmt.Fprintln(out, "kagerou", version)
+		return err
 	case "up", "down", "list", "url", "reap":
 		return fmt.Errorf("%s: not implemented yet (docs/DESIGN.md 参照)", args[0])
 	default:
