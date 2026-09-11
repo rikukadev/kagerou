@@ -92,18 +92,21 @@ kagerou の署名的な性質: **すべての環境は生まれた瞬間から�
 デモで実際に起きた問題への回答でもある: close イベントが失われると環境が
 リークする。イベント駆動だけに頼らず、**必ず Reaper が最後の網になる**。
 
-## 5. sashiki 連携(オプショナル)
+## 5. Backing services(env injection)
 
-kagerou は DB を作らないし、sashiki の存在も前提にしない。
-併用する場合も、連携は環境変数の受け渡しに限定する:
+kagerou は DB・キュー等の外部リソースを作らない。それらは 12-Factor で言う
+backing service であり、kagerou との接続は**環境変数の注入(env injection)**に
+限定する。sashiki は backing service の一例にすぎず、コード上の特別扱いはない:
 
 ```
 kagerou up --name pr-42 \
   --env DB_HOST=... --env DB_USER=dev@pr-42 ...   # sashiki action の outputs をそのまま渡す
 ```
 
-将来 `--sashiki` フラグで「同名の DB ブランチを作って結線」まで面倒を見る案は
-あるが、v0.x では**やらない**(結合を疎に保つ。デモの workflow で十分示せる)。
+CI 側で outputs を配線するのが v0.x の答え。将来拡張するとしても、固有名フラグ
+(`--sashiki` 等)ではなく **`--env-from <command>`**(Kubernetes の `envFrom` に
+倣った汎用機構)とし、sashiki・RDS スナップショット・Neon などはその一例として
+ドキュメントに載せる。
 
 ## 6. セキュリティ(デモから引き継ぐ制約)
 
