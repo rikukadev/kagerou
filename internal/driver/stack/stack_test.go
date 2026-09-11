@@ -126,6 +126,43 @@ func TestUpDownLifecycle(t *testing.T) {
 	}
 }
 
+func TestListReturnsOnlyManaged(t *testing.T) {
+	d, ctx := testDriver(t)
+
+	// kagerou 管理のスタック
+	managed := "kagerou-test-list-managed"
+	t.Cleanup(func() { _ = d.Down(ctx, managed) })
+	if _, err := d.Up(ctx, UpInput{StackName: managed, Name: "list-managed", TemplateBody: testTemplate}); err != nil {
+		t.Fatal(err)
+	}
+
+	// kagerou 管理でない素のスタック
+	raw := "kagerou-test-list-raw"
+	body := testTemplate
+	t.Cleanup(func() { _ = d.Down(ctx, raw) })
+	if _, err := d.cfn.CreateStack(ctx, &cloudformation.CreateStackInput{StackName: &raw, TemplateBody: &body}); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := d.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, info := range infos {
+		names[info.StackName] = true
+		if info.Tags[TagManaged] != "true" {
+			t.Errorf("unmanaged stack in list: %s", info.StackName)
+		}
+	}
+	if !names[managed] {
+		t.Errorf("managed stack missing from list: %v", names)
+	}
+	if names[raw] {
+		t.Errorf("raw stack should not be listed: %v", names)
+	}
+}
+
 func TestUpRejectsUndeclaredEnv(t *testing.T) {
 	d, ctx := testDriver(t)
 	stackName := "kagerou-test-noenv"
