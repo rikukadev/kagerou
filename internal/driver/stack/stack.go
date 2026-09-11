@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -83,8 +84,26 @@ type Info struct {
 	Tags         map[string]string
 }
 
+// tagValueRe は CFN タグ値に使える文字(moto は検証しないが実 AWS は拒否する)。
+var tagValueRe = regexp.MustCompile(`^[a-zA-Z0-9 +\-=._:/@]*$`)
+
+// ValidateSource は kagerou:source の形式を検証する(CONTRACT §1)。
+// CFN に渡してから 400 で死ぬより先に、分かるエラーで止める。
+func ValidateSource(s string) error {
+	if len(s) > 256 {
+		return fmt.Errorf("--source が長すぎる(タグ値の上限 256 文字): %d 文字", len(s))
+	}
+	if !tagValueRe.MatchString(s) {
+		return fmt.Errorf("--source %q に CFN タグ値で使えない文字がある(英数字と ' +-=._:/@' のみ。JSON は不可、URI 形式を推奨: github_pr://owner/repo/42)", s)
+	}
+	return nil
+}
+
 // Up は冪等に環境を作成/更新する。進行中のスタックには完了を待ってから重ねる。
 func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
+	if err := ValidateSource(in.Source); err != nil {
+		return nil, err
+	}
 	params, err := d.buildAllParams(ctx, in)
 	if err != nil {
 		return nil, err

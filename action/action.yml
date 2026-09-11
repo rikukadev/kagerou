@@ -75,10 +75,10 @@ runs:
           exit 0
         fi
 
-        # PR イベントなら出自を opaque JSON で記録(CONTRACT §1 kagerou:source)
+        # PR イベントなら出自を URI 形式で記録(CONTRACT §1 kagerou:source)
         if [ -n "${GITHUB_EVENT_NAME:-}" ] && [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           pr=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
-          args+=(--source "{\"type\":\"github_pr\",\"repo\":\"$GITHUB_REPOSITORY\",\"ref\":\"$pr\"}")
+          args+=(--source "github_pr://$GITHUB_REPOSITORY/$pr")
         fi
 
         out=$(kagerou up "${args[@]}" --output json)
