@@ -1,0 +1,48 @@
+# PR プレビュー環境のサンプル workflow。
+# 前提: リポジトリに kagerou.yaml と packaged 済みテンプレート、
+#       AWS は OIDC の AssumeRole(vars.AWS_ROLE_ARN / vars.AWS_REGION)。
+# fork PR では動かさない。実行者を絞る場合は vars.PREVIEW_ALLOWED_ACTORS 方式
+# (sashiki-todo-demo の preview.yml 参照)を足す。
+name: pr-preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      # sam build && sam package 等、ビルドは CI の仕事(kagerou は成果物を受け取る)
+      - uses: rikukadev/kagerou/action@main
+        with:
+          name: pr-${{ github.event.pull_request.number }}
+
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: rikukadev/kagerou/action@main
+        with:
+          name: pr-${{ github.event.pull_request.number }}
+          down: "true"
