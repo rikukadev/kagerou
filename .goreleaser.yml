@@ -1,0 +1,34 @@
+version: 2
+
+project_name: kagerou
+
+builds:
+  - id: kagerou
+    main: ./cmd/kagerou
+    binary: kagerou
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}+{{.ShortCommit}}
+
+archives:
+  - id: tarball
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# リリースノートは release-please が CHANGELOG から作るので、goreleaser 側では
+# 生成しない。goreleaser は既存の Release にバイナリを足すだけ(mode: append)。
+changelog:
+  disable: true
+
+release:
+  mode: append
+  draft: false
+  prerelease: auto
