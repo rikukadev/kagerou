@@ -24,9 +24,16 @@ inputs:
   param:
     description: テンプレートパラメータ(KEY=VALUE を改行区切りで)
     default: ""
+  version:
+    description: >
+      使う kagerou のバージョン(例 v0.1.0)。既定の latest は最新リリースの
+      バイナリを取得する。
+    default: latest
   ref:
-    description: インストールする kagerou のバージョン(go install の ref)
-    default: main
+    description: >
+      指定すると version を無視し、go install でこの ref から入れる
+      (未リリースの main や PR を試すとき用。Go のビルドが走るぶん遅い)。
+    default: ""
   github_token:
     description: PR コメント用トークン
     default: ${{ github.token }}
@@ -40,12 +47,47 @@ outputs:
 runs:
   using: composite
   steps:
+    # 既定はリリース済みバイナリの取得。go install だと CI のたびに Go の
+    # ビルドが走り(数十秒)、さらに ref=main では日によって別物が入る。
+    - name: Install kagerou (release binary)
+      if: inputs.ref == ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+        esac
+        ver="$VERSION"
+        if [ "$ver" = "latest" ]; then
+          # latest のリダイレクト先から実際の版を取る(資産名に版が入るため)
+          ver=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+            https://github.com/rikukadev/kagerou/releases/latest | sed 's#.*/tag/##')
+          if [ -z "$ver" ]; then
+            echo "最新リリースを解決できませんでした。version を明示するか ref を使ってください" >&2
+            exit 1
+          fi
+        fi
+        asset="kagerou_${ver#v}_linux_${arch}.tar.gz"
+        url="https://github.com/rikukadev/kagerou/releases/download/${ver}/${asset}"
+        echo "installing kagerou ${ver} (${asset})"
+        tmp=$(mktemp -d)
+        curl -fsSL "$url" -o "$tmp/k.tar.gz"
+        tar -xzf "$tmp/k.tar.gz" -C "$tmp"
+        install -m 755 "$tmp/kagerou" /usr/local/bin/kagerou
+        kagerou version
+
+    # ref 指定時のみ go install(未リリースの main や PR を試す用)
     - uses: actions/setup-go@v7
+      if: inputs.ref != ''
       with:
         go-version: stable
         cache: false
-
-    - name: Install kagerou
+    - name: Install kagerou (from source)
+      if: inputs.ref != ''
       shell: bash
       run: go install github.com/rikukadev/kagerou/cmd/kagerou@${{ inputs.ref }}
 
