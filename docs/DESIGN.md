@@ -95,31 +95,44 @@ kagerou の署名的な性質: **すべての環境は生まれた瞬間から�
 ## 5. 外部リソースの繋ぎ方(sashiki 連携もここに含まれる)
 
 ルールは 1 行で言える: **kagerou は DB やキューを作らない。接続情報を環境変数で
-受け取って、環境に配るだけ。**
+環境に配るだけ。** コードに sashiki 専用の処理は存在しないし、`--sashiki` のような
+固有サービス名のフラグも作らない。
 
-```bash
-# sashiki が作った DB ブランチに繋ぐ例。接続情報を --env に横流しするだけ
-out=$(sashiki create pr-42 --json)
-kagerou up --name pr-42 \
-  --env DB_HOST=$(echo "$out" | jq -r .host) \
-  --env DB_PORT=$(echo "$out" | jq -r .port) \
-  --env DB_USER=$(echo "$out" | jq -r .user)
+ただし作者の主用途は sashiki 併用なので、**併用時の体験は一級市民**として設計する。
+それを可能にするのが「接続情報は名前から導出できる」という sashiki 側の性質:
 
-# 片付けは対で(どちらも冪等・TTL でも両方蒸発する)
-kagerou down --name pr-42 && sashiki delete pr-42
+- sashiki のプロキシは固定エンドポイント(`:3306`)+ **username routing**
+  (`dev@pr-42` で接続するとブランチ pr-42 に振り分け)を持つ
+- つまり host / port は固定値、user は `dev@{name}`。**動的な outputs の受け渡しは
+  そもそも不要**で、必要なのは名前の規約だけ
+
+```yaml
+# kagerou.yaml — sashiki 併用の推奨構成。sashiki は設定の文字列にしか現れない
+env:
+  DB_HOST: db.preview.internal   # sashiki プロキシの固定エンドポイント
+  DB_PORT: "3306"
+  DB_USER: dev@{name}            # {name} は環境名で展開
+hooks:
+  pre_up: sashiki create {name}  # 汎用フック。冪等なので毎回呼んでよい
 ```
 
-GitHub Actions では sashiki action の outputs を kagerou action の env 入力に渡す
-2 ステップになる(デモの preview.yml 約 260 行の中核がここに畳まれる)。
+```bash
+kagerou up --name pr-42    # DB ブランチ + アプリ環境がこれ 1 コマンドで生える
+```
+
+**片付けはオーケストレーションしない**。sashiki のブランチは sashiki 自身の TTL、
+kagerou の環境は kagerou の TTL で、それぞれ勝手に蒸発する(両者の TTL を揃える
+のが規約)。`post_down` フックを書けば即時削除もできるが、必須ではない —
+reaper の取りこぼし回収も各自の TTL が担うので、連携コードはゼロで済む。
 
 kagerou から見れば、sashiki のブランチも、共有の RDS も、SQLite 同梱も、
-すべて「env の出どころが違うだけ」で同じもの。だからコードに sashiki 専用の
-処理は存在しないし、`--sashiki` のような固有サービス名のフラグも作らない。
+すべて「env の出どころが違うだけ」で同じもの。hooks も `pre_up` に何を書くかが
+違うだけの汎用機構である(この整理は 12-Factor の backing services そのまま)。
 
-将来足すとしたら汎用の `--env-from <command>`(指定コマンドを実行し、その出力を
-env として取り込む)まで。何と繋ぐかの具体例はデモとドキュメントの仕事にする。
-
-(この整理は 12-Factor の backing services の考え方そのまま)
+検討済みの代替案: sashiki 側の **lazy create**(プロキシが `dev@pr-42` の初回接続で
+ブランチを自動作成)。最も魔法的だが、FSx バックエンドは create に 60〜80 秒かかり
+初回接続がタイムアウトする・タイポで資源が生える、の 2 点から v0.x では採らない。
+ローカル/EBS 限定のオプトイン機能として sashiki 側の issue 候補に留める。
 
 ## 5.5 CLI 素描(案 A 前提)
 
@@ -135,6 +148,10 @@ name_prefix: todo-             # スタック名は todo-pr-42 になる
 ttl: 72h                       # デフォルト寿命
 tags:
   team: rikuka                 # 全リソースに付く追加タグ
+env:                           # 全環境共通の env。値の {name} は環境名で展開
+  DB_USER: dev@{name}
+hooks:                         # ライフサイクルフック(冪等前提)
+  pre_up: sashiki create {name}
 ```
 
 ```bash
@@ -180,5 +197,6 @@ kagerou reap --dry-run             # TTL 切れ・孤児の検出と削除
 - [ ] `stack` driver の入力: SAM テンプレートを user 持ちにするか、kagerou がテンプレートを生成するか
 - [ ] TTL 延長のポリシー: PR 更新(synchronize)ごとに touch でよいか
 - [ ] `list` / reaper の走査コスト(タグ検索は Resource Groups Tagging API で足りるか)
+- [ ] hooks の仕様: 失敗時に up を止めるか、タイムアウト、reap 時に post_down を呼ぶか
 - [ ] URL の発行方法: CFN Output 前提でよいか(shared driver を見据えると抽象化が要る)
 - [ ] リポジトリ構成(sashiki の 25 章に倣うか)と CI の初期セット
