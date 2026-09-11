@@ -6,6 +6,7 @@ package stack
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func TestUpDownLifecycle(t *testing.T) {
 		Params:       map[string]string{"Greeting": "hi"},
 		Env:          map[string]string{"DB_USER": "dev@pr-1", "DB_HOST": "db.test"},
 		ExpiresAt:    &expires,
-		Source:       `{"type":"github_pr","repo":"rikukadev/todo","ref":"1"}`,
+		Source:       "github_pr://rikukadev/todo/1",
 		Version:      "test",
 		Tags:         map[string]string{"team": "rikuka"},
 	}
@@ -253,6 +254,20 @@ func TestReapLifecycle(t *testing.T) {
 	}
 	if status, _ := d.stackStatus(ctx, alive); status == "" {
 		t.Error("alive stack was reaped")
+	}
+}
+
+func TestValidateSource(t *testing.T) {
+	for _, ok := range []string{"", "github_pr://rikukadev/todo/42", "manual @rikuka 2026-09-12", "a=b.c:d/e+f-g"} {
+		if err := ValidateSource(ok); err != nil {
+			t.Errorf("ValidateSource(%q) = %v, want nil", ok, err)
+		}
+	}
+	// JSON は CFN タグ値に入らない(実 AWS で 400。moto は通すので単体で守る)
+	for _, ng := range []string{`{"type":"github_pr"}`, "改行\nあり", strings.Repeat("a", 257)} {
+		if err := ValidateSource(ng); err == nil {
+			t.Errorf("ValidateSource(%q): want error", ng)
+		}
 	}
 }
 

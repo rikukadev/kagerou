@@ -17,7 +17,7 @@ driver は個別に付ける責務を負う。
 | `kagerou:project` | プロジェクト名(例 `todo`) | kagerou.yaml の `project`。未設定なら省略 |
 | `kagerou:driver` | `stack` 等 | |
 | `kagerou:expires-at` | RFC3339 UTC(例 `2026-09-15T00:00:00Z`)または `none` | `none` = 明示的な無期限 |
-| `kagerou:source` | opaque JSON(例 `{"type":"github_pr","repo":"rikukadev/todo","ref":"42"}`) | adapter が `--source` で渡す。kagerou は解釈しない |
+| `kagerou:source` | opaque 文字列。URI 形式を推奨(例 `github_pr://rikukadev/todo/42`) | adapter が `--source` で渡す。kagerou は解釈しない。CFN タグ値の文字種制約(英数字と ` +-=._:/@`)により JSON は入らない |
 | `kagerou:version` | 作成した kagerou のバージョン | |
 
 ## 2. 環境名の制約
@@ -42,14 +42,14 @@ driver は個別に付ける責務を負う。
   "url": "https://...",
   "created_at": "2026-09-12T01:00:00Z",
   "expires_at": "2026-09-15T01:00:00Z",
-  "source": { "type": "github_pr", "repo": "rikukadev/todo", "ref": "42" },
+  "source": "github_pr://rikukadev/todo/42",
   "stack": { "name": "todo-pr-42", "status": "UPDATE_COMPLETE" }
 }
 ```
 
 - `state`: `creating | updating | ready | deleting | failed`
 - `expires_at`: TTL なしのときは `null`
-- `source`: 未指定のときは `null`。中身は opaque(kagerou は解釈しない)
+- `source`: opaque 文字列(URI 形式推奨)。未指定のときは `null`。kagerou は解釈しない
 - driver 固有の情報は driver 名のキー(`stack` 等)の下に入れ子にする
 
 ## 4. env の届け方(stack driver)

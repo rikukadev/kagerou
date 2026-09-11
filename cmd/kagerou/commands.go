@@ -294,8 +294,8 @@ func environmentJSON(name string, info *stack.Info) map[string]any {
 	if v := info.Tags[stack.TagExpiresAt]; v != "" && v != stack.TTLNoneTagValue {
 		env["expires_at"] = v
 	}
-	if v := info.Tags[stack.TagSource]; v != "" && json.Valid([]byte(v)) {
-		env["source"] = json.RawMessage(v)
+	if v := info.Tags[stack.TagSource]; v != "" {
+		env["source"] = v
 	}
 	return env
 }
