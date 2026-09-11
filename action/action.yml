@@ -1,0 +1,118 @@
+name: kagerou
+description: >
+  Ephemeral environments on AWS — kagerou up/down を CI から呼ぶ composite action。
+  AWS 認証(aws-actions/configure-aws-credentials 等)は呼び出し側で済ませておく。
+inputs:
+  name:
+    description: 環境名(例 pr-42)
+    required: true
+  down:
+    description: "'true' で環境を削除する(それ以外は up)"
+    default: "false"
+  comment:
+    description: "'true' なら PR に URL コメントを冪等更新する(pull_request イベント時のみ)"
+    default: "true"
+  config:
+    description: kagerou.yaml のパス
+    default: kagerou.yaml
+  ttl:
+    description: 寿命(例 72h / none)。空なら kagerou.yaml の値
+    default: ""
+  env:
+    description: アプリに届ける環境変数(KEY=VALUE を改行区切りで)
+    default: ""
+  param:
+    description: テンプレートパラメータ(KEY=VALUE を改行区切りで)
+    default: ""
+  ref:
+    description: インストールする kagerou のバージョン(go install の ref)
+    default: main
+  github_token:
+    description: PR コメント用トークン
+    default: ${{ github.token }}
+outputs:
+  url:
+    description: 環境の URL
+    value: ${{ steps.run.outputs.url }}
+  state:
+    description: 環境の state(CONTRACT §3)
+    value: ${{ steps.run.outputs.state }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version: stable
+        cache: false
+
+    - name: Install kagerou
+      shell: bash
+      run: go install github.com/rikukadev/kagerou/cmd/kagerou@${{ inputs.ref }}
+
+    - name: Run kagerou
+      id: run
+      shell: bash
+      env:
+        IN_NAME: ${{ inputs.name }}
+        IN_DOWN: ${{ inputs.down }}
+        IN_CONFIG: ${{ inputs.config }}
+        IN_TTL: ${{ inputs.ttl }}
+        IN_ENV: ${{ inputs.env }}
+        IN_PARAM: ${{ inputs.param }}
+      run: |
+        set -euo pipefail
+        args=(--name "$IN_NAME" --config "$IN_CONFIG")
+        [ -n "$IN_TTL" ] && args+=(--ttl "$IN_TTL")
+        while IFS= read -r kv; do
+          [ -n "$kv" ] && args+=(--env "$kv")
+        done <<< "$IN_ENV"
+        while IFS= read -r kv; do
+          [ -n "$kv" ] && args+=(--param "$kv")
+        done <<< "$IN_PARAM"
+
+        if [ "$IN_DOWN" = "true" ]; then
+          kagerou down "${args[@]}"
+          exit 0
+        fi
+
+        # PR イベントなら出自を opaque JSON で記録(CONTRACT §1 kagerou:source)
+        if [ -n "${GITHUB_EVENT_NAME:-}" ] && [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          pr=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+          args+=(--source "{\"type\":\"github_pr\",\"repo\":\"$GITHUB_REPOSITORY\",\"ref\":\"$pr\"}")
+        fi
+
+        out=$(kagerou up "${args[@]}" --output json)
+        echo "$out"
+        echo "url=$(echo "$out" | jq -r '.url // ""')" >> "$GITHUB_OUTPUT"
+        echo "state=$(echo "$out" | jq -r .state)" >> "$GITHUB_OUTPUT"
+        echo "expires_at=$(echo "$out" | jq -r '.expires_at // "none"')" >> "$GITHUB_OUTPUT"
+
+    - name: Comment preview URL (idempotent)
+      if: inputs.down != 'true' && inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        NAME: ${{ inputs.name }}
+        URL: ${{ steps.run.outputs.url }}
+        EXPIRES: ${{ steps.run.outputs.expires_at }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        marker="<!-- kagerou:${NAME} -->"
+        body="${marker}
+        ## 🌫 プレビュー環境
+
+        | | |
+        |---|---|
+        | URL | ${URL:-'(URL Output なし)'} |
+        | 環境名 | \`${NAME}\` |
+        | 消滅予定 | ${EXPIRES} |
+
+        PR を閉じるか寿命が来ると、環境は陽炎のように消えます。"
+        existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+          --jq "[.[] | select(.body | startswith(\"${marker}\"))][0].id" 2>/dev/null || true)
+        if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" -f body="$body" > /dev/null
+        else
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="$body" > /dev/null
+        fi
