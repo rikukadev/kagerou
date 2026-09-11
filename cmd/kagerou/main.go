@@ -25,7 +25,13 @@ func run(args []string, out *os.File) error {
 	case "version", "--version":
 		_, err := fmt.Fprintln(out, "kagerou", version)
 		return err
-	case "up", "down", "list", "url", "reap":
+	case "up":
+		return cmdUp(args[1:], out)
+	case "down":
+		return cmdDown(args[1:], out)
+	case "url":
+		return cmdURL(args[1:], out)
+	case "list", "reap":
 		return fmt.Errorf("%s: not implemented yet (docs/DESIGN.md 参照)", args[0])
 	default:
 		usage()

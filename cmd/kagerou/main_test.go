@@ -15,7 +15,7 @@ func TestRun(t *testing.T) {
 		{"no args", nil, "subcommand required"},
 		{"version", []string{"version"}, ""},
 		{"unknown", []string{"bogus"}, `unknown subcommand "bogus"`},
-		{"up is stub", []string{"up"}, "not implemented"},
+		{"up requires name", []string{"up"}, "環境名"},
 		{"reap is stub", []string{"reap"}, "not implemented"},
 	}
 	for _, tc := range cases {
