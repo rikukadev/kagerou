@@ -16,7 +16,6 @@ func TestRun(t *testing.T) {
 		{"version", []string{"version"}, ""},
 		{"unknown", []string{"bogus"}, `unknown subcommand "bogus"`},
 		{"up requires name", []string{"up"}, "環境名"},
-		{"reap is stub", []string{"reap"}, "not implemented"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
