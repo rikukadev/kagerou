@@ -60,16 +60,19 @@ jobs:
   # required check にしてあるため、fork PR はそのままではマージできない
   # (信頼できる変更は同一リポジトリのブランチに持ってきて回す)。
   # ─────────────────────────────────────────────
+  # 直列化しない。環境名を run id で採るので同時に走っても衝突せず、
+  # 排他が要る共有リソースも無い(ECR のタグは内容由来、SAM の管理スタックは
+  # この 2 つの構成では使わない)。
+  #
+  # 逆にリポジトリ全体の concurrency group を張ると、**main への push が
+  # PR の required check をキャンセルする**。required にした途端、
+  # 誰かがマージするたびに他の PR がマージ不能になる。
   e2e-aws-3tier:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
-    # 実 AWS リソースを名前で掴むので、同時に走らせない。
-    concurrency:
-      group: e2e-aws-3tier
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -105,9 +108,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    concurrency:
-      group: e2e-aws-ssr
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
