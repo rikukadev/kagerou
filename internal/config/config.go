@@ -44,8 +44,13 @@ type Config struct {
 }
 
 type Hooks struct {
-	PreUp    string `yaml:"pre_up"`
-	PostUp   string `yaml:"post_up"` // 環境作成後の仕上げ。Outputs が KAGEROU_* で届く(CONTRACT §7)
+	PreUp string `yaml:"pre_up"`
+	// PostUp は環境作成後の仕上げ。Outputs が KAGEROU_* で届く(CONTRACT §7)
+	PostUp string `yaml:"post_up"`
+	// PreDown は環境を消す**前**の後始末。Outputs がまだ引けるのでここで使える
+	// (中身の入った S3 バケットは DeleteStack が消せない、といった前処理用)。
+	// post_down では遅い — そのときスタックはもう無く、Outputs も引けない。
+	PreDown  string `yaml:"pre_down"`
 	PostDown string `yaml:"post_down"`
 }
 
@@ -186,6 +191,7 @@ func (c Config) ExpandName(name string) Config {
 	out.URLTemplate = strings.ReplaceAll(c.URLTemplate, "{name}", name)
 	out.Hooks.PreUp = strings.ReplaceAll(c.Hooks.PreUp, "{name}", name)
 	out.Hooks.PostUp = strings.ReplaceAll(c.Hooks.PostUp, "{name}", name)
+	out.Hooks.PreDown = strings.ReplaceAll(c.Hooks.PreDown, "{name}", name)
 	out.Hooks.PostDown = strings.ReplaceAll(c.Hooks.PostDown, "{name}", name)
 	return out
 }

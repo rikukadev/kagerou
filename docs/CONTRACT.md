@@ -126,19 +126,40 @@ Lambda function URL に AWS Lambda Web Adapter(LWA)越しで置く想定(`$PORT`
 
 ## 7. Hooks に渡る環境変数
 
-kagerou.yaml の hooks(`pre_up` / `post_up` / `post_down`)は `sh -c` で実行され、
-以下の環境変数を受け取る。以後の変更は追加のみ。
+kagerou.yaml の hooks(`pre_up` / `post_up` / `pre_down` / `post_down`)は
+`sh -c` で実行され、以下の環境変数を受け取る。以後の変更は追加のみ。
 
 | 変数 | 中身 | 渡るフック |
 |---|---|---|
 | `KAGEROU_NAME` | 環境名 | すべて |
-| `KAGEROU_URL` | 環境 URL(§5 の Output。無ければ未設定) | post_up |
-| `KAGEROU_OUTPUT_<KEY>` | 任意の CFN Output。キーは大文字化(`ApiUrl` → `KAGEROU_OUTPUT_APIURL`) | post_up |
-| `KAGEROU_ENVIRONMENT_JSON` | §3 の Environment JSON そのもの | post_up |
+| `KAGEROU_URL` | 環境 URL(§5 の Output。無ければ未設定) | post_up / pre_down |
+| `KAGEROU_OUTPUT_<KEY>` | 任意の CFN Output。キーは大文字化(`ApiUrl` → `KAGEROU_OUTPUT_APIURL`) | post_up / pre_down |
+| `KAGEROU_ENVIRONMENT_JSON` | §3 の Environment JSON そのもの | post_up / pre_down |
 
-失敗時の扱い: `pre_up` / `post_up` の失敗は up を失敗させる(post_up は
-「環境はあるが仕上がっていない」を green にしないため)。`post_down` の失敗は
-記録して続行する。1 フックの実行上限は 10 分。
+**Outputs は「スタックが在る」フックにしか渡せない。** `post_down` の時点では
+環境はもう無く、バケット名も URL も引けない。削除に絡む後始末で Outputs が
+要るなら `pre_down` を使う。
+
+失敗時の扱い:
+
+| フック | 失敗したら |
+|---|---|
+| `pre_up` / `post_up` | up を失敗させる(post_up は「環境はあるが仕上がっていない」を green にしないため) |
+| `pre_down` | **down を中止する**。受け持つのは「これをやらないと削除が失敗する」前処理なので、無視して進んでも分かりにくい CFN のエラーになるだけ |
+| `post_down` | 記録して続行(環境自体は消えている) |
+
+`pre_down` は**スタックが無ければ実行しない**。down は冪等であることを求められて
+おり(close の再送や reap との競合で 2 回走る)、無い環境に対して後始末を
+二重に走らせないため。
+
+1 フックの実行上限は 10 分。
+
+```yaml
+# 例: 中身の入ったバケットを空にしてから消す(そうしないと DeleteStack が失敗する)
+hooks:
+  pre_down: |
+    aws s3 rm "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME" --recursive
+```
 
 ```yaml
 # 例: SPA の config.json を生成して静的成果物を配置する(3 層構成の定型)
