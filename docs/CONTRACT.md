@@ -104,11 +104,25 @@ Resources:
 `url_template` の URL に実際にトラフィックを到達させる仕組み(共有 CloudFront +
 サブドメイン等)は利用者側のインフラの責務(kagerou#32 で共通化を検討中)。
 
-## 6. 読み取り口(予定)
+## 6. 読み取り口(`kagerou serve`)
 
-Backstage 等からの読み取りは `kagerou serve`(読み取り専用 HTTP、Lambda function
-URL 想定)を提供予定。書き込み(down / TTL 延長)は AWS を直接叩かず、CI の
-`workflow_dispatch` 経由で kagerou を起動する。
+Backstage 等からの読み取りは `kagerou serve` が提供する**読み取り専用 HTTP**。
+Lambda function URL に AWS Lambda Web Adapter(LWA)越しで置く想定(`$PORT` を見る)。
+**書き込み(down / TTL 延長)は提供しない** — AWS を直接叩かず、CI の
+`workflow_dispatch` 経由で kagerou を起動する(権限もロジックも CI 側に留める)。
+
+エンドポイント(以後の変更はフィールド/エンドポイントの追加のみ):
+
+| メソッド・パス | 返すもの |
+|---|---|
+| `GET /environments` | §3 の Environment JSON の**配列**(全プロジェクト横断)。`?project=<name>` で 1 プロジェクトに絞れる |
+| `GET /environments/{name}` | §3 の Environment JSON 単体。無ければ `404` |
+| `GET /healthz` | `{"status":"ok"}`(疎通確認) |
+
+- 一覧は既定で**全プロジェクト**(`list --all-projects` 相当)。横断ビューが serve の役割で、
+  プロジェクト分離は `?project=` で行う(`kagerou:project` タグ、§1)。
+- `GET` 以外は `405`(`Allow: GET`)。エラーは `{"error": "..."}` を対応する 4xx/5xx で返す。
+- 各リクエストは driver を都度読むため、返す状態は常にライブ。
 
 ## 7. Hooks に渡る環境変数
 

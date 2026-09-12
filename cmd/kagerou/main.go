@@ -39,6 +39,8 @@ func run(args []string, out *os.File) error {
 		return cmdValidate(args[1:], out)
 	case "list":
 		return cmdList(args[1:], out)
+	case "serve":
+		return cmdServe(args[1:], out)
 	case "reap":
 		return cmdReap(args[1:], out)
 	default:
@@ -59,6 +61,7 @@ Usage:
   kagerou up --name <name> [flags]   create/update an environment (idempotent)
   kagerou down --name <name>         delete an environment (idempotent)
   kagerou list                       list environments
+  kagerou serve [--addr :8080]       read-only HTTP for environments (Backstage)
   kagerou url --name <name>          print the environment URL
   kagerou reap [--dry-run]           collect environments past their TTL
   kagerou version                    print version
