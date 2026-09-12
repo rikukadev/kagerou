@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/rikukadev/kagerou/compare/v0.1.0...v0.2.0) (2026-09-12)
+
+
+### Features
+
+* kagerou init — 導入スキャフォールドの完成(TUI チェックリスト付き) ([#35](https://github.com/rikukadev/kagerou/issues/35)) ([816291b](https://github.com/rikukadev/kagerou/commit/816291bd3d22c7c6198127ef861574fa1f81fad4))
+
+
+### Bug Fixes
+
+* **action:** インストール先を RUNNER_TEMP + GITHUB_PATH に変更 ([#30](https://github.com/rikukadev/kagerou/issues/30)) ([73f4a1f](https://github.com/rikukadev/kagerou/commit/73f4a1faa790f76c02e69af402c354d7b2e426f8))
+* main の CI を green に戻す(stdlib CVE と lint) ([#36](https://github.com/rikukadev/kagerou/issues/36)) ([c3c191a](https://github.com/rikukadev/kagerou/commit/c3c191ab11462f1827aee4bdc90092cec87c34a9))
+
 ## 0.1.0 (2026-09-11)
 
 
