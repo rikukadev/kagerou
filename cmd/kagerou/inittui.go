@@ -119,13 +119,15 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		})
 	}
 
-	if det.BaseDomain == "" && len(det.Zones) >= 2 {
+	// base は per-app(URL は {name}.{project}.<zone>)。この project 用が既に
+	// あれば質問ごと消える。旧アカウント単位 base も fallback で再利用する。
+	if _, ok := det.Base(p.Project); !ok && len(det.Zones) >= 2 {
 		var opts []option
 		for i, z := range det.Zones {
 			if i >= 4 { // 選択肢は 4 つまで(それ以上は --domain フラグで)
 				break
 			}
-			opts = append(opts, option{"preview." + z, "sets up the shared base once (us-east-1, ~15 min)"})
+			opts = append(opts, option{p.Project + "." + z, "sets up this app's base once (us-east-1, ~15 min)"})
 		}
 		qs = append(qs, question{
 			key:     "domain",
@@ -178,13 +180,13 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p.Sashiki = m.answer("db") == 0
 	p.Port = m.det.AppPort
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
-	switch {
-	case m.det.BaseDomain != "": // 既存 base をそのまま使う
-		p.Domain = m.det.BaseDomain
+	switch base, ok := m.det.Base(p.Project); {
+	case ok: // この project(または旧アカウント単位)の base をそのまま使う
+		p.Domain = base.Domain
 	case len(m.det.Zones) == 1: // ゾーンが 1 つなら自動選択
-		p.Domain, p.SetupBase = "preview."+m.det.Zones[0], true
+		p.Domain, p.SetupBase = p.Project+"."+m.det.Zones[0], true
 	case m.answer("domain") >= 0:
-		p.Domain, p.SetupBase = "preview."+m.det.Zones[m.answer("domain")], true
+		p.Domain, p.SetupBase = p.Project+"."+m.det.Zones[m.answer("domain")], true
 	} // ゾーン検出なしなら Domain 空 = 生 AWS URL 運用のまま
 	sel := scaffold.Targets{KagerouYaml: true}
 	sel.Template = m.answer("template") == 0 // 質問なし(-1)= 既存なので生成しない
@@ -439,8 +441,8 @@ func (m initModel) detectionSummary() string {
 	if m.det.AccountID != "" {
 		parts = append(parts, "aws:"+m.det.AccountID)
 	}
-	if m.det.BaseDomain != "" {
-		parts = append(parts, "base:"+m.det.BaseDomain)
+	if b, ok := m.det.Base(m.params.Project); ok {
+		parts = append(parts, "base:"+b.Domain)
 	}
 	if len(parts) == 0 {
 		return "(nothing detected)"

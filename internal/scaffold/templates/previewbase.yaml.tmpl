@@ -1,13 +1,19 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  kagerou preview base — shared delivery for preview environments.
-  Deploy ONCE per account, in us-east-1 (CloudFront certificates must live there).
-  Environments become https://<name>.<DomainName>/ backed by s3://<bucket>/<name>/.
+  kagerou preview base — shared delivery for one app's preview environments.
+  Deploy ONCE per app (project), in us-east-1 (CloudFront certificates must
+  live there). Environments become https://<name>.<DomainName>/ backed by
+  s3://<bucket>/<name>/. This file lives in the app repository on purpose:
+  anyone on the repo can update the base by re-running the deploy (idempotent).
 
 Parameters:
+  Project:
+    Type: String
+    AllowedPattern: "[a-z]([a-z0-9-]*[a-z0-9])?"
+    Description: kagerou project name; namespaces every resource so each app owns its base
   DomainName:
     Type: String
-    Description: Parent domain for previews, e.g. preview.example.com
+    Description: This app's preview domain, e.g. todo.example.com (URLs become pr-42.todo.example.com)
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Description: Hosted zone that owns the parent of DomainName
@@ -16,7 +22,7 @@ Resources:
   Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "kagerou-preview-base-${AWS::AccountId}"
+      BucketName: !Sub "kagerou-base-${Project}-${AWS::AccountId}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -36,7 +42,7 @@ Resources:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: !Sub "kagerou-preview-base-${AWS::AccountId}"
+        Name: !Sub "kagerou-base-${Project}"
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
@@ -46,7 +52,7 @@ Resources:
   HostToPrefixFunction:
     Type: AWS::CloudFront::Function
     Properties:
-      Name: kagerou-preview-host-to-prefix
+      Name: !Sub "kagerou-base-${Project}-host-to-prefix"
       AutoPublish: true
       FunctionConfig:
         Comment: map <name>.<domain>/<uri> to /<name>/<uri>
@@ -70,7 +76,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: kagerou preview base
+        Comment: !Sub "kagerou preview base (${Project})"
         HttpVersion: http2
         Aliases:
           - !Sub "*.${DomainName}"
@@ -124,12 +130,12 @@ Outputs:
   Domain:
     Value: !Ref DomainName
     Export:
-      Name: "kagerou-preview-base:domain"
+      Name: !Sub "kagerou-preview-base:${Project}:domain"
   Bucket:
     Value: !Ref Bucket
     Export:
-      Name: "kagerou-preview-base:bucket"
+      Name: !Sub "kagerou-preview-base:${Project}:bucket"
   DistributionId:
     Value: !Ref Distribution
     Export:
-      Name: "kagerou-preview-base:distribution"
+      Name: !Sub "kagerou-preview-base:${Project}:distribution"

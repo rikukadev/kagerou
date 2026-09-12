@@ -172,9 +172,9 @@ const SetupScriptName = "kagerou-setup.sh"
 // 行うスクリプトを dir に書き出す。実行するかは呼び出し側の選択。
 func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 	data := struct {
-		Owner, Repo, Region, Domain string
-		SetupBase                   bool
-	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.SetupBase}
+		Owner, Repo, Region, Domain, Project string
+		SetupBase                            bool
+	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase}
 	t, err := template.ParseFS(tmplFS, "templates/setup.sh.tmpl")
 	if err != nil {
 		return "", err

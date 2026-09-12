@@ -275,24 +275,31 @@ v0.2 の筆頭候補。SSR フロントは v0.1 の `stack` + LWA テンプレ�
 - **#32 = 共有配信基盤(preview base)を出す** — 先にやる
 - **#10 = static driver** — 「フロントのみ」構成向けの省コスト経路。base の上に載る
 
-### 10.2 preview base: 1 回だけ作る共有スタック
+### 10.2 preview base: アプリごとに 1 回だけ作る共有スタック
 
 環境ごとに CloudFront を作ると 5〜10 分かかり ephemeral に合わない。
-**ディストリビューション・証明書・DNS は共有し、環境は S3 プレフィックスだけ**にする。
+**ディストリビューション・証明書・DNS はアプリ(project)で共有し、環境は
+S3 プレフィックスだけ**にする。base は **per-app**(アカウント単位ではない):
+アカウント単位だと環境名の名前空間が全アプリで 1 つになり、todo と shop が
+同じ `pr-42` を取り合う。URL は `{name}.{project}.<zone>`(例
+`pr-42.todo.example.com`)で、アプリ間は project セグメントで分かれる。
 
 構成(kagerou が `deploy/preview-base.yaml` として同梱、`kagerou init` の
-setup から案内):
+setup から案内。スタック名 `kagerou-preview-base-<project>`):
 
-- S3 バケット(非公開、OAC 経由のみ)
-- CloudFront: 代替ドメイン `*.preview.example.com`、ACM 証明書
+- S3 バケット(非公開、OAC 経由のみ。`kagerou-base-<project>-<account>`)
+- CloudFront: 代替ドメイン `*.todo.example.com`、ACM 証明書
 - CloudFront Function(viewer-request): Host の最初のラベルを origin path に写す
-  (`pr-42.preview.example.com` → `/pr-42/…`。sashiki-demo の fwd-host と同型)
-- Route53: `*.preview.example.com` → CloudFront の alias
+  (`pr-42.todo.example.com` → `/pr-42/…`。sashiki-demo の fwd-host と同型)
+- Route53: `*.todo.example.com` → CloudFront の alias
 - **リージョンは us-east-1 固定**(CloudFront 用 ACM の制約。クロスリージョン
   参照を CFN で頑張るより、base スタックごと us-east-1 に置く方が単純)
 
 前提: Route53 のホストゾーンは利用者が持っている(ドメイン所有は kagerou の
 外)。base の Outputs(バケット名・ドメイン)を kagerou.yaml に写して使う。
+テンプレートはアプリのリポジトリに入る(`deploy/preview-base.yaml`)ので、
+**そのリポジトリを使っている人なら誰でも** `cloudformation deploy`(冪等)の
+再実行で base を更新できる。所有者はリポジトリのコラボレータ全員。
 
 ### 10.3 3 層構成の最終形(#32 の解)
 
@@ -333,7 +340,8 @@ url_template: "https://{name}.preview.example.com"   # static では必須
 - base の管理: **`kagerou base up` は作らず init の setup に統合**。
   init が deploy/preview-base.yaml を書き出し、setup(run it now / script)が
   us-east-1 にデプロイする。ドメインは Route53 ゾーンの列挙から選択
-  (ゾーン 1 つなら自動、複数なら質問、無ければ生 AWS URL のまま)。
-  2 回目以降のリポジトリは CFN Exports(`kagerou-preview-base:*`)から自動検出
+  (ゾーン 1 つなら自動で `{project}.<zone>`、複数なら質問、無ければ生 AWS URL のまま)。
+  同じアプリの 2 人目以降は CFN Exports(`kagerou-preview-base:<project>:*`)から
+  自動検出して相乗り(旧アカウント単位の `kagerou-preview-base:*` にも fallback)
 - [ ] iam-policy への base 用モジュール(--with-preview-base)は後続
   (base は通常 CI でなく人間の資格情報で 1 回デプロイするため優先度低)

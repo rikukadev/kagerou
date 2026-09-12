@@ -25,10 +25,25 @@ type Detection struct {
 	HasLWA        bool   // Dockerfile に Lambda Web Adapter が入っているか
 	AppPort       string // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
 	HasTemplate   bool
-	VarsSet       map[string]bool // 設定済みの GitHub Variables
-	Zones         []string        // Route53 の公開ホストゾーン(ドメイン選択肢)
-	BaseDomain    string          // 既存 preview base の Export(kagerou-preview-base:domain)
-	BaseBucket    string          // 同 :bucket
+	VarsSet       map[string]bool     // 設定済みの GitHub Variables
+	Zones         []string            // Route53 の公開ホストゾーン(ドメイン選択肢)
+	Bases         map[string]BaseInfo // 既存 preview base の Exports。key = project(旧アカウント単位 base は key "")
+}
+
+// BaseInfo は既存 preview base の Exports(kagerou-preview-base:<project>:*)。
+type BaseInfo struct {
+	Domain string
+	Bucket string
+}
+
+// Base は project の preview base を返す。project 用が無ければ、旧アカウント
+// 単位 base(Export に project セグメントが無い頃のもの)に fallback する。
+func (d Detection) Base(project string) (BaseInfo, bool) {
+	if b, ok := d.Bases[project]; ok {
+		return b, true
+	}
+	b, ok := d.Bases[""]
+	return b, ok
 }
 
 // SuggestSashiki は DB 依存が見えたときに sashiki 構成を提案する。
@@ -87,21 +102,36 @@ func Detect(dir string) Detection {
 			}
 		}
 	}
-	// preview base(us-east-1 固定)の Exports から既存基盤を検出
+	// preview base(us-east-1 固定)の Exports から既存基盤を検出。
+	// per-app 形式 kagerou-preview-base:<project>:<field> をプロジェクト別に集め、
+	// 旧アカウント単位形式 kagerou-preview-base:<field> は key "" に入れる(fallback 用)。
 	if out, err := execCommand(ctx, "aws", "cloudformation", "list-exports", "--region", "us-east-1",
 		"--query", "Exports[?starts_with(Name, `kagerou-preview-base`)].[Name,Value]", "--output", "json"); err == nil {
 		var kv [][]string
 		if json.Unmarshal(out, &kv) == nil {
+			d.Bases = map[string]BaseInfo{}
 			for _, e := range kv {
 				if len(e) != 2 {
 					continue
 				}
-				switch e[0] {
-				case "kagerou-preview-base:domain":
-					d.BaseDomain = e[1]
-				case "kagerou-preview-base:bucket":
-					d.BaseBucket = e[1]
+				parts := strings.Split(e[0], ":")
+				var project, field string
+				switch len(parts) {
+				case 2: // 旧: kagerou-preview-base:domain
+					project, field = "", parts[1]
+				case 3: // per-app: kagerou-preview-base:todo:domain
+					project, field = parts[1], parts[2]
+				default:
+					continue
 				}
+				b := d.Bases[project]
+				switch field {
+				case "domain":
+					b.Domain = e[1]
+				case "bucket":
+					b.Bucket = e[1]
+				}
+				d.Bases[project] = b
 			}
 		}
 	}

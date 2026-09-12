@@ -112,7 +112,12 @@ func TestDetectZonesAndBase(t *testing.T) {
 		case strings.Contains(joined, "list-hosted-zones"):
 			return []byte(`["rikuka.dev.", "example.org."]`), nil
 		case strings.Contains(joined, "list-exports"):
-			return []byte(`[["kagerou-preview-base:domain","preview.rikuka.dev"],["kagerou-preview-base:bucket","kagerou-preview-base-123"]]`), nil
+			// per-app 形式(todo)と旧アカウント単位形式の混在
+			return []byte(`[` +
+				`["kagerou-preview-base:todo:domain","todo.rikuka.dev"],` +
+				`["kagerou-preview-base:todo:bucket","kagerou-base-todo-123"],` +
+				`["kagerou-preview-base:domain","preview.rikuka.dev"],` +
+				`["kagerou-preview-base:bucket","kagerou-preview-base-123"]]`), nil
 		}
 		return nil, errNoCmd
 	}
@@ -120,8 +125,13 @@ func TestDetectZonesAndBase(t *testing.T) {
 	if len(d.Zones) != 2 || d.Zones[0] != "rikuka.dev" {
 		t.Fatalf("zones = %v", d.Zones)
 	}
-	if d.BaseDomain != "preview.rikuka.dev" || d.BaseBucket != "kagerou-preview-base-123" {
-		t.Fatalf("base detection broken: %+v", d)
+	// per-app: project 一致で引ける
+	if b, ok := d.Base("todo"); !ok || b.Domain != "todo.rikuka.dev" || b.Bucket != "kagerou-base-todo-123" {
+		t.Fatalf("per-app base detection broken: %+v", d.Bases)
+	}
+	// 別 project は旧アカウント単位 base に fallback
+	if b, ok := d.Base("shop"); !ok || b.Domain != "preview.rikuka.dev" {
+		t.Fatalf("legacy fallback broken: %+v", d.Bases)
 	}
 }
 
@@ -129,7 +139,7 @@ var errNoCmd = os.ErrNotExist
 
 func TestPreviewBaseTemplateAndScript(t *testing.T) {
 	dir := t.TempDir()
-	p := Params{Project: "x", Region: "ap-northeast-1", Domain: "preview.rikuka.dev", SetupBase: true}
+	p := Params{Project: "x", Region: "ap-northeast-1", Domain: "x.rikuka.dev", SetupBase: true}
 	if _, err := Run(dir, p, Targets{KagerouYaml: true}, false); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +150,8 @@ func TestPreviewBaseTemplateAndScript(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		"kagerou-preview-base:domain", // Exports(2 回目以降の init が検出する)
+		"kagerou-preview-base:${Project}:domain",    // per-app Exports(2 回目以降の init が検出する)
+		"kagerou-base-${Project}-${AWS::AccountId}", // per-app バケット
 		"OriginAccessControl",
 		"*.${DomainName}",
 		"4135ea2d-6df8-44a3-9df3-4b5a84be39ad", // CachingDisabled = invalidation 不要
@@ -150,17 +161,22 @@ func TestPreviewBaseTemplateAndScript(t *testing.T) {
 			t.Errorf("preview-base.yaml missing %q", want)
 		}
 	}
-	// kagerou.yaml に url_template
+	// kagerou.yaml に url_template({name}.{project}.<zone>)
 	ky, _ := os.ReadFile(filepath.Join(dir, "kagerou.yaml"))
-	if !strings.Contains(string(ky), `url_template: "https://{name}.preview.rikuka.dev"`) {
+	if !strings.Contains(string(ky), `url_template: "https://{name}.x.rikuka.dev"`) {
 		t.Fatalf("url_template missing: %s", ky)
 	}
-	// setup script に base デプロイ(us-east-1)
+	// setup script に per-app スタック名 + Project パラメータで base デプロイ(us-east-1)
 	if _, err := WriteSetupScript(dir, p, Detection{Owner: "o", Repo: "r"}); err != nil {
 		t.Fatal(err)
 	}
 	sc, _ := os.ReadFile(filepath.Join(dir, SetupScriptName))
-	for _, want := range []string{"kagerou-preview-base", "--region us-east-1", "list-hosted-zones-by-name"} {
+	for _, want := range []string{
+		`PROJECT="x"`,
+		`--stack-name "kagerou-preview-base-${PROJECT}"`,
+		`Project="$PROJECT"`,
+		"--region us-east-1", "list-hosted-zones-by-name",
+	} {
 		if !strings.Contains(string(sc), want) {
 			t.Errorf("setup script missing %q", want)
 		}

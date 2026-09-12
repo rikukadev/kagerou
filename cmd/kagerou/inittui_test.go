@@ -200,7 +200,7 @@ func TestWizardDomainQuestion(t *testing.T) {
 		}
 	}
 	_, p := m.buildPlan()
-	if p.Domain != "preview.example.org" || !p.SetupBase {
+	if p.Domain != "x.example.org" || !p.SetupBase { // per-app: {project}.<zone>
 		t.Fatalf("plan = %+v", p)
 	}
 
@@ -213,12 +213,14 @@ func TestWizardDomainQuestion(t *testing.T) {
 		}
 	}
 	_, p1 := m1.buildPlan()
-	if p1.Domain != "preview.rikuka.dev" || !p1.SetupBase {
+	if p1.Domain != "x.rikuka.dev" || !p1.SetupBase {
 		t.Fatalf("auto plan = %+v", p1)
 	}
 
-	// base 既存 → 質問なし・再利用(SetupBase=false)
-	detB := scaffold.Detection{Zones: []string{"rikuka.dev"}, BaseDomain: "preview.rikuka.dev", VarsSet: map[string]bool{}}
+	// この project の base 既存 → 質問なし・再利用(SetupBase=false)
+	detB := scaffold.Detection{Zones: []string{"rikuka.dev"},
+		Bases:   map[string]scaffold.BaseInfo{"x": {Domain: "x.rikuka.dev"}},
+		VarsSet: map[string]bool{}}
 	mB := newInitModel(t.TempDir(), scaffold.Params{Project: "x", Region: "r"}, detB, false)
 	for _, q := range mB.questions {
 		if q.key == "domain" {
@@ -226,11 +228,21 @@ func TestWizardDomainQuestion(t *testing.T) {
 		}
 	}
 	_, pB := mB.buildPlan()
-	if pB.Domain != "preview.rikuka.dev" || pB.SetupBase {
+	if pB.Domain != "x.rikuka.dev" || pB.SetupBase {
 		t.Fatalf("reuse plan = %+v", pB)
 	}
-	if !strings.Contains(mB.View(), "base:preview.rikuka.dev") {
+	if !strings.Contains(mB.View(), "base:x.rikuka.dev") {
 		t.Fatal("header should show existing base")
+	}
+
+	// 旧アカウント単位 base(key "")にも fallback して再利用する
+	detL := scaffold.Detection{Zones: []string{"rikuka.dev"},
+		Bases:   map[string]scaffold.BaseInfo{"": {Domain: "preview.rikuka.dev"}},
+		VarsSet: map[string]bool{}}
+	mL := newInitModel(t.TempDir(), scaffold.Params{Project: "x", Region: "r"}, detL, false)
+	_, pL := mL.buildPlan()
+	if pL.Domain != "preview.rikuka.dev" || pL.SetupBase {
+		t.Fatalf("legacy reuse plan = %+v", pL)
 	}
 
 	// ゾーンなし → 質問なし・Domain 空(生 URL 運用)
