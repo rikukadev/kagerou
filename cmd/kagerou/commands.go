@@ -146,7 +146,7 @@ func cmdUp(args []string, out *os.File) error {
 	}
 	// post_up: 環境作成後の仕上げ(config.json 生成・静的成果物の配置など)。
 	// 失敗は up の失敗にする — 環境はあるが仕上がっていない状態を green にしない
-	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnvForUp(f.name, info)); err != nil {
+	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnv(f.name, info)); err != nil {
 		return err
 	}
 	// readiness: アプリが応答するまで ready にしない(#26)。post_up の後に見るのは
@@ -170,8 +170,10 @@ func cmdUp(args []string, out *os.File) error {
 	return printEnvironment(out, f.output, f.name, info)
 }
 
-// hookEnvForUp は post_up に渡す KAGEROU_* 環境変数(CONTRACT §7)。
-func hookEnvForUp(name string, info *stack.Info) map[string]string {
+// hookEnv は環境の情報を KAGEROU_* 環境変数にする(CONTRACT §7)。
+// post_up と pre_down の両方で使う。どちらも「スタックが在る」時点なので
+// Outputs を渡せる(post_down だけは渡せない — もう消えている)。
+func hookEnv(name string, info *stack.Info) map[string]string {
 	env := map[string]string{"KAGEROU_NAME": name}
 	if u, ok := info.EnvironmentURL(); ok {
 		env["KAGEROU_URL"] = u
@@ -198,7 +200,11 @@ func cmdDown(args []string, _ *os.File) error {
 	if err != nil {
 		return err
 	}
-	if err := drv.Down(ctx, cfg.StackName(f.name)); err != nil {
+	stackName := cfg.StackName(f.name)
+	if err := runPreDown(ctx, drv, cfg.Hooks.PreDown, f.name, stackName); err != nil {
+		return err
+	}
+	if err := drv.Down(ctx, stackName); err != nil {
 		return err
 	}
 	// post_down 失敗は記録して続行(環境自体は消えている)
@@ -206,6 +212,27 @@ func cmdDown(args []string, _ *os.File) error {
 		fmt.Fprintf(os.Stderr, "kagerou: warning: %v\n", err)
 	}
 	return nil
+}
+
+// runPreDown は環境を消す前の後始末を実行する。
+//
+// post_down と違って **失敗したら削除に進まない**。pre_down が受け持つのは
+// 「これをやらないと削除が失敗する」類の前処理(中身の入った S3 バケットを
+// 空にする等)なので、失敗を無視して Down を呼んでも、より分かりにくい
+// CFN のエラーになるだけになる。
+//
+// スタックがもう無ければ何もしない。down は冪等であることを求められており
+// (close の再送や reap との競合で 2 回走る)、無い環境に対して hook を
+// 走らせると「消えたはずのものを消す」処理が二重に動く。
+func runPreDown(ctx context.Context, drv *stack.Driver, hook, name, stackName string) error {
+	if hook == "" {
+		return nil
+	}
+	info, err := drv.Info(ctx, stackName)
+	if err != nil {
+		return nil // 存在しない(= 既に消えている)。冪等なので黙って抜ける
+	}
+	return hooks.Run(ctx, "pre_down", hook, hookEnv(name, info))
 }
 
 func cmdURL(args []string, out *os.File) error {
@@ -392,6 +419,17 @@ func cmdReap(args []string, out *os.File) error {
 				return err
 			}
 			continue
+		}
+		// reap でも pre_down を呼ぶ。呼ばないと「手で down すれば消えるのに
+		// TTL 回収では消えない」環境が生まれる(中身の入ったバケット等)。
+		// --all-projects で呼ばないのは post_down と同じ理由(#48)。
+		if hook := cfg.ExpandName(name).Hooks.PreDown; hook != "" && !*allProjects {
+			if err := hooks.Run(ctx, "pre_down", hook, hookEnv(name, info)); err != nil {
+				// 前処理が失敗したものは消しにいかない。消せずに失敗するか、
+				// 消せてしまって後始末だけ漏れるかのどちらかになる。
+				fmt.Fprintf(os.Stderr, "kagerou: reap %s: pre_down: %v\n", name, err)
+				continue
+			}
 		}
 		if err := drv.Down(ctx, info.StackName); err != nil {
 			// 1 件の失敗で全体を止めない(残りは回収する)

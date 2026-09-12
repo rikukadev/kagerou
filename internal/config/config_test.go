@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,22 @@ func TestExpandName(t *testing.T) {
 	if got.Hooks.PreUp != "sashiki create pr-42" || got.Hooks.PostDown != "sashiki delete pr-42" {
 		t.Fatalf("hooks not expanded: %+v", got.Hooks)
 	}
+
+	// フックを足したときに ExpandName の更新を忘れると、{name} が展開されない
+	// まま実行される(「pr-42 のつもりで {name} という名前のリソースを消す」)。
+	// フィールドを列挙して、全部が展開対象になっていることを機械的に確かめる。
+	t.Run("すべてのフックが展開される", func(t *testing.T) {
+		all := Config{Hooks: Hooks{
+			PreUp: "{name}", PostUp: "{name}", PreDown: "{name}", PostDown: "{name}",
+		}}
+		h := reflect.ValueOf(all.ExpandName("pr-1").Hooks)
+		for i := range h.NumField() {
+			f := h.Type().Field(i)
+			if v := h.Field(i).String(); v != "pr-1" {
+				t.Errorf("Hooks.%s = %q、{name} が展開されていない(ExpandName に足し忘れ)", f.Name, v)
+			}
+		}
+	})
 	// 元の Config は不変であること
 	if cfg.Env["DB_USER"] != "dev@{name}" || cfg.Hooks.PreUp != "sashiki create {name}" {
 		t.Fatalf("original mutated: %+v", cfg)

@@ -20,9 +20,13 @@ NAME=${3:?usage: run.sh <kagerou> <config> <name>}
 fail() { echo "E2E FAILED: $*" >&2; exit 1; }
 log()  { echo; echo "=== $* ==="; }
 
-# 中身の入ったバケットは DeleteStack で消せない。kagerou に pre_down が無いので
-# ここで空にする(kagerou#73)。バケットが無い構成では空振りする。
-empty_buckets() {
+# 中身の入ったバケットを空にするのは **kagerou.yaml の pre_down の仕事**。
+# ここでは何もしない。down がそれで通ること自体が検証項目なので、CI 側で
+# 先回りして空にすると pre_down が動かなくても気づけなくなる。
+#
+# 例外は trap の側(下)。そこは「E2E が途中で落ちた後始末」なので、
+# pre_down が動かない状態でも確実に消せる必要がある。
+force_empty_buckets() {
   local stack="$1" b
   for b in $(aws cloudformation describe-stack-resources --stack-name "$stack" \
       --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
@@ -37,7 +41,7 @@ STACK=""
 cleanup() {
   local rc=$?
   log "cleanup (exit=$rc)"
-  [ -n "$STACK" ] && empty_buckets "$STACK"
+  [ -n "$STACK" ] && force_empty_buckets "$STACK"
   "$KAGEROU" down --name "$NAME" --config "$CONFIG" || echo "  down に失敗(手で確認すること)" >&2
   exit "$rc"
 }
@@ -100,8 +104,7 @@ echo "  OK"
 # ここから先は cleanup(trap)が down を回す。その結果まで確かめたいので、
 # trap を外して自分で down し、残骸ゼロを見る。
 trap - EXIT
-log "down"
-empty_buckets "$STACK"
+log "down(バケットを空にするのは pre_down の仕事)"
 "$KAGEROU" down --name "$NAME" --config "$CONFIG" || fail "down が失敗した"
 
 log "残骸が無い"

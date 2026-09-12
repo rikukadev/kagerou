@@ -23,9 +23,13 @@ hooks:
     aws s3 cp /tmp/kge2e-index.html "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/index.html" \
       --content-type "text/html; charset=utf-8"
 
-  # 中身の入ったバケットは DeleteStack が消せないので、down の前に空にする
-  # 必要がある。**kagerou に pre_down フックが無い**ため、それは CI 側でやって
-  # いる(kagerou#73)。post_down はここでは「呼ばれたこと」の確認だけ。
+  # 中身の入ったバケットは DeleteStack が消せない。post_down では遅く
+  # (そのときスタックはもう無く、バケット名も引けない)、pre_down が要る。
+  pre_down: |
+    set -eu
+    : "${KAGEROU_OUTPUT_WEBBUCKETNAME:?pre_down に WebBucketName Output が届いていない}"
+    aws s3 rm "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME" --recursive
+
   post_down: |
     set -eu
     echo "post_down ran for $KAGEROU_NAME"
