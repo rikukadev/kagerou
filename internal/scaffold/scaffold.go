@@ -21,6 +21,8 @@ type Params struct {
 	Port          string // アプリの listen ポート(検出値。空なら framework 既定)
 	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
 	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
+	Domain        string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
+	SetupBase     bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
 }
 
 type Result struct {
@@ -56,6 +58,7 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true},
 		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
 		{sel.Template, "template.yaml", "template.yaml.tmpl", false},
+		{p.SetupBase, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true},
 	}
 	for _, f := range files {
 		if !f.enabled {
@@ -169,8 +172,9 @@ const SetupScriptName = "kagerou-setup.sh"
 // 行うスクリプトを dir に書き出す。実行するかは呼び出し側の選択。
 func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 	data := struct {
-		Owner, Repo, Region string
-	}{d.Owner, d.Repo, or(p.Region, d.Region)}
+		Owner, Repo, Region, Domain string
+		SetupBase                   bool
+	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.SetupBase}
 	t, err := template.ParseFS(tmplFS, "templates/setup.sh.tmpl")
 	if err != nil {
 		return "", err

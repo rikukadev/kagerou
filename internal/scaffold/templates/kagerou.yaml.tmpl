@@ -5,6 +5,9 @@ template: packaged.yaml # output of `sam build && sam package` (building is CI's
 region: {{.Region}}
 name_prefix: {{.Project}}- # stack name becomes {{.Project}}-pr-42
 ttl: 72h
+{{- if .Domain}}
+url_template: "https://{name}.{{.Domain}}" # preview base(共有 CloudFront)経由
+{{- end}}
 env:
   # {name} expands to the environment name. Values are delivered to the
   # Env<Key> template parameters (see docs/CONTRACT.md)

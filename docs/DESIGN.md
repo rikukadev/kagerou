@@ -324,12 +324,16 @@ static:
 url_template: "https://{name}.preview.example.com"   # static では必須
 ```
 
-### 10.5 未決(実装前に決める)
+### 10.5 決定(2026-09-12 実装時)
 
-- [ ] キャッシュ戦略: 環境更新のたびに CloudFront invalidation を打つか、
-      キャッシュ TTL を短くして不要に倒すか(アセットがハッシュ名なら後者で足りるはず)
-- [ ] SPA fallback(404 → index.html)を CF Function でやるか custom error response か
-      (custom error はディストリビューション全体に効くので、プレフィックス単位なら Function 側)
-- [ ] base スタックの管理コマンド(`kagerou base up` を作るか、テンプレート同梱 +
-      README 手順に留めるか)
-- [ ] iam-policy への base 用モジュール(--with-preview-base)
+- キャッシュ戦略: **Managed-CachingDisabled** でキャッシュしない。プレビューは
+  正しさ優先・トラフィック極小で、環境更新のたびの invalidation が不要になる
+- SPA fallback: **CF Function 側**で「拡張子なしパス → /index.html」に写す
+  (custom error response はディストリビューション全体に効くため不採用)
+- base の管理: **`kagerou base up` は作らず init の setup に統合**。
+  init が deploy/preview-base.yaml を書き出し、setup(run it now / script)が
+  us-east-1 にデプロイする。ドメインは Route53 ゾーンの列挙から選択
+  (ゾーン 1 つなら自動、複数なら質問、無ければ生 AWS URL のまま)。
+  2 回目以降のリポジトリは CFN Exports(`kagerou-preview-base:*`)から自動検出
+- [ ] iam-policy への base 用モジュール(--with-preview-base)は後続
+  (base は通常 CI でなく人間の資格情報で 1 回デプロイするため優先度低)

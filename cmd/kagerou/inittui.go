@@ -119,6 +119,21 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		})
 	}
 
+	if det.BaseDomain == "" && len(det.Zones) >= 2 {
+		var opts []option
+		for i, z := range det.Zones {
+			if i >= 4 { // 選択肢は 4 つまで(それ以上は --domain フラグで)
+				break
+			}
+			opts = append(opts, option{"preview." + z, "sets up the shared base once (us-east-1, ~15 min)"})
+		}
+		qs = append(qs, question{
+			key:     "domain",
+			title:   "Preview domain?",
+			options: opts,
+		})
+	}
+
 	qs = append(qs, question{
 		key:   "workflows",
 		title: "Workflows?",
@@ -163,6 +178,14 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p.Sashiki = m.answer("db") == 0
 	p.Port = m.det.AppPort
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
+	switch {
+	case m.det.BaseDomain != "": // 既存 base をそのまま使う
+		p.Domain = m.det.BaseDomain
+	case len(m.det.Zones) == 1: // ゾーンが 1 つなら自動選択
+		p.Domain, p.SetupBase = "preview."+m.det.Zones[0], true
+	case m.answer("domain") >= 0:
+		p.Domain, p.SetupBase = "preview."+m.det.Zones[m.answer("domain")], true
+	} // ゾーン検出なしなら Domain 空 = 生 AWS URL 運用のまま
 	sel := scaffold.Targets{KagerouYaml: true}
 	sel.Template = m.answer("template") == 0 // 質問なし(-1)= 既存なので生成しない
 	sel.Dockerfile = !p.HasDockerfile        // 持っていない人にだけ雛形を出す(#61。既存は上書きしない)
@@ -335,6 +358,11 @@ func (m initModel) View() string {
 		if m.answer("docker") == 0 {
 			b.WriteString("  + Dockerfile: inject Lambda Web Adapter (1 line)\n")
 		}
+		if p.SetupBase {
+			b.WriteString("  + preview base (one-time, us-east-1): https://{name}." + p.Domain + "\n")
+		} else if p.Domain != "" {
+			b.WriteString("  + preview base: reuse " + p.Domain + "\n")
+		}
 		switch m.answer("setup") {
 		case setupRun:
 			b.WriteString("  + AWS setup: run now (role / ECR / variables)\n")
@@ -410,6 +438,9 @@ func (m initModel) detectionSummary() string {
 	}
 	if m.det.AccountID != "" {
 		parts = append(parts, "aws:"+m.det.AccountID)
+	}
+	if m.det.BaseDomain != "" {
+		parts = append(parts, "base:"+m.det.BaseDomain)
 	}
 	if len(parts) == 0 {
 		return "(nothing detected)"
