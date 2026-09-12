@@ -114,6 +114,10 @@ func cmdUp(args []string, out *os.File) error {
 		t := time.Now().Add(d)
 		expiresAt = &t
 	}
+	var maxLife time.Duration
+	if cfg.MaxLifetime != "" {
+		maxLife, _ = time.ParseDuration(cfg.MaxLifetime) // 妥当性は config.Load 済み
+	}
 
 	drv, ctx, err := newDriver(cfg)
 	if err != nil {
@@ -135,6 +139,7 @@ func cmdUp(args []string, out *os.File) error {
 		Source:       f.source,
 		Version:      version,
 		Tags:         cfg.Tags,
+		MaxLifetime:  maxLife,
 	})
 	if err != nil {
 		return err
