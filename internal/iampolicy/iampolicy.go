@@ -41,16 +41,26 @@ type Policy struct {
 }
 
 type Options struct {
-	Prefix       string // kagerou.yaml の name_prefix。全 ARN のスコープ
+	Prefix string // kagerou.yaml の name_prefix。全 ARN のスコープ
+
+	// Template があれば「テンプレートが作るもの」はそこから導出する(#71):
+	// Lambda / API / VPC / S3 バケット / DynamoDB / SQS。S3・VPC のフラグは
+	// このとき無視される(テンプレートが真実の源)。nil なら従来のフラグ挙動。
+	Template *TemplateFacts
+
+	// 以下は「CI 自身がやること」でテンプレートからは導けない。フラグのまま。
 	ECR          bool   // Lambda コンテナイメージ構成(SSR 単体など)
 	EcrRepo      string // --with-ecr のリポジトリ名
-	S3           bool   // S3 静的配信つき(3 層など)
-	VPC          bool   // VPC 内リソース(sashiki 等)へ繋ぐ Lambda
 	SashikiSSM   bool   // sashiki action の transport=ssm
 	InstanceID   string // --with-sashiki-ssm の宛先インスタンス
 	CloudFront   bool   // 共有 CloudFront のキャッシュ無効化
 	Route53      bool   // カスタムドメインのレコード操作
 	HostedZoneID string // --with-route53 のゾーン
+	BaseBucket   string // 共有 preview base バケットへの成果物 sync(post_up の aws s3 sync)
+
+	// Template == nil のときだけ効く従来フラグ(テンプレートがあれば導出が勝つ)。
+	S3  bool // S3 静的配信つき(3 層など)
+	VPC bool // VPC 内リソース(sashiki 等)へ繋ぐ Lambda
 }
 
 // Build は選択された構成の最小権限ポリシーを組む。
@@ -68,6 +78,18 @@ func Build(o Options) (Policy, error) {
 		return Policy{}, errors.New("--with-ecr requires --ecr-repo (or project in kagerou.yaml)")
 	}
 	p := o.Prefix
+
+	// テンプレートがあれば「テンプレートが作るもの」はそこから導出。
+	// 無ければ従来どおり(Lambda/API は常時、S3/VPC はフラグ)。
+	wantLambda, wantAPI := true, true
+	wantS3, wantVPC := o.S3, o.VPC
+	if t := o.Template; t != nil {
+		wantLambda = t.has("AWS::Serverless::Function", "AWS::Lambda::Function")
+		wantAPI = t.has("AWS::Serverless::HttpApi", "AWS::Serverless::Api",
+			"AWS::ApiGatewayV2::Api", "AWS::ApiGateway::RestApi")
+		wantS3 = t.has("AWS::S3::Bucket")
+		wantVPC = t.HasVPC
+	}
 
 	sts := []Statement{
 		{
@@ -112,42 +134,81 @@ func Build(o Options) (Policy, error) {
 			},
 			Resource: []string{"arn:aws:s3:::aws-sam-cli-managed-*", "arn:aws:s3:::aws-sam-cli-managed-*/*"},
 		},
-		{
-			Sid: "LambdaFunction", Effect: "Allow",
-			Action: []string{
-				"lambda:CreateFunction", "lambda:DeleteFunction", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
-				"lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:GetPolicy", "lambda:ListVersionsByFunction",
-				"lambda:AddPermission", "lambda:RemovePermission",
-				"lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
+	}
+
+	if wantLambda {
+		sts = append(sts,
+			Statement{
+				Sid: "LambdaFunction", Effect: "Allow",
+				Action: []string{
+					"lambda:CreateFunction", "lambda:DeleteFunction", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
+					"lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:GetPolicy", "lambda:ListVersionsByFunction",
+					"lambda:AddPermission", "lambda:RemovePermission",
+					"lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
+				},
+				Resource: fmt.Sprintf("arn:aws:lambda:*:*:function:%s*", p),
 			},
-			Resource: fmt.Sprintf("arn:aws:lambda:*:*:function:%s*", p),
-		},
-		{
+			Statement{
+				// PassRole が無いと Lambda を作れない(最も分かりにくい失敗)
+				Sid: "ExecutionRole", Effect: "Allow",
+				Action: []string{
+					"iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PassRole",
+					"iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
+					"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies",
+					"iam:TagRole", "iam:UntagRole",
+				},
+				Resource: fmt.Sprintf("arn:aws:iam::*:role/%s*", p),
+			},
+			Statement{
+				Sid: "LogGroups", Effect: "Allow",
+				Action: []string{
+					"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:DescribeLogStreams",
+					"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
+				},
+				Resource: fmt.Sprintf("arn:aws:logs:*:*:log-group:/aws/lambda/%s*", p),
+			})
+	}
+	if wantAPI {
+		sts = append(sts, Statement{
 			// API Gateway は ARN でスタック単位に絞れない(id は作るまで不明、タグは別パス)。
 			// サービス全体 × apigateway:* の妥協。本番権限として写さないこと
 			Sid: "HttpApiCompromise", Effect: "Allow",
 			Action:   []string{"apigateway:*"},
 			Resource: "arn:aws:apigateway:*::*",
-		},
-		{
-			// PassRole が無いと Lambda を作れない(最も分かりにくい失敗)
-			Sid: "ExecutionRole", Effect: "Allow",
+		})
+	}
+	if o.Template != nil && o.Template.has("AWS::DynamoDB::Table") {
+		sts = append(sts, Statement{
+			// デプロイロールに要るのはテーブルのライフサイクル(データプレーンは実行ロール)
+			Sid: "DynamoDBTableLifecycle", Effect: "Allow",
 			Action: []string{
-				"iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PassRole",
-				"iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
-				"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies",
-				"iam:TagRole", "iam:UntagRole",
+				"dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable", "dynamodb:UpdateTable",
+				"dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource",
 			},
-			Resource: fmt.Sprintf("arn:aws:iam::*:role/%s*", p),
-		},
-		{
-			Sid: "LogGroups", Effect: "Allow",
+			Resource: fmt.Sprintf("arn:aws:dynamodb:*:*:table/%s*", p),
+		})
+	}
+	if o.Template != nil && o.Template.has("AWS::SQS::Queue") {
+		sts = append(sts, Statement{
+			Sid: "SQSQueueLifecycle", Effect: "Allow",
 			Action: []string{
-				"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:DescribeLogStreams",
-				"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
+				"sqs:CreateQueue", "sqs:DeleteQueue", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes",
+				"sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags",
 			},
-			Resource: fmt.Sprintf("arn:aws:logs:*:*:log-group:/aws/lambda/%s*", p),
-		},
+			Resource: fmt.Sprintf("arn:aws:sqs:*:*:%s*", p),
+		})
+	}
+	if o.BaseBucket != "" {
+		sts = append(sts, Statement{
+			// 共有 preview base バケットへの成果物 sync(post_up の aws s3 sync)。
+			// バケットの作成・削除・ポリシー変更は含めない(base は別スタックの持ち物)
+			Sid: "SharedWebBucketSync", Effect: "Allow",
+			Action: []string{"s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+			Resource: []string{
+				fmt.Sprintf("arn:aws:s3:::%s", o.BaseBucket),
+				fmt.Sprintf("arn:aws:s3:::%s/*", o.BaseBucket),
+			},
+		})
 	}
 
 	if o.ECR {
@@ -163,7 +224,7 @@ func Build(o Options) (Policy, error) {
 				Resource: fmt.Sprintf("arn:aws:ecr:*:*:repository/%s", o.EcrRepo),
 			})
 	}
-	if o.S3 {
+	if wantS3 {
 		sts = append(sts, Statement{
 			// SPA 配布バケット。Tagging 系は kagerou がタグで環境を識別するため(CONTRACT §1)
 			Sid: "WebBucketLifecycle", Effect: "Allow",
@@ -178,7 +239,7 @@ func Build(o Options) (Policy, error) {
 			Resource: []string{fmt.Sprintf("arn:aws:s3:::%s*", p), fmt.Sprintf("arn:aws:s3:::%s*/*", p)},
 		})
 	}
-	if o.VPC {
+	if wantVPC {
 		sts = append(sts, Statement{
 			// VPC 内へ繋ぐ Lambda の ENI 管理。ENI 系は ARN で絞れない
 			Sid: "VpcAccess", Effect: "Allow",
