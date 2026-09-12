@@ -65,7 +65,29 @@ gh variable set AWS_ROLE_ARN   --body "arn:aws:iam::${ACCOUNT}:role/${ROLE}"
 gh variable set AWS_REGION     --body "${REGION}"
 gh variable set ECR_REPOSITORY --body "${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 
+{{- if .SetupBase}}
+
+# Preview base — shared CloudFront + wildcard certificate + DNS.
+# One-time per account. Must live in us-east-1 (CloudFront certificate constraint).
+DOMAIN="{{.Domain}}"
+PARENT="${DOMAIN#*.}"
+ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARENT" \
+  --query "HostedZones[?Name=='${PARENT}.'].Id | [0]" --output text | sed 's#/hostedzone/##')
+if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ]; then
+  echo "error: hosted zone for ${PARENT} not found" >&2
+  exit 1
+fi
+echo "deploying preview base for *.${DOMAIN} (takes ~15 min: certificate validation + CloudFront)"
+aws cloudformation deploy --region us-east-1 \
+  --stack-name kagerou-preview-base \
+  --template-file deploy/preview-base.yaml \
+  --parameter-overrides DomainName="$DOMAIN" HostedZoneId="$ZONE_ID"
+{{- end}}
+
 echo "done:"
 echo "  role  arn:aws:iam::${ACCOUNT}:role/${ROLE}"
 echo "  ecr   ${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 echo "  vars  AWS_ROLE_ARN / AWS_REGION / ECR_REPOSITORY"
+{{- if .Domain}}
+echo "  base  https://<name>.{{.Domain}}"
+{{- end}}
