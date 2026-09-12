@@ -47,6 +47,102 @@ jobs:
           go-version-file: go.mod
       - run: go test -race -count=1 ./internal/driver/...
 
+  # ─────────────────────────────────────────────
+  # 実 AWS の E2E。構成ごとに 1 本ずつ、毎 PR で本物を作って壊す。
+  #
+  # test-aws(moto)では見えないものを見るための枠。実際にこれで踏んだ種類:
+  #   - IAM の過不足(スタック作成前に呼ばれる API、Transform 自体の ARN、タグ伝播)
+  #   - 中身の入った S3 バケットがあると DeleteStack が失敗する
+  #   - post_up → readiness の順序
+  # どれも「動かしてみるまで分からない」ので、モックでは代替できない。
+  #
+  # fork からの PR では OIDC の資格情報が渡らないので動かない。
+  # required check にしてあるため、fork PR はそのままではマージできない
+  # (信頼できる変更は同一リポジトリのブランチに持ってきて回す)。
+  # ─────────────────────────────────────────────
+  e2e-aws-3tier:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    # 実 AWS リソースを名前で掴むので、同時に走らせない。
+    concurrency:
+      group: e2e-aws-3tier
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # **この PR のコード**で検証する。リリース済みバイナリではない。
+      - run: go build -o bin/kagerou ./cmd/kagerou
+
+      # 環境名は run id 由来。再実行で衝突せず、残骸が出ても由来を追える。
+      - name: Run E2E
+        env:
+          NAME: e2e-3t-${{ github.run_id }}
+        run: ./e2e/aws/run.sh bin/kagerou e2e/aws/3tier/kagerou.yaml "$NAME"
+
+      # run.sh も trap で片付けるが、スクリプトごと落ちた場合(構文エラー等)は
+      # そこも動かない。課金と名前の衝突を残さないための最後の網。
+      - name: Clean up
+        if: always()
+        env:
+          NAME: e2e-3t-${{ github.run_id }}
+        run: ./bin/kagerou down --name "$NAME" --config e2e/aws/3tier/kagerou.yaml || true
+
+  e2e-aws-ssr:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # arm64 イメージ(template の Architectures)をネイティブでビルドする
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: e2e-aws-ssr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - run: go build -o bin/kagerou ./cmd/kagerou
+
+      # イメージを ECR へ push し、ImageUri を書き換えたテンプレートを作る。
+      # この経路(ビルド成果物がテンプレートに焼き込まれる)は 3 層側に無い。
+      - name: Build and package image
+        run: |
+          set -euo pipefail
+          sam build --template e2e/aws/ssr/template.yaml
+          sam package \
+            --image-repository "${{ vars.E2E_ECR_REPOSITORY }}" \
+            --output-template-file packaged-ssr.yaml
+
+      - name: Run E2E
+        env:
+          NAME: e2e-ssr-${{ github.run_id }}
+        run: ./e2e/aws/run.sh bin/kagerou e2e/aws/ssr/kagerou.yaml "$NAME"
+
+      - name: Clean up
+        if: always()
+        env:
+          NAME: e2e-ssr-${{ github.run_id }}
+        run: ./bin/kagerou down --name "$NAME" --config e2e/aws/ssr/kagerou.yaml || true
+
   # 既知の脆弱性チェック。advisory 運用(必須 check にしない)は sashiki と同じ理由
   vuln:
     runs-on: ubuntu-latest
