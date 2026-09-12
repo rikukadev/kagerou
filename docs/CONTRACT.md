@@ -148,16 +148,23 @@ hooks:
     aws s3 sync web/dist/ "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/" --delete
 ```
 
-## 8. IAM(デプロイロール / trust / boundary)
+## 8. IAM(デプロイロール / trust / boundary / execution)
 
-「admin を付けてね」を避けるため、CI が使うデプロイロールに必要な IAM を
-`kagerou iam-policy` が生成する。3 つの文書を出す:
+「admin を付けてね」を避けるため、CI が使うロールに必要な IAM を
+`kagerou iam-policy` が生成する。`--doc` で 4 つの文書を出す:
 
 | `--doc` | 何 | 何にアタッチするか |
 |---|---|---|
 | `policy`(既定) | 構成別の最小権限ポリシー(`--with-*` で ECR/S3/VPC/sashiki-ssm/CloudFront/Route53 を足す) | デプロイロールの権限ポリシー |
 | `trust` | GitHub Actions OIDC の信頼ポリシー(`--repo owner/name`) | デプロイロールの信頼ポリシー |
 | `boundary` | 自己サーブ用の permissions boundary(`--regions`) | デプロイロール **と** それが作るロールの両方 |
+| `execution` | preview の Lambda がランタイムで使う最小ポリシー(`--allow 'actions=resources'` で宣言、`--with-vpc` で ENI) | Lambda の実行(ランタイム)ロール |
+
+`--check <file>` を付けると、生成する代わりに、実際に attach 済みのポリシー JSON を
+読んで **生成される最小ポリシーとのアクション差分**を報告する(`policy` / `boundary` /
+`execution` に対応。`trust` は対象外)。過剰権限(`extra`)があれば非 0 で終了するので、
+CI の drift ガードに使える。判定はアクション集合の比較で、resource スコープの緩さは見ない
+(Access Analyzer / Cloudsplaining の前段の軽い網)。
 
 保証する性質(外部が依存してよい):
 

@@ -142,6 +142,87 @@ func TestBuildBoundaryValidation(t *testing.T) {
 	}
 }
 
+func TestBuildExecution(t *testing.T) {
+	p, err := BuildExecution(ExecutionOptions{
+		Prefix: "myapp-", VPC: true,
+		Allow: []AllowRule{{
+			Actions:   []string{"secretsmanager:GetSecretValue"},
+			Resources: []string{"arn:aws:secretsmanager:*:*:secret:myapp-*"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := p.JSON()
+	s := string(b)
+	for _, want := range []string{
+		"logs:CreateLogGroup",
+		"log-group:/aws/lambda/myapp-*",             // ロググループを name_prefix に絞る
+		"log-group:/aws/lambda/myapp-*:*",           // ストリームまで
+		"ec2:CreateNetworkInterface",                // --with-vpc
+		"secretsmanager:GetSecretValue",             // 宣言した allow
+		"arn:aws:secretsmanager:*:*:secret:myapp-*", // 宣言した resource
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("execution policy missing %q", want)
+		}
+	}
+	// VPC 無し・allow 無しでも logs は出る
+	base, err := BuildExecution(ExecutionOptions{Prefix: "x-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, _ := base.JSON()
+	if strings.Contains(string(bs), "ec2:CreateNetworkInterface") {
+		t.Error("VPC 無しで ENI 権限が出ている")
+	}
+}
+
+func TestBuildExecutionValidation(t *testing.T) {
+	if _, err := BuildExecution(ExecutionOptions{}); err == nil {
+		t.Error("prefix なしはエラーのはず")
+	}
+	if _, err := BuildExecution(ExecutionOptions{Prefix: "p-", Allow: []AllowRule{{Actions: []string{"s3:GetObject"}}}}); err == nil {
+		t.Error("resource なしの allow はエラーのはず")
+	}
+}
+
+func TestCheckDrift(t *testing.T) {
+	gen, _ := BuildExecution(ExecutionOptions{Prefix: "myapp-"}) // logs のみ
+	// attach 側が s3:* を余計に持ち、logs:PutLogEvents を欠く。Action は string / 配列混在。
+	attached := []byte(`{
+	  "Version": "2012-10-17",
+	  "Statement": [
+	    {"Effect": "Allow", "Action": ["logs:CreateLogGroup", "logs:CreateLogStream"], "Resource": "*"},
+	    {"Effect": "Allow", "Action": "s3:*", "Resource": "*"},
+	    {"Effect": "Deny",  "Action": "iam:*", "Resource": "*"}
+	  ]
+	}`)
+	extra, missing, err := CheckDrift(gen, attached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(extra) != 1 || extra[0] != "s3:*" {
+		t.Errorf("過剰権限 s3:* を検出するはず: %v", extra)
+	}
+	if !containsStr(missing, "logs:PutLogEvents") {
+		t.Errorf("欠落 logs:PutLogEvents を検出するはず: %v", missing)
+	}
+	// Deny の iam:* は Allow 集合に入らない(過剰権限扱いしない)
+	if containsStr(extra, "iam:*") {
+		t.Error("Deny のアクションを過剰権限に数えてはいけない")
+	}
+}
+
+func containsStr(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildValidation(t *testing.T) {
 	if _, err := Build(Options{}); err == nil {
 		t.Error("prefix なしはエラーのはず")

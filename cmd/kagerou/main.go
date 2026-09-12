@@ -58,6 +58,8 @@ Usage:
   kagerou iam-policy [--with-*]      generate a least-privilege CI role policy
   kagerou iam-policy --doc trust     generate the deploy role's OIDC trust policy
   kagerou iam-policy --doc boundary  generate the self-serve permissions boundary
+  kagerou iam-policy --doc execution generate the Lambda execution role policy (--allow)
+  kagerou iam-policy --check <file>  report drift of an attached policy vs the minimal set
   kagerou up --name <name> [flags]   create/update an environment (idempotent)
   kagerou down --name <name>         delete an environment (idempotent)
   kagerou list                       list environments

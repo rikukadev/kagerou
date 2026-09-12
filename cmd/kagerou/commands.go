@@ -411,15 +411,42 @@ func cmdReap(args []string, out *os.File) error {
 	return nil
 }
 
+// allowFlag は繰り返し可能な --allow 'actions=resources' を集める(--doc execution)。
+type allowFlag []iampolicy.AllowRule
+
+func (a *allowFlag) String() string { return "" }
+func (a *allowFlag) Set(v string) error {
+	i := strings.Index(v, "=")
+	if i < 0 {
+		return fmt.Errorf("--allow %q: want 'action1,action2=arn1,arn2'", v)
+	}
+	actions, resources := splitCSV(v[:i]), splitCSV(v[i+1:])
+	if len(actions) == 0 || len(resources) == 0 {
+		return fmt.Errorf("--allow %q: actions and resources are both required", v)
+	}
+	*a = append(*a, iampolicy.AllowRule{Actions: actions, Resources: resources})
+	return nil
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func cmdIamPolicy(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("iam-policy", flag.ContinueOnError)
 	cfgPath := fs.String("config", config.DefaultFile, "config file")
-	doc := fs.String("doc", "policy", "which document to emit: policy | trust | boundary")
+	doc := fs.String("doc", "policy", "which document to emit: policy | trust | boundary | execution")
 	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
 	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
 	ecrRepo := fs.String("ecr-repo", "", "ECR repository name (default: project in kagerou.yaml)")
 	s3 := fs.Bool("with-s3", false, "static website bucket (3-tier etc.)")
-	vpc := fs.Bool("with-vpc", false, "Lambda inside a VPC (ENI management)")
+	vpc := fs.Bool("with-vpc", false, "Lambda inside a VPC (ENI management; also for --doc execution)")
 	ssm := fs.Bool("with-sashiki-ssm", false, "sashiki action transport=ssm")
 	instance := fs.String("instance-id", "", "target instance for --with-sashiki-ssm")
 	cf := fs.Bool("with-cloudfront", false, "CloudFront cache invalidation")
@@ -431,6 +458,10 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	branch := fs.String("branch", "", "default branch allowed to assume (--doc trust, default main)")
 	regions := fs.String("regions", "", "comma-separated regions for --doc boundary (default: region in kagerou.yaml)")
 	boundaryArn := fs.String("boundary-arn", "", "ARN of this boundary policy (--doc boundary, default derived from --account)")
+	// --doc execution 用 / drift 検出
+	var allow allowFlag
+	fs.Var(&allow, "allow", "declared access for --doc execution: 'action1,action2=arn1,arn2' (repeatable)")
+	check := fs.String("check", "", "compare an attached policy JSON file against the generated one and report drift (exit non-zero on over-permission)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -438,76 +469,111 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	prefixOrCfg := func() string {
+		if *prefix != "" {
+			return *prefix
+		}
+		return cfg.NamePrefix
+	}
 
-	var (
-		b    []byte
-		note string
-	)
+	// trust は Action 集合の形が違うので drift 検出の対象外。
+	if *check != "" && *doc == "trust" {
+		return fmt.Errorf("--check does not apply to --doc trust")
+	}
+
+	// 生成する Policy(policy / boundary / execution)。trust は別扱いで先に返す。
+	var pol iampolicy.Policy
+	var note string
 	switch *doc {
 	case "policy":
-		if *prefix == "" {
-			*prefix = cfg.NamePrefix
+		ecrRepoName := *ecrRepo
+		if ecrRepoName == "" {
+			ecrRepoName = cfg.Project
 		}
-		if *ecrRepo == "" {
-			*ecrRepo = cfg.Project
-		}
-		pol, err := iampolicy.Build(iampolicy.Options{
-			Prefix: *prefix,
-			ECR:    *ecr, EcrRepo: *ecrRepo,
+		pol, err = iampolicy.Build(iampolicy.Options{
+			Prefix: prefixOrCfg(),
+			ECR:    *ecr, EcrRepo: ecrRepoName,
 			S3: *s3, VPC: *vpc,
 			SashikiSSM: *ssm, InstanceID: *instance,
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
 		})
-		if err != nil {
-			return err
-		}
-		if b, err = pol.JSON(); err != nil {
-			return err
-		}
 		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
-	case "trust":
-		tp, err := iampolicy.BuildTrust(iampolicy.TrustOptions{Repo: *repo, Account: *account, Branch: *branch})
-		if err != nil {
-			return err
-		}
-		if b, err = tp.JSON(); err != nil {
-			return err
-		}
-		note = "attach as the deploy role's trust policy; the GitHub OIDC provider must already exist in the account"
-		if *account == "" {
-			note += "; replace " + iampolicy.AccountPlaceholder + " with your account ID"
-		}
 	case "boundary":
-		if *prefix == "" {
-			*prefix = cfg.NamePrefix
-		}
 		var regs []string
 		src := *regions
 		if src == "" {
 			src = cfg.Region
 		}
-		for _, r := range strings.Split(src, ",") {
-			if r = strings.TrimSpace(r); r != "" {
-				regs = append(regs, r)
-			}
-		}
-		bp, err := iampolicy.BuildBoundary(iampolicy.BoundaryOptions{
-			Prefix: *prefix, Regions: regs, BoundaryArn: *boundaryArn, Account: *account,
+		regs = splitCSV(src)
+		pol, err = iampolicy.BuildBoundary(iampolicy.BoundaryOptions{
+			Prefix: prefixOrCfg(), Regions: regs, BoundaryArn: *boundaryArn, Account: *account,
 		})
-		if err != nil {
-			return err
-		}
-		if b, err = bp.JSON(); err != nil {
-			return err
-		}
 		note = "attach as a permissions boundary to BOTH the deploy role and the roles it creates; review before use"
 		if *boundaryArn == "" && *account == "" {
 			note += "; replace " + iampolicy.AccountPlaceholder + " in the boundary ARN"
 		}
+	case "execution":
+		pol, err = iampolicy.BuildExecution(iampolicy.ExecutionOptions{
+			Prefix: prefixOrCfg(), VPC: *vpc, Allow: allow,
+		})
+		note = "attach as the Lambda execution (runtime) role; declare app ARNs with --allow"
+	case "trust":
+		tp, terr := iampolicy.BuildTrust(iampolicy.TrustOptions{Repo: *repo, Account: *account, Branch: *branch})
+		if terr != nil {
+			return terr
+		}
+		b, terr := tp.JSON()
+		if terr != nil {
+			return terr
+		}
+		note = "attach as the deploy role's trust policy; the GitHub OIDC provider must already exist in the account"
+		if *account == "" {
+			note += "; replace " + iampolicy.AccountPlaceholder + " with your account ID"
+		}
+		fmt.Fprintln(os.Stderr, "kagerou: note: "+note)
+		_, err = out.Write(append(b, '\n'))
+		return err
 	default:
-		return fmt.Errorf("unknown --doc %q (want policy | trust | boundary)", *doc)
+		return fmt.Errorf("unknown --doc %q (want policy | trust | boundary | execution)", *doc)
+	}
+	if err != nil {
+		return err
 	}
 
+	// --check: 生成した最小ポリシーを基準に、実 attach ポリシーの差分を報告する(#53 ④)。
+	if *check != "" {
+		data, err := os.ReadFile(*check)
+		if err != nil {
+			return fmt.Errorf("--check: %w", err)
+		}
+		extra, missing, err := iampolicy.CheckDrift(pol, data)
+		if err != nil {
+			return err
+		}
+		if len(extra) == 0 && len(missing) == 0 {
+			_, err := fmt.Fprintln(out, "no drift: attached policy matches the generated minimal actions")
+			return err
+		}
+		for _, a := range missing {
+			if _, err := fmt.Fprintf(out, "missing\t%s\t(generated policy needs it; attached may break)\n", a); err != nil {
+				return err
+			}
+		}
+		for _, a := range extra {
+			if _, err := fmt.Fprintf(out, "extra\t%s\t(over-permission: not in the generated minimal set)\n", a); err != nil {
+				return err
+			}
+		}
+		if len(extra) > 0 {
+			return fmt.Errorf("drift: %d action(s) beyond the generated minimal policy", len(extra))
+		}
+		return nil
+	}
+
+	b, err := pol.JSON()
+	if err != nil {
+		return err
+	}
 	fmt.Fprintln(os.Stderr, "kagerou: note: "+note)
 	if _, err := out.Write(append(b, '\n')); err != nil {
 		return err
