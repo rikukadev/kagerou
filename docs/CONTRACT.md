@@ -15,7 +15,7 @@ driver は個別に付ける責務を負う。
 | `kagerou:managed` | `"true"` | 走査時の第一フィルタ |
 | `kagerou:name` | 環境名(例 `pr-42`) | |
 | `kagerou:project` | プロジェクト名(例 `todo`) | kagerou.yaml の `project`。未設定なら省略。**`reap` / `list` の分離境界**(下記) |
-| `kagerou:driver` | `stack` 等 | |
+| `kagerou:driver` | `stack` / `static` | |
 | `kagerou:expires-at` | RFC3339 UTC(例 `2026-09-15T00:00:00Z`)または `none` | `none` = 明示的な無期限 |
 | `kagerou:url` | `url_template` で作成前に確定した環境 URL | 未設定なら省略。§5 参照 |
 | `kagerou:source` | opaque 文字列。URI 形式を推奨(例 `github_pr://rikukadev/todo/42`) | adapter が `--source` で渡す。kagerou は解釈しない。CFN タグ値の文字種制約(英数字と ` +-=._:/@`)により JSON は入らない |
@@ -98,6 +98,25 @@ Resources:
         Variables:
           DB_USER: !Ref EnvDbUser
 ```
+
+## 4.5 driver: static
+
+compute を持たない環境(SSG / CSR の SPA)。テンプレートも `Env<Key>` も使わず、
+ビルド成果物を preview base バケットの `{name}/` プレフィックスへ配置する。
+
+```yaml
+driver: static
+url_template: "https://{name}.myapp.example.com" # static では必須(URL を出す Output が無い)
+static:
+  dist: dist                         # ビルド成果物のディレクトリ
+  bucket: kagerou-base-myapp-123456  # preview base スタックの bucket Output
+```
+
+- 環境の実体は S3 プレフィックスだが、**環境 = CFN スタック 1 個の不変条件は維持する**
+  (タグの担い手として実リソースを持たない極小スタックを作る)。list / reap /
+  Environment JSON / iam-policy は stack driver と共通のまま
+- `up` は毎回同期し、ローカルに無いファイルは S3 からも消す(`aws s3 sync --delete` 相当)
+- `down` はスタックとプレフィックス配下の両方を消す
 
 ## 5. URL の発行
 
