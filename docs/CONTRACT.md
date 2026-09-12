@@ -59,7 +59,9 @@ driver は個別に付ける責務を負う。
 }
 ```
 
-- `state`: `creating | updating | ready | deleting | failed`
+- `state`: `creating | starting | updating | ready | deleting | failed`
+  - `starting` はスタックは完成したが `readiness_path` がまだ 200 を返さない状態
+    (kagerou.yaml で `readiness_path` を設定したときだけ現れる)
 - `expires_at`: TTL なしのときは `null`
 - `source`: opaque 文字列(URI 形式推奨)。未指定のときは `null`。kagerou は解釈しない
 - driver 固有の情報は driver 名のキー(`stack` 等)の下に入れ子にする

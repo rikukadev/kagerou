@@ -30,6 +30,10 @@ type Config struct {
 	// URLTemplate は環境 URL を作成前に確定させる(例 "https://{name}.preview.example.com")。
 	// CORS 許可元やコールバック URL の循環参照を避ける(CONTRACT §5)。
 	URLTemplate string           `yaml:"url_template"`
+	// ReadinessPath を設定すると、up はこのパスに 200 が返るまで ready にしない(#26)。
+	// 未設定なら従来どおりスタック完成 = ready。
+	ReadinessPath    string `yaml:"readiness_path"`
+	ReadinessTimeout string `yaml:"readiness_timeout"` // 例 90s。未設定は 90s
 	TTL        string            `yaml:"ttl"`
 	Tags       map[string]string `yaml:"tags"`
 	Env        map[string]string `yaml:"env"`
@@ -88,6 +92,11 @@ func (c Config) validate() error {
 	}
 	if _, _, err := ParseTTL(c.TTL); err != nil {
 		return err
+	}
+	if c.ReadinessTimeout != "" {
+		if d, err := time.ParseDuration(c.ReadinessTimeout); err != nil || d <= 0 {
+			return fmt.Errorf("readiness_timeout %q: must be a positive duration", c.ReadinessTimeout)
+		}
 	}
 	return nil
 }
