@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  kagerou preview base — shared delivery for preview environments.
+  Deploy ONCE per account, in us-east-1 (CloudFront certificates must live there).
+  Environments become https://<name>.<DomainName>/ backed by s3://<bucket>/<name>/.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: Parent domain for previews, e.g. preview.example.com
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Hosted zone that owns the parent of DomainName
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "kagerou-preview-base-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "*.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "kagerou-preview-base-${AWS::AccountId}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Host の最初のラベル(pr-42.preview.example.com → pr-42)を S3 プレフィックスに写す。
+  # 拡張子の無いパスは index.html に落とす(SPA のルーティング想定)
+  HostToPrefixFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: kagerou-preview-host-to-prefix
+      AutoPublish: true
+      FunctionConfig:
+        Comment: map <name>.<domain>/<uri> to /<name>/<uri>
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var req = event.request;
+          var name = req.headers.host.value.split('.')[0];
+          var uri = req.uri;
+          if (uri.endsWith('/')) {
+            uri += 'index.html';
+          } else if (!uri.split('/').pop().includes('.')) {
+            uri += '/index.html';
+          }
+          req.uri = '/' + name + uri;
+          return req;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: kagerou preview base
+        HttpVersion: http2
+        Aliases:
+          - !Sub "*.${DomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        DefaultCacheBehavior:
+          TargetOriginId: bucket
+          ViewerProtocolPolicy: redirect-to-https
+          # プレビューは正しさ優先: キャッシュ無効(Managed-CachingDisabled)にして
+          # 環境更新のたびの invalidation を不要にする
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt HostToPrefixFunction.FunctionMetadata.FunctionARN
+        Origins:
+          - Id: bucket
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${Bucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  WildcardRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2 # CloudFront の固定 hosted zone
+
+Outputs:
+  Domain:
+    Value: !Ref DomainName
+    Export:
+      Name: "kagerou-preview-base:domain"
+  Bucket:
+    Value: !Ref Bucket
+    Export:
+      Name: "kagerou-preview-base:bucket"
+  DistributionId:
+    Value: !Ref Distribution
+    Export:
+      Name: "kagerou-preview-base:distribution"
