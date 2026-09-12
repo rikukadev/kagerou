@@ -261,3 +261,75 @@ v0.2 の筆頭候補。SSR フロントは v0.1 の `stack` + LWA テンプレ�
    常設 CI にはせず手動 or nightly。sashiki-todo-demo の kagerou 化(#9)が兼ねる
 
 デプロイ系の機能は「実装と同じ PR に moto 結合テストが付いてくる」を規約にする。
+
+## 10. 共有配信基盤と static driver(#32 / #10)
+
+> 状態: レビュー待ちの設計案(2026-09-12)。実装前にここで固める。
+
+### 10.1 まず切り分け: #32 は driver 追加なしで解ける
+
+#32 の主訴は「3 層デモの SPA が http(S3 website)のまま」で、これは
+**配信基盤の不在**の問題。static driver(#10)が無くても、共有 CloudFront が
+あれば現行の stack driver + post_up(base バケットへ sync)で https 化できる。
+
+- **#32 = 共有配信基盤(preview base)を出す** — 先にやる
+- **#10 = static driver** — 「フロントのみ」構成向けの省コスト経路。base の上に載る
+
+### 10.2 preview base: 1 回だけ作る共有スタック
+
+環境ごとに CloudFront を作ると 5〜10 分かかり ephemeral に合わない。
+**ディストリビューション・証明書・DNS は共有し、環境は S3 プレフィックスだけ**にする。
+
+構成(kagerou が `deploy/preview-base.yaml` として同梱、`kagerou init` の
+setup から案内):
+
+- S3 バケット(非公開、OAC 経由のみ)
+- CloudFront: 代替ドメイン `*.preview.example.com`、ACM 証明書
+- CloudFront Function(viewer-request): Host の最初のラベルを origin path に写す
+  (`pr-42.preview.example.com` → `/pr-42/…`。sashiki-demo の fwd-host と同型)
+- Route53: `*.preview.example.com` → CloudFront の alias
+- **リージョンは us-east-1 固定**(CloudFront 用 ACM の制約。クロスリージョン
+  参照を CFN で頑張るより、base スタックごと us-east-1 に置く方が単純)
+
+前提: Route53 のホストゾーンは利用者が持っている(ドメイン所有は kagerou の
+外)。base の Outputs(バケット名・ドメイン)を kagerou.yaml に写して使う。
+
+### 10.3 3 層構成の最終形(#32 の解)
+
+SPA の配置先を S3 website から base バケットのプレフィックスに変えるだけ:
+
+```yaml
+url_template: "https://{name}.preview.example.com"
+hooks:
+  post_up: aws s3 sync web/dist "s3://$PREVIEW_BASE_BUCKET/{name}/" --delete
+```
+
+https になり、Cookie の Secure も使え、URL に PR 番号が出る。driver は stack のまま。
+
+### 10.4 static driver(#10): フロントのみ構成の省コスト経路
+
+「compute が要らない」アプリ(SSG / CSR)向け。**不変条件「環境 = CFN スタック
+1 個」は static でも維持する**:
+
+- up = メタデータ専用の極小スタック作成(タグの担い手。実リソースほぼ無し、数秒)
+  + `static.dist` を `s3://<base バケット>/{name}/` へ sync
+- down = メタスタック削除 + プレフィックスのオブジェクト削除
+- これにより list / reap / Environment JSON / iam-policy が**全 driver 共通のまま**
+
+```yaml
+driver: static
+static:
+  dist: dist
+  bucket: <preview-base の Output>
+url_template: "https://{name}.preview.example.com"   # static では必須
+```
+
+### 10.5 未決(実装前に決める)
+
+- [ ] キャッシュ戦略: 環境更新のたびに CloudFront invalidation を打つか、
+      キャッシュ TTL を短くして不要に倒すか(アセットがハッシュ名なら後者で足りるはず)
+- [ ] SPA fallback(404 → index.html)を CF Function でやるか custom error response か
+      (custom error はディストリビューション全体に効くので、プレフィックス単位なら Function 側)
+- [ ] base スタックの管理コマンド(`kagerou base up` を作るか、テンプレート同梱 +
+      README 手順に留めるか)
+- [ ] iam-policy への base 用モジュール(--with-preview-base)
