@@ -133,3 +133,37 @@ hooks:
     printf '{"apiBaseUrl":"%s"}' "$KAGEROU_OUTPUT_APIURL" > web/dist/config.json
     aws s3 sync web/dist/ "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/" --delete
 ```
+
+## 8. IAM(デプロイロール / trust / boundary)
+
+「admin を付けてね」を避けるため、CI が使うデプロイロールに必要な IAM を
+`kagerou iam-policy` が生成する。3 つの文書を出す:
+
+| `--doc` | 何 | 何にアタッチするか |
+|---|---|---|
+| `policy`(既定) | 構成別の最小権限ポリシー(`--with-*` で ECR/S3/VPC/sashiki-ssm/CloudFront/Route53 を足す) | デプロイロールの権限ポリシー |
+| `trust` | GitHub Actions OIDC の信頼ポリシー(`--repo owner/name`) | デプロイロールの信頼ポリシー |
+| `boundary` | 自己サーブ用の permissions boundary(`--regions`) | デプロイロール **と** それが作るロールの両方 |
+
+保証する性質(外部が依存してよい):
+
+- **デプロイロールは OIDC の `sts:AssumeRoleWithWebIdentity` 前提**で、`sub` を
+  `repo:<owner>/<name>:pull_request`(preview)と `repo:<owner>/<name>:ref:refs/heads/<branch>`
+  (schedule の reap)だけに固定する。**fork の PR は sub が一致せず assume できない**
+  (GitHub も fork PR の workflow に OIDC トークンを既定で渡さない)。`aud` は `sts.amazonaws.com` に固定。
+- **権限ポリシーは `name_prefix`(= `kagerou:name` の接頭辞)で ARN をスコープ**する。
+  CloudFormation スタック・Lambda・ロール・ロググループは `<name_prefix>*` に限定。
+  ARN で絞れないアクション(`apigateway:*`、ENI 系、`cloudfront:CreateInvalidation` 等)は
+  ワイルドカードが残る前提で、boundary が全体を封じる。
+- **preview リソースは permissions boundary 配下で作られる**。boundary は上限
+  (実効権限 = 権限ポリシー ∩ boundary)として次を強制する:
+  - 許可した region 以外の regional アクションを Deny(`StringNotEqualsIfExists aws:RequestedRegion`。
+    グローバルサービスは誤爆させない)
+  - IAM 昇格(ユーザ/アクセスキー/グループ/ポリシー版/IdP の作成)を Deny
+  - `name_prefix` 名前空間外のロールへの IAM 書込・`PassRole` を Deny
+  - 新規ロール作成時に **同じ boundary の付与を必須化**(付けないと作れない=子ロールも同じ天井に)
+  - 組織・アカウント・課金(`organizations:*` / `account:*` / `budgets:*` / `ce:*`)を Deny
+
+これらは v0.x の間も後方互換(Deny の追加・スコープを狭める変更はしうるが、
+出力の骨格と上記の性質は保つ)。`policy` はワイルドカードが残る箇所があるため、
+アタッチ前にレビューすること(コマンドが stderr で注意する)。

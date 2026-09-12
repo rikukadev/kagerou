@@ -409,6 +409,7 @@ func cmdReap(args []string, out *os.File) error {
 func cmdIamPolicy(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("iam-policy", flag.ContinueOnError)
 	cfgPath := fs.String("config", config.DefaultFile, "config file")
+	doc := fs.String("doc", "policy", "which document to emit: policy | trust | boundary")
 	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
 	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
 	ecrRepo := fs.String("ecr-repo", "", "ECR repository name (default: project in kagerou.yaml)")
@@ -419,6 +420,12 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	cf := fs.Bool("with-cloudfront", false, "CloudFront cache invalidation")
 	r53 := fs.Bool("with-route53", false, "Route53 record changes")
 	zone := fs.String("hosted-zone-id", "", "hosted zone for --with-route53")
+	// --doc trust / boundary 用
+	repo := fs.String("repo", "", "owner/name for the OIDC trust policy (--doc trust)")
+	account := fs.String("account", "", "AWS account ID for ARNs in --doc trust / boundary (default: placeholder)")
+	branch := fs.String("branch", "", "default branch allowed to assume (--doc trust, default main)")
+	regions := fs.String("regions", "", "comma-separated regions for --doc boundary (default: region in kagerou.yaml)")
+	boundaryArn := fs.String("boundary-arn", "", "ARN of this boundary policy (--doc boundary, default derived from --account)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -426,27 +433,77 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	if *prefix == "" {
-		*prefix = cfg.NamePrefix
+
+	var (
+		b    []byte
+		note string
+	)
+	switch *doc {
+	case "policy":
+		if *prefix == "" {
+			*prefix = cfg.NamePrefix
+		}
+		if *ecrRepo == "" {
+			*ecrRepo = cfg.Project
+		}
+		pol, err := iampolicy.Build(iampolicy.Options{
+			Prefix: *prefix,
+			ECR:    *ecr, EcrRepo: *ecrRepo,
+			S3: *s3, VPC: *vpc,
+			SashikiSSM: *ssm, InstanceID: *instance,
+			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
+		})
+		if err != nil {
+			return err
+		}
+		if b, err = pol.JSON(); err != nil {
+			return err
+		}
+		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
+	case "trust":
+		tp, err := iampolicy.BuildTrust(iampolicy.TrustOptions{Repo: *repo, Account: *account, Branch: *branch})
+		if err != nil {
+			return err
+		}
+		if b, err = tp.JSON(); err != nil {
+			return err
+		}
+		note = "attach as the deploy role's trust policy; the GitHub OIDC provider must already exist in the account"
+		if *account == "" {
+			note += "; replace " + iampolicy.AccountPlaceholder + " with your account ID"
+		}
+	case "boundary":
+		if *prefix == "" {
+			*prefix = cfg.NamePrefix
+		}
+		var regs []string
+		src := *regions
+		if src == "" {
+			src = cfg.Region
+		}
+		for _, r := range strings.Split(src, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				regs = append(regs, r)
+			}
+		}
+		bp, err := iampolicy.BuildBoundary(iampolicy.BoundaryOptions{
+			Prefix: *prefix, Regions: regs, BoundaryArn: *boundaryArn, Account: *account,
+		})
+		if err != nil {
+			return err
+		}
+		if b, err = bp.JSON(); err != nil {
+			return err
+		}
+		note = "attach as a permissions boundary to BOTH the deploy role and the roles it creates; review before use"
+		if *boundaryArn == "" && *account == "" {
+			note += "; replace " + iampolicy.AccountPlaceholder + " in the boundary ARN"
+		}
+	default:
+		return fmt.Errorf("unknown --doc %q (want policy | trust | boundary)", *doc)
 	}
-	if *ecrRepo == "" {
-		*ecrRepo = cfg.Project
-	}
-	pol, err := iampolicy.Build(iampolicy.Options{
-		Prefix: *prefix,
-		ECR:    *ecr, EcrRepo: *ecrRepo,
-		S3: *s3, VPC: *vpc,
-		SashikiSSM: *ssm, InstanceID: *instance,
-		CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
-	})
-	if err != nil {
-		return err
-	}
-	b, err := pol.JSON()
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(os.Stderr, "kagerou: note: apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching")
+
+	fmt.Fprintln(os.Stderr, "kagerou: note: "+note)
 	if _, err := out.Write(append(b, '\n')); err != nil {
 		return err
 	}
