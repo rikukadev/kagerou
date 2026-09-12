@@ -116,6 +116,9 @@ static:
   (タグの担い手として実リソースを持たない極小スタックを作る)。list / reap /
   Environment JSON / iam-policy は stack driver と共通のまま
 - `up` は毎回同期し、ローカルに無いファイルは S3 からも消す(`aws s3 sync --delete` 相当)
+- **`post_up` は同期の前に走る**(static は「同期 = 公開」なので、環境固有の
+  ファイル生成が同期より後だと反映されない)。URL は `url_template` で作成前に
+  確定しているため、フックには `KAGEROU_URL` も渡る
 - `down` はスタックとプレフィックス配下の両方を消す
 
 ## 5. URL の発行
