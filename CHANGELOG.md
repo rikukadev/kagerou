@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/rikukadev/kagerou/compare/v0.4.0...v0.5.0) (2026-09-12)
+
+
+### Features
+
+* kagerou iam-policy — generate a least-privilege CI role policy ([#59](https://github.com/rikukadev/kagerou/issues/59)) ([5c326a9](https://github.com/rikukadev/kagerou/commit/5c326a966eda921b6a7bbc6703888cd3bd5f7aca)), closes [#27](https://github.com/rikukadev/kagerou/issues/27)
+* readiness_path — don't report ready until the app responds ([#57](https://github.com/rikukadev/kagerou/issues/57)) ([ca7259e](https://github.com/rikukadev/kagerou/commit/ca7259ec5752efe400755cc0fc19d55a04057339))
+
+
+### Bug Fixes
+
+* pin action refs to moving [@v0](https://github.com/v0) tag and reap via action ([#49](https://github.com/rikukadev/kagerou/issues/49), [#50](https://github.com/rikukadev/kagerou/issues/50)) ([#58](https://github.com/rikukadev/kagerou/issues/58)) ([3830bb0](https://github.com/rikukadev/kagerou/commit/3830bb0200fc814615be32ecb5a1b70c5925b1d9))
+* scope reap/list to kagerou:project to stop cross-project deletion ([#48](https://github.com/rikukadev/kagerou/issues/48)) ([#55](https://github.com/rikukadev/kagerou/issues/55)) ([734e65a](https://github.com/rikukadev/kagerou/commit/734e65a76994ee5dfad473f2996ba98c8f11cd10))
+
 ## [0.4.0](https://github.com/rikukadev/kagerou/compare/v0.3.0...v0.4.0) (2026-09-12)
 
 
