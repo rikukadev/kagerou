@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/rikukadev/kagerou/compare/v0.3.0...v0.4.0) (2026-09-12)
+
+
+### Features
+
+* post_up hook — deliver stack outputs as KAGEROU_* env vars ([#45](https://github.com/rikukadev/kagerou/issues/45)) ([d18ce2e](https://github.com/rikukadev/kagerou/commit/d18ce2ed7e9eca21335124713eb86acdbcc749dd)), closes [#23](https://github.com/rikukadev/kagerou/issues/23)
+* url_template — decide the environment URL before creation ([#46](https://github.com/rikukadev/kagerou/issues/46)) ([0677415](https://github.com/rikukadev/kagerou/commit/06774154c06cf5330f9e3f6581c6f4a921bb0360)), closes [#25](https://github.com/rikukadev/kagerou/issues/25)
+
+
+### Bug Fixes
+
+* lint (QF1001 De Morgan) — [#42](https://github.com/rikukadev/kagerou/issues/42) を CI 未確認のままマージした修正 ([#43](https://github.com/rikukadev/kagerou/issues/43)) ([8ea6e09](https://github.com/rikukadev/kagerou/commit/8ea6e09b2eb2454d3fc7424e68f8bca4f69c88f3))
+
 ## [0.3.0](https://github.com/rikukadev/kagerou/compare/v0.2.0...v0.3.0) (2026-09-12)
 
 
