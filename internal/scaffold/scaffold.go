@@ -25,21 +25,36 @@ type Result struct {
 	Skipped []string // 既存のため触らなかったもの
 }
 
-// Run は dir に生成物を書き出す。force は kagerou.yaml と workflows のみ
-// 上書きを許す。template.yaml はアプリの実体なので force でも上書きしない。
-func Run(dir string, p Params, force bool) (Result, error) {
+// Targets は何を生成するか(TUI のチェックがここに落ちる)。
+type Targets struct {
+	KagerouYaml bool
+	Preview     bool
+	Reap        bool
+	Template    bool
+}
+
+// AllTargets は全部入り(非対話モードの既定)。
+func AllTargets() Targets { return Targets{KagerouYaml: true, Preview: true, Reap: true, Template: true} }
+
+// Run は dir に選択された生成物を書き出す。force は kagerou.yaml と workflows
+// のみ上書きを許す。template.yaml はアプリの実体なので force でも上書きしない。
+func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	var res Result
 	files := []struct {
+		enabled   bool
 		path      string
 		tmpl      string
 		overwrite bool // force 時に上書きしてよいか
 	}{
-		{"kagerou.yaml", "kagerou.yaml.tmpl", true},
-		{filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true},
-		{filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
-		{"template.yaml", "template.yaml.tmpl", false},
+		{sel.KagerouYaml, "kagerou.yaml", "kagerou.yaml.tmpl", true},
+		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true},
+		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
+		{sel.Template, "template.yaml", "template.yaml.tmpl", false},
 	}
 	for _, f := range files {
+		if !f.enabled {
+			continue
+		}
 		dst := filepath.Join(dir, f.path)
 		if _, err := os.Stat(dst); err == nil {
 			if !force || !f.overwrite {
@@ -78,28 +93,55 @@ func renderTo(dst, name string, p Params) error {
 type Step struct {
 	Title  string
 	Detail string // 補足(コマンド例など)。改行可
+	Done   bool   // 検出により最初からチェック済み
 }
 
-// Steps は生成後に残る手作業のチェックリスト。
-func Steps(p Params) []Step {
+// or は v が空のとき placeholder を返す(検出できた値を優先して埋める)。
+func or(v, placeholder string) string {
+	if v != "" {
+		return v
+	}
+	return placeholder
+}
+
+// Steps は生成後に残る手作業のチェックリスト。検出できた値(アカウント ID・
+// リポジトリ名・設定済み Variables)は実値で埋め、済みの項目は Done にする。
+func Steps(p Params, d Detection) []Step {
+	acct := or(d.AccountID, "<account>")
+	repo := or(d.Repo, "<repo>")
+	region := or(p.Region, or(d.Region, "<region>"))
+	roleArn := "arn:aws:iam::" + acct + ":role/" + repo + "-github-actions"
+	ecrURI := acct + ".dkr.ecr." + region + ".amazonaws.com/" + repo
+
+	varsDone := d.VarsSet["AWS_ROLE_ARN"] && d.VarsSet["AWS_REGION"] && d.VarsSet["ECR_REPOSITORY"]
+
+	oidcDetail := "新しめの org は sub クレームが repo:org@ID/repo@ID:* 形式な点に注意"
+	if d.Owner != "" && d.Repo != "" {
+		oidcDetail = "信頼ポリシーの sub: repo:" + d.Owner + "/" + d.Repo + ":*(または ID 入り形式)\n" + oidcDetail
+	}
+
 	steps := []Step{
 		{
 			Title:  "Dockerfile を用意し、template.yaml の TODO を埋める",
 			Detail: "アプリを HTTP サーバーとして起動し、Lambda Web Adapter で包む",
+			Done:   d.HasDockerfile && d.HasTemplate, // どちらも元からあるなら経験者
 		},
 		{
 			Title:  "GitHub OIDC ロールを作る(このリポジトリ限定)",
-			Detail: "新しめの org は sub クレームが repo:org@ID/repo@ID:* 形式な点に注意",
+			Detail: oidcDetail,
+			Done:   d.VarsSet["AWS_ROLE_ARN"],
 		},
 		{
 			Title:  "ECR リポジトリを作る(sam package の押し先)",
-			Detail: "aws ecr create-repository --repository-name <repo>",
+			Detail: "aws ecr create-repository --repository-name " + repo,
+			Done:   d.VarsSet["ECR_REPOSITORY"],
 		},
 		{
 			Title: "GitHub Variables を 3 つ設定する",
-			Detail: `gh variable set AWS_ROLE_ARN   --body "arn:aws:iam::<account>:role/<role>"
-gh variable set AWS_REGION     --body "` + p.Region + `"
-gh variable set ECR_REPOSITORY --body "<account>.dkr.ecr.` + p.Region + `.amazonaws.com/<repo>"`,
+			Detail: `gh variable set AWS_ROLE_ARN   --body "` + roleArn + `"
+gh variable set AWS_REGION     --body "` + region + `"
+gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
+			Done: varsDone,
 		},
 	}
 	if p.Sashiki {
@@ -122,13 +164,17 @@ gh variable set ECR_REPOSITORY --body "<account>.dkr.ecr.` + p.Region + `.amazon
 }
 
 // PlainSteps は非 TTY(CI 等)向けのプレーンテキスト版チェックリスト。
-func PlainSteps(p Params) string {
+func PlainSteps(p Params, d Detection) string {
 	var b strings.Builder
 	b.WriteString("\n次にやること(リポジトリごとに 1 回):\n\n")
-	for i, s := range Steps(p) {
-		fmt.Fprintf(&b, "  %d. %s\n", i+1, s.Title)
+	for i, s := range Steps(p, d) {
+		mark := " "
+		if s.Done {
+			mark = "x"
+		}
+		fmt.Fprintf(&b, "  [%s] %d. %s\n", mark, i+1, s.Title)
 		for _, line := range strings.Split(s.Detail, "\n") {
-			fmt.Fprintf(&b, "       %s\n", line)
+			fmt.Fprintf(&b, "        %s\n", line)
 		}
 	}
 	return b.String()

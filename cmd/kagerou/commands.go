@@ -211,8 +211,22 @@ func cmdInit(args []string, out *os.File) error {
 		return fmt.Errorf("プロジェクト名が命名規約に合わない(--project で指定する): %w", err)
 	}
 
+	det := scaffold.Detect(*dir)
+	if *region == "ap-northeast-1" && det.Region != "" { // フラグ未指定なら検出値を使う
+		*region = det.Region
+	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki}
-	res, err := scaffold.Run(*dir, p, *force)
+
+	// TTY なら「検出結果でプリチェックされた選択 TUI → 生成 → チェックリスト」
+	if !*plain && term.IsTerminal(int(out.Fd())) {
+		return runInitTUI(*dir, p, det, *force)
+	}
+
+	// 非対話: 全部入りで生成してテキストのチェックリスト
+	if det.SuggestSashiki() && !p.Sashiki {
+		fmt.Fprintf(os.Stderr, "kagerou: hint: %s を検出。--sashiki で DB ブランチ連携を含められる\n", det.DBDriver)
+	}
+	res, err := scaffold.Run(*dir, p, scaffold.AllTargets(), *force)
 	if err != nil {
 		return err
 	}
@@ -226,11 +240,7 @@ func cmdInit(args []string, out *os.File) error {
 			return err
 		}
 	}
-	// 残りの手作業チェックリスト: TTY なら TUI、そうでなければテキスト
-	if !*plain && term.IsTerminal(int(out.Fd())) {
-		return runChecklistTUI(p)
-	}
-	_, err = fmt.Fprint(out, scaffold.PlainSteps(p))
+	_, err = fmt.Fprint(out, scaffold.PlainSteps(p, det))
 	return err
 }
 

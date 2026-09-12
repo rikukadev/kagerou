@@ -18,7 +18,7 @@ func read(t *testing.T, dir, path string) string {
 
 func TestRunCreatesAll(t *testing.T) {
 	dir := t.TempDir()
-	res, err := Run(dir, Params{Project: "myapp", Region: "ap-northeast-1"}, false)
+	res, err := Run(dir, Params{Project: "myapp", Region: "ap-northeast-1"}, AllTargets(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestRunCreatesAll(t *testing.T) {
 
 func TestRunSashikiBlock(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Run(dir, Params{Project: "myapp", Region: "ap-northeast-1", Sashiki: true}, false); err != nil {
+	if _, err := Run(dir, Params{Project: "myapp", Region: "ap-northeast-1", Sashiki: true}, AllTargets(), false); err != nil {
 		t.Fatal(err)
 	}
 	ky := read(t, dir, "kagerou.yaml")
@@ -67,7 +67,7 @@ func TestRunSkipsExistingAndForce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Run(dir, Params{Project: "x", Region: "r"}, false)
+	res, err := Run(dir, Params{Project: "x", Region: "r"}, AllTargets(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestRunSkipsExistingAndForce(t *testing.T) {
 	}
 
 	// force: kagerou.yaml は上書き、template.yaml は force でも守る
-	if _, err := Run(dir, Params{Project: "x", Region: "r"}, true); err != nil {
+	if _, err := Run(dir, Params{Project: "x", Region: "r"}, AllTargets(), true); err != nil {
 		t.Fatal(err)
 	}
 	if read(t, dir, "kagerou.yaml") == "mine" {
@@ -91,12 +91,13 @@ func TestRunSkipsExistingAndForce(t *testing.T) {
 }
 
 func TestStepsAndPlain(t *testing.T) {
-	base := Steps(Params{Region: "r"})
-	withSashiki := Steps(Params{Region: "r", Sashiki: true})
+	det := Detection{VarsSet: map[string]bool{}}
+	base := Steps(Params{Region: "r"}, det)
+	withSashiki := Steps(Params{Region: "r", Sashiki: true}, det)
 	if len(withSashiki) != len(base)+2 {
 		t.Fatalf("sashiki steps not added: %d vs %d", len(withSashiki), len(base))
 	}
-	plain := PlainSteps(Params{Region: "ap-northeast-1"})
+	plain := PlainSteps(Params{Region: "ap-northeast-1"}, det)
 	if !strings.Contains(plain, "1. ") || !strings.Contains(plain, "ECR") {
 		t.Fatalf("plain steps: %s", plain)
 	}
