@@ -15,9 +15,11 @@ import (
 var tmplFS embed.FS
 
 type Params struct {
-	Project string
-	Region  string
-	Sashiki bool // sashiki 併用の hooks / DB env を含める
+	Project      string
+	Region       string
+	Sashiki      bool   // sashiki 併用の hooks / DB env を含める
+	Port         string // アプリの listen ポート(検出値。空なら 3000 + TODO)
+	HasDockerfile bool  // 既存 Dockerfile を使う(template の TODO 文言が変わる)
 }
 
 type Result struct {
@@ -158,7 +160,8 @@ func Steps(p Params, d Detection, mode SetupMode) []Step {
 		{
 			Title:  "Write a Dockerfile and fill the TODOs in template.yaml",
 			Detail: "run your app as an HTTP server and wrap it with Lambda Web Adapter",
-			Done:   d.HasDockerfile && d.HasTemplate, // どちらも元からあるなら経験者
+			// 既存 Dockerfile + LWA 済み(注入含む)なら残作業なし
+			Done: d.HasDockerfile && (d.HasLWA || d.HasTemplate),
 		},
 	}
 	switch mode {
@@ -227,4 +230,42 @@ func PlainSteps(p Params, d Detection) string {
 		}
 	}
 	return b.String()
+}
+
+// LWALine は既存 Dockerfile に注入する Lambda Web Adapter の 1 行。
+// これだけで通常のコンテナが Lambda で動く(Lambda 外では何もしない)。
+const LWALine = "COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter"
+
+// InjectLWA は Dockerfile の最終ステージ(最後の FROM の直後)に LWA を注入する。
+// 既に入っていれば何もしない。
+func InjectLWA(dir string) (changed bool, err error) {
+	path := filepath.Join(dir, "Dockerfile")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	src := string(b)
+	if strings.Contains(src, "lambda-adapter") {
+		return false, nil
+	}
+	lines := strings.Split(src, "\n")
+	last := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(l)), "FROM ") {
+			last = i
+		}
+	}
+	if last < 0 {
+		return false, fmt.Errorf("no FROM found in %s", path)
+	}
+	inject := []string{
+		"# Lambda Web Adapter: プレビュー環境(kagerou)で Lambda として動かすための 1 行。",
+		"# Lambda の外(ローカル docker run / ECS)では何もしない拡張なので本番イメージに残してよい",
+		LWALine,
+	}
+	out := append(append(append([]string{}, lines[:last+1]...), inject...), lines[last+1:]...)
+	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }

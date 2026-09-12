@@ -257,7 +257,8 @@ func cmdInit(args []string, out *os.File) error {
 	if *region == "ap-northeast-1" && det.Region != "" { // フラグ未指定なら検出値を使う
 		*region = det.Region
 	}
-	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki}
+	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
+		Port: det.AppPort, HasDockerfile: det.HasDockerfile}
 
 	// TTY なら「検出結果でプリチェックされた選択 TUI → 生成 → チェックリスト」
 	if !*plain && term.IsTerminal(int(out.Fd())) {
@@ -265,6 +266,9 @@ func cmdInit(args []string, out *os.File) error {
 	}
 
 	// 非対話: 全部入りで生成してテキストのチェックリスト
+	if det.HasDockerfile && !det.HasLWA {
+		fmt.Fprintln(os.Stderr, "kagerou: hint: your Dockerfile lacks Lambda Web Adapter — add this line to the final stage:\n  "+scaffold.LWALine)
+	}
 	if det.SuggestSashiki() && !p.Sashiki {
 		fmt.Fprintf(os.Stderr, "kagerou: hint: detected %s — add --sashiki to include DB branch integration\n", det.DBDriver)
 	}

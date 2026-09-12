@@ -96,6 +96,18 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		selected: dbDefault,
 	})
 
+	if det.HasDockerfile && !det.HasLWA {
+		detail := "one line: " + scaffold.LWALine[:60] + "… (no-op outside Lambda, safe to keep)"
+		qs = append(qs, question{
+			key:   "docker",
+			title: "Your Dockerfile lacks Lambda Web Adapter. Add it?",
+			options: []option{
+				{"inject it (1 line, recommended)", detail},
+				{"skip — I'll wire Lambda myself", "the template's Dockerfile TODO stays"},
+			},
+		})
+	}
+
 	if !det.HasTemplate {
 		qs = append(qs, question{
 			key:   "template",
@@ -149,6 +161,8 @@ func (m initModel) answer(key string) int {
 func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p := m.params
 	p.Sashiki = m.answer("db") == 0
+	p.Port = m.det.AppPort
+	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
 	sel := scaffold.Targets{KagerouYaml: true}
 	sel.Template = m.answer("template") == 0 // 質問なし(-1)= 既存なので生成しない
 	switch m.answer("workflows") {
@@ -232,6 +246,16 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseResult
 				return m, tea.Quit
 			}
+			if m.answer("docker") == 0 {
+				if changed, err := scaffold.InjectLWA(m.dir); err != nil {
+					m.runErr = err
+					m.phase = phaseResult
+					return m, tea.Quit
+				} else if changed {
+					m.det.HasLWA = true
+					m.result.Created = append(m.result.Created, "Dockerfile (Lambda Web Adapter injected)")
+				}
+			}
 			switch m.answer("setup") {
 			case setupRun:
 				if _, err := scaffold.WriteSetupScript(m.dir, p, m.det); err != nil {
@@ -306,6 +330,9 @@ func (m initModel) View() string {
 		}
 		if p.Sashiki {
 			b.WriteString("  + sashiki integration (hooks / DB env)\n")
+		}
+		if m.answer("docker") == 0 {
+			b.WriteString("  + Dockerfile: inject Lambda Web Adapter (1 line)\n")
 		}
 		switch m.answer("setup") {
 		case setupRun:
