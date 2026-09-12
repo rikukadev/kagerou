@@ -166,3 +166,26 @@ func TestPreviewBaseTemplateAndScript(t *testing.T) {
 		}
 	}
 }
+
+func TestDetectRegionFromAwsConfig(t *testing.T) {
+	t.Setenv("AWS_REGION", "") // env 経路を無効化して config フォールバックを検証
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "aws" && len(args) >= 3 && args[0] == "configure" && args[1] == "get" && args[2] == "region" {
+			return []byte("us-west-2\n"), nil
+		}
+		return nil, errNoCmd
+	}
+	d := Detect(t.TempDir())
+	if d.Region != "us-west-2" {
+		t.Fatalf("Region = %q, want us-west-2 (from ~/.aws/config)", d.Region)
+	}
+
+	// samconfig.toml があればそちらが勝つ(プロジェクト固有 > グローバル)
+	dir := t.TempDir()
+	writeFile(t, dir, "samconfig.toml", "[default.deploy.parameters]\nregion = \"eu-west-1\"\n")
+	if d2 := Detect(dir); d2.Region != "eu-west-1" {
+		t.Fatalf("Region = %q, want eu-west-1 (samconfig wins)", d2.Region)
+	}
+}
