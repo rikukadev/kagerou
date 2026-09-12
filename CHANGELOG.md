@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.0](https://github.com/rikukadev/kagerou/compare/v0.2.0...v0.3.0) (2026-09-12)
+
+
+### Features
+
+* **init:** terser prompts + AWS setup question (run now / script / skip) ([#41](https://github.com/rikukadev/kagerou/issues/41)) ([c561d27](https://github.com/rikukadev/kagerou/commit/c561d27ca7fa49831b0eca1ee23dc43a5f5c1231))
+* **init:** リポジトリ検出 + ウィザード形式の対話 UI ([#38](https://github.com/rikukadev/kagerou/issues/38)) ([5ef9953](https://github.com/rikukadev/kagerou/commit/5ef9953357dd95b47831ee6997c817d6b55f0e61)), closes [#37](https://github.com/rikukadev/kagerou/issues/37)
+* user-facing strings in English ([#40](https://github.com/rikukadev/kagerou/issues/40)) ([732a4e7](https://github.com/rikukadev/kagerou/commit/732a4e79c02b3bbd5bbdef22c113b3759f7b5f3d))
+
 ## [0.2.0](https://github.com/rikukadev/kagerou/compare/v0.1.0...v0.2.0) (2026-09-12)
 
 
