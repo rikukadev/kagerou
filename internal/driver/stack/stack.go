@@ -30,6 +30,7 @@ const (
 	TagExpiresAt = "kagerou:expires-at" // RFC3339 UTC または "none"
 	TagSource    = "kagerou:source"
 	TagVersion   = "kagerou:version"
+	TagURL       = "kagerou:url" // url_template で作成前に確定した URL(CONTRACT §5)
 )
 
 const DriverName = "stack"
@@ -70,6 +71,7 @@ type UpInput struct {
 	Params       map[string]string
 	Env          map[string]string // Env<Key> パラメータへ流す(CONTRACT §4)
 	ExpiresAt    *time.Time        // nil = TTL なし(タグは "none")
+	URL          string            // url_template で確定した URL。空なら Output に任せる
 	Source       string            // opaque JSON。空なら省略
 	Version      string            // kagerou 自身のバージョン
 	Tags         map[string]string // kagerou.yaml の追加タグ
@@ -278,6 +280,15 @@ func (i *Info) State() string {
 	}
 }
 
+// EnvironmentURL は環境 URL を解決する。優先順: kagerou:url タグ
+// (url_template で作成前に確定)> KagerouUrl > PreviewUrl(CONTRACT §5)。
+func (i *Info) EnvironmentURL() (string, bool) {
+	if u := i.Tags[TagURL]; u != "" {
+		return u, true
+	}
+	return URL(i.Outputs)
+}
+
 // URL は Outputs から環境 URL を規約キーで探す。
 func URL(outputs map[string]string) (string, bool) {
 	for _, k := range urlOutputKeys {
@@ -322,10 +333,15 @@ func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Par
 	for k, v := range in.Params {
 		merged[k] = v
 	}
-	if len(in.Env) > 0 {
+	if len(in.Env) > 0 || in.URL != "" {
 		declared, err := d.templateParams(ctx, in.TemplateBody)
 		if err != nil {
 			return nil, err
+		}
+		// URL は「宣言していれば受け取れる」任意の口(CORS 等で使う。CONTRACT §5)。
+		// env と違い、宣言が無くてもエラーにしない(タグと表示には常に使われる)
+		if in.URL != "" && declared["EnvKagerouUrl"] {
+			merged["EnvKagerouUrl"] = in.URL
 		}
 		var missing []string
 		for k, v := range in.Env {
@@ -414,6 +430,9 @@ func buildTags(in UpInput) []cfntypes.Tag {
 	}
 	if in.Project != "" {
 		kv[TagProject] = in.Project
+	}
+	if in.URL != "" {
+		kv[TagURL] = in.URL
 	}
 	if in.Source != "" {
 		kv[TagSource] = in.Source

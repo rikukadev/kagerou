@@ -17,6 +17,7 @@ driver は個別に付ける責務を負う。
 | `kagerou:project` | プロジェクト名(例 `todo`) | kagerou.yaml の `project`。未設定なら省略 |
 | `kagerou:driver` | `stack` 等 | |
 | `kagerou:expires-at` | RFC3339 UTC(例 `2026-09-15T00:00:00Z`)または `none` | `none` = 明示的な無期限 |
+| `kagerou:url` | `url_template` で作成前に確定した環境 URL | 未設定なら省略。§5 参照 |
 | `kagerou:source` | opaque 文字列。URI 形式を推奨(例 `github_pr://rikukadev/todo/42`) | adapter が `--source` で渡す。kagerou は解釈しない。CFN タグ値の文字種制約(英数字と ` +-=._:/@`)により JSON は入らない |
 | `kagerou:version` | 作成した kagerou のバージョン | |
 
@@ -78,7 +79,17 @@ Resources:
 
 ## 5. URL の発行
 
-CFN Outputs のキー `KagerouUrl`(優先)または `PreviewUrl` を環境 URL とする。
+環境 URL の解決順:
+
+1. **`kagerou:url` タグ** — kagerou.yaml の `url_template`(例
+   `"https://{name}.preview.example.com"`)で**作成前に確定**した URL。
+   テンプレートが `EnvKagerouUrl` パラメータを宣言していれば同じ値が届くので、
+   CORS 許可元・OAuth コールバック等を循環参照なしに書ける
+2. CFN Outputs のキー `KagerouUrl`
+3. CFN Outputs のキー `PreviewUrl`
+
+`url_template` の URL に実際にトラフィックを到達させる仕組み(共有 CloudFront +
+サブドメイン等)は利用者側のインフラの責務(kagerou#32 で共通化を検討中)。
 
 ## 6. 読み取り口(予定)
 
