@@ -237,3 +237,26 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 これらは v0.x の間も後方互換(Deny の追加・スコープを狭める変更はしうるが、
 出力の骨格と上記の性質は保つ)。`policy` はワイルドカードが残る箇所があるため、
 アタッチ前にレビューすること(コマンドが stderr で注意する)。
+
+## 9. preview base のデータ契約(SSM)
+
+ベース(共有 CloudFront / 証明書 / DNS / バケット。§5・DESIGN §10)と環境の境界は
+**SSM Parameter Store のキー契約**。ベースは作成時に次を書き、`kagerou init` は
+これを読んで既存ベースを検出する(**us-east-1**。ベース自体と同じ置き場所):
+
+```
+/kagerou/base/<project>/domain         # 例 todo.example.com
+/kagerou/base/<project>/bucket         # 成果物バケット名
+/kagerou/base/<project>/distribution   # CloudFront distribution id
+```
+
+- **ベースの IaC はツール非依存**。同梱の CFN テンプレート(`deploy/preview-base.yaml`)も
+  Terraform リファレンス(`examples/terraform/preview-base/`)も同じキーを書く。
+  kagerou 本体はベースの IaC を実行しない — 依存するのはこのデータ契約だけ。
+- 旧ベース(SSM を書かない頃)の CFN Exports(`kagerou-preview-base:*`)には
+  fallback して検出する。同じ project に両方あれば **SSM が勝つ**。
+- キーの追加は互換変更(このパス配下に将来 `sashiki_host` 等を足しうる)。
+  既存キーの意味変更・削除はしない。
+- ベースは `kagerou:managed` タグを持たない = **`list` / `reap` の対象外**
+  (環境と違い TTL で消えない。所有はリポジトリのコラボレータ全員で、
+  更新はテンプレート/モジュールの再適用)。

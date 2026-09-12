@@ -112,12 +112,21 @@ func TestDetectZonesAndBase(t *testing.T) {
 		case strings.Contains(joined, "list-hosted-zones"):
 			return []byte(`["rikuka.dev.", "example.org."]`), nil
 		case strings.Contains(joined, "list-exports"):
-			// per-app 形式(todo)と旧アカウント単位形式の混在
+			// per-app 形式(todo)と旧アカウント単位形式の混在。todo の domain は
+			// SSM と食い違わせて「SSM が勝つ」ことを確かめる
 			return []byte(`[` +
-				`["kagerou-preview-base:todo:domain","todo.rikuka.dev"],` +
+				`["kagerou-preview-base:todo:domain","stale.rikuka.dev"],` +
 				`["kagerou-preview-base:todo:bucket","kagerou-base-todo-123"],` +
 				`["kagerou-preview-base:domain","preview.rikuka.dev"],` +
 				`["kagerou-preview-base:bucket","kagerou-preview-base-123"]]`), nil
+		case strings.Contains(joined, "get-parameters-by-path"):
+			// SSM データ契約(CONTRACT §9)。tf プロジェクトは SSM にしか無い
+			// (= Terraform 製ベース)。契約外のパスは無視される
+			return []byte(`[` +
+				`["/kagerou/base/todo/domain","todo.rikuka.dev"],` +
+				`["/kagerou/base/tf/domain","tf.rikuka.dev"],` +
+				`["/kagerou/base/tf/bucket","kagerou-base-tf-123"],` +
+				`["/kagerou/other/junk","x"]]`), nil
 		}
 		return nil, errNoCmd
 	}
@@ -125,9 +134,13 @@ func TestDetectZonesAndBase(t *testing.T) {
 	if len(d.Zones) != 2 || d.Zones[0] != "rikuka.dev" {
 		t.Fatalf("zones = %v", d.Zones)
 	}
-	// per-app: project 一致で引ける
+	// per-app: SSM が真実の源(Exports の stale 値に勝つ)。bucket は Exports から補完
 	if b, ok := d.Base("todo"); !ok || b.Domain != "todo.rikuka.dev" || b.Bucket != "kagerou-base-todo-123" {
 		t.Fatalf("per-app base detection broken: %+v", d.Bases)
+	}
+	// SSM にしか無いベース(Terraform 製)も検出できる
+	if b, ok := d.Base("tf"); !ok || b.Domain != "tf.rikuka.dev" || b.Bucket != "kagerou-base-tf-123" {
+		t.Fatalf("SSM-only base detection broken: %+v", d.Bases)
 	}
 	// 別 project は旧アカウント単位 base に fallback
 	if b, ok := d.Base("shop"); !ok || b.Domain != "preview.rikuka.dev" {
@@ -150,7 +163,8 @@ func TestPreviewBaseTemplateAndScript(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		"kagerou-preview-base:${Project}:domain",    // per-app Exports(2 回目以降の init が検出する)
+		"kagerou-preview-base:${Project}:domain",    // per-app Exports(旧 fallback)
+		"/kagerou/base/${Project}/domain",           // SSM データ契約(CONTRACT §9)
 		"kagerou-base-${Project}-${AWS::AccountId}", // per-app バケット
 		"OriginAccessControl",
 		"*.${DomainName}",
