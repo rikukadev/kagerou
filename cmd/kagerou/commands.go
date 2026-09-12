@@ -25,7 +25,7 @@ func (f kvFlag) String() string { return "" }
 func (f kvFlag) Set(s string) error {
 	k, v, ok := strings.Cut(s, "=")
 	if !ok || k == "" {
-		return fmt.Errorf("KEY=VALUE 形式で指定する: %q", s)
+		return fmt.Errorf("expected KEY=VALUE: %q", s)
 	}
 	f[k] = v
 	return nil
@@ -52,14 +52,14 @@ type upFlags struct {
 func parseUpFlags(cmd string, args []string) (upFlags, error) {
 	f := upFlags{env: kvFlag{}, params: kvFlag{}}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
-	fs.StringVar(&f.name, "name", "", "環境名(必須)")
-	fs.StringVar(&f.cfgPath, "config", config.DefaultFile, "設定ファイル")
-	fs.StringVar(&f.template, "template", "", "テンプレート(kagerou.yaml を上書き)")
-	fs.StringVar(&f.ttl, "ttl", "", "寿命(例 72h / none。kagerou.yaml を上書き)")
+	fs.StringVar(&f.name, "name", "", "environment name (required)")
+	fs.StringVar(&f.cfgPath, "config", config.DefaultFile, "config file")
+	fs.StringVar(&f.template, "template", "", "template file (overrides kagerou.yaml)")
+	fs.StringVar(&f.ttl, "ttl", "", "lifetime (e.g. 72h / none; overrides kagerou.yaml)")
 	fs.StringVar(&f.output, "output", "text", "text | json")
-	fs.StringVar(&f.source, "source", "", "環境の出自(opaque JSON。adapter が渡す)")
-	fs.Var(f.env, "env", "アプリに届ける環境変数 KEY=VALUE(繰り返し可)")
-	fs.Var(f.params, "param", "テンプレートパラメータ KEY=VALUE(繰り返し可)")
+	fs.StringVar(&f.source, "source", "", "where the environment came from (opaque string set by the adapter)")
+	fs.Var(f.env, "env", "env var delivered to the app, KEY=VALUE (repeatable)")
+	fs.Var(f.params, "param", "template parameter KEY=VALUE (repeatable)")
 	err := fs.Parse(args)
 	return f, err
 }
@@ -99,7 +99,7 @@ func cmdUp(args []string, out *os.File) error {
 	}
 	body, err := os.ReadFile(cfg.Template)
 	if err != nil {
-		return fmt.Errorf("テンプレート: %w", err)
+		return fmt.Errorf("template: %w", err)
 	}
 
 	var expiresAt *time.Time
@@ -183,7 +183,7 @@ func cmdURL(args []string, out *os.File) error {
 	}
 	u, ok := stack.URL(info.Outputs)
 	if !ok {
-		return fmt.Errorf("URL の Output(KagerouUrl / PreviewUrl)がスタックに無い")
+		return fmt.Errorf("stack has no URL output (KagerouUrl / PreviewUrl)")
 	}
 	_, err = fmt.Fprintln(out, u)
 	return err
@@ -191,12 +191,12 @@ func cmdURL(args []string, out *os.File) error {
 
 func cmdInit(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	project := fs.String("project", "", "プロジェクト名(既定: カレントディレクトリ名)")
-	region := fs.String("region", "ap-northeast-1", "AWS リージョン")
-	sashiki := fs.Bool("sashiki", false, "sashiki 併用の hooks / DB env を含める")
-	force := fs.Bool("force", false, "kagerou.yaml と workflows を上書きする(template.yaml は対象外)")
-	dir := fs.String("dir", ".", "生成先ディレクトリ")
-	plain := fs.Bool("plain", false, "チェックリストを TUI でなくテキストで出す")
+	project := fs.String("project", "", "project name (default: current directory name)")
+	region := fs.String("region", "ap-northeast-1", "AWS region")
+	sashiki := fs.Bool("sashiki", false, "include sashiki hooks / DB env")
+	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
+	dir := fs.String("dir", ".", "output directory")
+	plain := fs.Bool("plain", false, "print plain text instead of the interactive wizard")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func cmdInit(args []string, out *os.File) error {
 		*project = strings.ToLower(filepath.Base(abs))
 	}
 	if err := config.ValidateName(*project); err != nil {
-		return fmt.Errorf("プロジェクト名が命名規約に合わない(--project で指定する): %w", err)
+		return fmt.Errorf("project name does not fit the naming rule (set --project): %w", err)
 	}
 
 	det := scaffold.Detect(*dir)
@@ -224,7 +224,7 @@ func cmdInit(args []string, out *os.File) error {
 
 	// 非対話: 全部入りで生成してテキストのチェックリスト
 	if det.SuggestSashiki() && !p.Sashiki {
-		fmt.Fprintf(os.Stderr, "kagerou: hint: %s を検出。--sashiki で DB ブランチ連携を含められる\n", det.DBDriver)
+		fmt.Fprintf(os.Stderr, "kagerou: hint: detected %s — add --sashiki to include DB branch integration\n", det.DBDriver)
 	}
 	res, err := scaffold.Run(*dir, p, scaffold.AllTargets(), *force)
 	if err != nil {
@@ -236,7 +236,7 @@ func cmdInit(args []string, out *os.File) error {
 		}
 	}
 	for _, f := range res.Skipped {
-		if _, err := fmt.Fprintf(out, "skipped\t%s\t(既存。--force でも template.yaml は上書きしない)\n", f); err != nil {
+		if _, err := fmt.Fprintf(out, "skipped\t%s\t(already exists; template.yaml is never overwritten)\n", f); err != nil {
 			return err
 		}
 	}
@@ -281,9 +281,9 @@ func cmdList(args []string, out *os.File) error {
 
 func cmdReap(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("reap", flag.ContinueOnError)
-	cfgPath := fs.String("config", config.DefaultFile, "設定ファイル")
-	dryRun := fs.Bool("dry-run", false, "削除せず対象を表示するだけ")
-	grace := fs.Duration("grace", 0, "期限切れから削除までの猶予(例 1h)")
+	cfgPath := fs.String("config", config.DefaultFile, "config file")
+	dryRun := fs.Bool("dry-run", false, "show what would be reaped without deleting")
+	grace := fs.Duration("grace", 0, "grace period after expiry (e.g. 1h)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -91,10 +91,10 @@ var tagValueRe = regexp.MustCompile(`^[a-zA-Z0-9 +\-=._:/@]*$`)
 // CFN に渡してから 400 で死ぬより先に、分かるエラーで止める。
 func ValidateSource(s string) error {
 	if len(s) > 256 {
-		return fmt.Errorf("--source が長すぎる(タグ値の上限 256 文字): %d 文字", len(s))
+		return fmt.Errorf("--source too long (tag values max 256 chars): %d chars", len(s))
 	}
 	if !tagValueRe.MatchString(s) {
-		return fmt.Errorf("--source %q に CFN タグ値で使えない文字がある(英数字と ' +-=._:/@' のみ。JSON は不可、URI 形式を推奨: github_pr://owner/repo/42)", s)
+		return fmt.Errorf("--source %q contains characters not allowed in CFN tag values (alphanumerics and ' +-=._:/@' only; JSON is not allowed, URI style recommended: github_pr://owner/repo/42)", s)
 	}
 	return nil
 }
@@ -117,7 +117,7 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 	// 初回 create の失敗残骸は update できないため、削除してから作り直す
 	if status == string(cfntypes.StackStatusRollbackComplete) || status == string(cfntypes.StackStatusRollbackFailed) {
 		if err := d.Down(ctx, in.StackName); err != nil {
-			return nil, fmt.Errorf("前回失敗したスタックの削除: %w", err)
+			return nil, fmt.Errorf("deleting previously failed stack: %w", err)
 		}
 		status = ""
 	}
@@ -292,7 +292,7 @@ func URL(outputs map[string]string) (string, bool) {
 // 例: DB_HOST → EnvDbHost。CFN パラメータ名に `_` が使えないための規約。
 func EnvParamName(key string) (string, error) {
 	if key == "" {
-		return "", errors.New("env キーが空")
+		return "", errors.New("env key is empty")
 	}
 	var b strings.Builder
 	b.WriteString("Env")
@@ -302,7 +302,7 @@ func EnvParamName(key string) (string, error) {
 		}
 		for _, r := range part {
 			if !isAlnum(r) {
-				return "", fmt.Errorf("env キー %q に使えない文字 %q(英数字と _ のみ)", key, r)
+				return "", fmt.Errorf("env key %q contains invalid character %q (alphanumerics and _ only)", key, r)
 			}
 		}
 		lower := strings.ToLower(part)
@@ -334,14 +334,14 @@ func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Par
 				return nil, err
 			}
 			if !declared[pname] {
-				missing = append(missing, fmt.Sprintf("%s(パラメータ %s)", k, pname))
+				missing = append(missing, fmt.Sprintf("%s (parameter %s)", k, pname))
 				continue
 			}
 			merged[pname] = v
 		}
 		if len(missing) > 0 {
 			sort.Strings(missing)
-			return nil, fmt.Errorf("テンプレートに受け取り口が宣言されていない env: %s — template の Parameters に Env<Key> を追加する(docs/CONTRACT.md §4)", strings.Join(missing, ", "))
+			return nil, fmt.Errorf("template declares no receiving parameter for env: %s — add Env<Key> to the template Parameters (docs/CONTRACT.md §4)", strings.Join(missing, ", "))
 		}
 	}
 	var out []cfntypes.Parameter
@@ -376,7 +376,7 @@ func (d *Driver) waitUntilStable(ctx context.Context, stackName string) (string,
 			return status, nil
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("stack %s が %s のまま安定しない", stackName, status)
+			return "", fmt.Errorf("stack %s stuck in %s", stackName, status)
 		}
 		select {
 		case <-ctx.Done():

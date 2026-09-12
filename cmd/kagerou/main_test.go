@@ -15,7 +15,7 @@ func TestRun(t *testing.T) {
 		{"no args", nil, "subcommand required"},
 		{"version", []string{"version"}, ""},
 		{"unknown", []string{"bogus"}, `unknown subcommand "bogus"`},
-		{"up requires name", []string{"up"}, "環境名"},
+		{"up requires name", []string{"up"}, "environment name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

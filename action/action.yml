@@ -1,55 +1,55 @@
 name: kagerou
 description: >
-  Ephemeral environments on AWS — kagerou up/down を CI から呼ぶ composite action。
-  AWS 認証(aws-actions/configure-aws-credentials 等)は呼び出し側で済ませておく。
+  Ephemeral environments on AWS — composite action that runs kagerou up/down from CI.
+  Configure AWS credentials (aws-actions/configure-aws-credentials etc.) before this step.
 inputs:
   name:
-    description: 環境名(例 pr-42)。up / down では必須、reap では不要
+    description: Environment name (e.g. pr-42). Required for up/down, unused for reap
     required: false
     default: ""
   down:
-    description: "'true' で環境を削除する(それ以外は up)"
+    description: "'true' to delete the environment (otherwise up)"
     default: "false"
   reap:
-    description: "'true' で TTL 切れ環境の回収を実行する(name 不要)"
+    description: "'true' to reap environments past their TTL (no name needed)"
     default: "false"
   grace:
-    description: reap の猶予(例 1h)。期限切れからこの時間は消さない
+    description: Grace period for reap (e.g. 1h); expired environments are kept this long
     default: ""
   comment:
-    description: "'true' なら PR に URL コメントを冪等更新する(pull_request イベント時のみ)"
+    description: "'true' to upsert the URL comment on the PR (pull_request events only)"
     default: "true"
   config:
-    description: kagerou.yaml のパス
+    description: Path to kagerou.yaml
     default: kagerou.yaml
   ttl:
-    description: 寿命(例 72h / none)。空なら kagerou.yaml の値
+    description: Lifetime (e.g. 72h / none); empty falls back to kagerou.yaml
     default: ""
   env:
-    description: アプリに届ける環境変数(KEY=VALUE を改行区切りで)
+    description: Env vars for the app (KEY=VALUE, one per line)
     default: ""
   param:
-    description: テンプレートパラメータ(KEY=VALUE を改行区切りで)
+    description: Template parameters (KEY=VALUE, one per line)
     default: ""
   version:
     description: >
-      使う kagerou のバージョン(例 v0.1.0)。既定の latest は最新リリースの
-      バイナリを取得する。
+      kagerou version to use (e.g. v0.1.0). The default "latest" downloads
+      the newest release binary.
     default: latest
   ref:
     description: >
-      指定すると version を無視し、go install でこの ref から入れる
-      (未リリースの main や PR を試すとき用。Go のビルドが走るぶん遅い)。
+      When set, version is ignored and this ref is installed via go install
+      (for trying unreleased main or a PR; slower because Go builds it).
     default: ""
   github_token:
-    description: PR コメント用トークン
+    description: Token used for the PR comment
     default: ${{ github.token }}
 outputs:
   url:
-    description: 環境の URL
+    description: URL of the environment
     value: ${{ steps.run.outputs.url }}
   state:
-    description: 環境の state(CONTRACT §3)
+    description: Environment state (CONTRACT §3)
     value: ${{ steps.run.outputs.state }}
 runs:
   using: composite
@@ -74,14 +74,14 @@ runs:
           ver=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
             https://github.com/rikukadev/kagerou/releases/latest | sed 's#.*/tag/##')
           if [ -z "$ver" ]; then
-            echo "最新リリースを解決できませんでした。version を明示するか ref を使ってください" >&2
+            echo "could not resolve the latest release; set version explicitly or use ref" >&2
             exit 1
           fi
         fi
         case "$ver" in
           v*) ;;
-          *) echo "最新リリースを解決できませんでした(リリース未作成?): $ver" >&2
-             echo "version を明示するか ref(go install)を使ってください" >&2
+          *) echo "could not resolve the latest release (no releases yet?): $ver" >&2
+             echo "set version explicitly or use ref (go install)" >&2
              exit 1 ;;
         esac
         asset="kagerou_${ver#v}_linux_${arch}.tar.gz"
@@ -135,7 +135,7 @@ runs:
           exit 0
         fi
         if [ -z "$IN_NAME" ]; then
-          echo "::error::name は up / down で必須" >&2
+          echo "::error::name is required for up / down" >&2
           exit 1
         fi
         args=(--name "$IN_NAME" --config "$IN_CONFIG")
@@ -177,15 +177,15 @@ runs:
         set -euo pipefail
         marker="<!-- kagerou:${NAME} -->"
         body="${marker}
-        ## 🌫 プレビュー環境
+        ## 🌫 Preview environment
 
         | | |
         |---|---|
-        | URL | ${URL:-'(URL Output なし)'} |
-        | 環境名 | \`${NAME}\` |
-        | 消滅予定 | ${EXPIRES} |
+        | URL | ${URL:-'(no URL output)'} |
+        | Environment | \`${NAME}\` |
+        | Expires | ${EXPIRES} |
 
-        PR を閉じるか寿命が来ると、環境は陽炎のように消えます。"
+        When the PR closes or the TTL expires, the environment vanishes like a heat shimmer."
         existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
           --jq "[.[] | select(.body | startswith(\"${marker}\"))][0].id" 2>/dev/null || true)
         if [ -n "$existing" ] && [ "$existing" != "null" ]; then

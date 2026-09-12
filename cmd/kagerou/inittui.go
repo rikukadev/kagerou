@@ -62,20 +62,20 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 	var qs []question
 
 	dbDefault := 1
-	dbDetail := "kagerou.yaml に hooks(sashiki create/delete)と DB_USER: dev@{name} が入る"
+	dbDetail := "adds hooks (sashiki create/delete) and DB_USER: dev@{name} to kagerou.yaml"
 	if p.Sashiki || det.SuggestSashiki() {
 		dbDefault = 0
 	}
-	dbLabel := "sashiki を使う(DB ブランチを PR ごとに生やす)"
+	dbLabel := "use sashiki (grow a DB branch per PR)"
 	if det.DBDriver != "" {
-		dbLabel += " — " + det.DBDriver + " を検出"
+		dbLabel += " — detected " + det.DBDriver
 	}
 	qs = append(qs, question{
 		key:   "db",
-		title: "DB はどうしますか?",
+		title: "How should the database be handled?",
 		options: []option{
 			{dbLabel, dbDetail},
-			{"使わない / あとで --env で繋ぐ", "共有 RDS・SQLite 同梱などは env 注入だけで済む"},
+			{"none / wire it later via --env", "shared RDS, bundled SQLite etc. only need env injection"},
 		},
 		selected: dbDefault,
 	})
@@ -83,21 +83,21 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 	if !det.HasTemplate {
 		qs = append(qs, question{
 			key:   "template",
-			title: "SAM テンプレートはどうしますか?",
+			title: "What about the SAM template?",
 			options: []option{
-				{"雛形を生成する(LWA + Env<Key> + KagerouUrl)", "Dockerfile は自分で用意する(あとの案内参照)"},
-				{"自前で書く", "CONTRACT §4/§5(Env<Key> パラメータと KagerouUrl Output)に合わせる"},
+				{"generate a starter (LWA + Env<Key> + KagerouUrl)", "you still write the Dockerfile yourself (see next steps)"},
+				{"write my own", "follow CONTRACT §4/§5 (Env<Key> parameters and the KagerouUrl output)"},
 			},
 		})
 	}
 
 	qs = append(qs, question{
 		key:   "workflows",
-		title: "GitHub Actions workflow はどれを入れますか?",
+		title: "Which GitHub Actions workflows do you want?",
 		options: []option{
-			{"preview + reap(推奨)", "PR 連動の環境と、6 時間ごとの TTL 回収の網"},
-			{"preview のみ", "回収は手動 kagerou reap か、あとで reap.yml を足す"},
-			{"入れない", "kagerou.yaml だけ作って CLI から使う"},
+			{"preview + reap (recommended)", "PR-driven environments plus a TTL sweep every 6 hours"},
+			{"preview only", "reap manually with `kagerou reap`, or add reap.yml later"},
+			{"none", "generate kagerou.yaml only and drive everything from the CLI"},
 		},
 	})
 
@@ -209,15 +209,15 @@ func (m initModel) View() string {
 				b.WriteString(tuiDetail.Render(o.detail) + "\n")
 			}
 		}
-		b.WriteString("\n" + tuiHint.Render("↑↓ 選ぶ・enter 次へ・← 戻る・q 中止"))
+		b.WriteString("\n" + tuiHint.Render("↑↓ select · enter next · ← back · q cancel"))
 	case phaseSummary:
 		b.WriteString(header)
 		sel, p := m.buildPlan()
-		b.WriteString(tuiTitle.Render("この内容で生成します") + "\n")
+		b.WriteString(tuiTitle.Render("About to generate") + "\n")
 		fmt.Fprintf(&b, "  project: %s / region: %s / ttl: 72h\n", p.Project, p.Region)
 		files := []string{"kagerou.yaml"}
 		if sel.Template {
-			files = append(files, "template.yaml(雛形)")
+			files = append(files, "template.yaml (starter)")
 		}
 		if sel.Preview {
 			files = append(files, ".github/workflows/kagerou-preview.yml")
@@ -229,22 +229,22 @@ func (m initModel) View() string {
 			b.WriteString("  + " + f + "\n")
 		}
 		if p.Sashiki {
-			b.WriteString("  + sashiki 連携(hooks / DB env)\n")
+			b.WriteString("  + sashiki integration (hooks / DB env)\n")
 		}
-		b.WriteString("\n" + tuiHint.Render("enter 生成・← 戻る・q 中止"))
+		b.WriteString("\n" + tuiHint.Render("enter generate · ← back · q cancel"))
 	case phaseResult:
 		if m.runErr != nil {
 			return "kagerou init: " + m.runErr.Error() + "\n"
 		}
 		b.WriteString(header)
-		b.WriteString(tuiTitle.Render("生成しました") + "\n")
+		b.WriteString(tuiTitle.Render("Generated") + "\n")
 		for _, f := range m.result.Created {
 			b.WriteString("  created  " + f + "\n")
 		}
 		for _, f := range m.result.Skipped {
-			b.WriteString(tuiFaint.Render("  skipped  "+f+"(既存)") + "\n")
+			b.WriteString(tuiFaint.Render("  skipped  "+f+" (already exists)") + "\n")
 		}
-		b.WriteString("\n" + tuiTitle.Render("次にやること(✓ は検出済み)") + "\n")
+		b.WriteString("\n" + tuiTitle.Render("Next steps (✓ = already detected)") + "\n")
 		for _, s := range m.steps {
 			mark := "・"
 			title := s.Title
@@ -259,9 +259,9 @@ func (m initModel) View() string {
 				}
 			}
 		}
-		b.WriteString("\n" + tuiHint.Render("enter / q で終了"))
+		b.WriteString("\n" + tuiHint.Render("enter / q to exit"))
 	case phaseCanceled:
-		b.WriteString("中止しました(何も生成していません)\n")
+		b.WriteString("Canceled (nothing was generated)\n")
 	}
 	return b.String()
 }
@@ -281,7 +281,7 @@ func (m initModel) detectionSummary() string {
 		parts = append(parts, "aws:"+m.det.AccountID)
 	}
 	if len(parts) == 0 {
-		return "(検出なし)"
+		return "(nothing detected)"
 	}
 	return strings.Join(parts, " · ")
 }

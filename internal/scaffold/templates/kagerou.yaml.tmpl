@@ -1,21 +1,22 @@
-# kagerou の設定(https://github.com/rikukadev/kagerou)
+# kagerou configuration (https://github.com/rikukadev/kagerou)
 project: {{.Project}}
 driver: stack
-template: packaged.yaml # sam build && sam package の出力(ビルドは CI の仕事)
+template: packaged.yaml # output of `sam build && sam package` (building is CI's job)
 region: {{.Region}}
-name_prefix: {{.Project}}- # スタック名は {{.Project}}-pr-42 のようになる
+name_prefix: {{.Project}}- # stack name becomes {{.Project}}-pr-42
 ttl: 72h
 env:
-  # {name} は環境名で展開される。値はテンプレートの Env<Key> パラメータに届く
+  # {name} expands to the environment name. Values are delivered to the
+  # Env<Key> template parameters (see docs/CONTRACT.md)
   KAGEROU_ENV: "{name}"
 {{- if .Sashiki}}
-  DB_HOST: sashiki.internal # TODO: sashiki プロキシのホストに合わせる
+  DB_HOST: sashiki.internal # TODO: host of your sashiki proxy
   DB_PORT: "3306"
   DB_USER: dev@{name}
-  DB_PASSWORD: dev # TODO: baseline の app パスワードに合わせる
-  DB_NAME: app     # TODO: DB 名に合わせる
+  DB_PASSWORD: dev # TODO: app password of your baseline
+  DB_NAME: app     # TODO: database name
 hooks:
-  # || true は sashiki CLI が --exist-ok 未対応のための暫定(sashiki#259)
+  # `|| true` is a temporary workaround until sashiki CLI gets --exist-ok (sashiki#259)
   pre_up: sashiki create {name} || true
   post_down: sashiki delete {name}
 {{- end}}
