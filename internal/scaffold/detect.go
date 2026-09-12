@@ -22,6 +22,8 @@ type Detection struct {
 	Framework     string // next / remix / react-router / astro / go など
 	DBDriver      string // mysql2 / pg / go-sql-driver/mysql など(空 = DB 依存なし)
 	HasDockerfile bool
+	HasLWA        bool   // Dockerfile に Lambda Web Adapter が入っているか
+	AppPort       string // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
 	HasTemplate   bool
 	VarsSet       map[string]bool // 設定済みの GitHub Variables
 }
@@ -44,6 +46,17 @@ func Detect(dir string) Detection {
 	d.Region = detectRegion(dir)
 	d.Framework, d.DBDriver = detectStack(dir)
 	d.HasDockerfile = exists(filepath.Join(dir, "Dockerfile"))
+	if d.HasDockerfile {
+		if b, err := os.ReadFile(filepath.Join(dir, "Dockerfile")); err == nil {
+			d.HasLWA = strings.Contains(string(b), "lambda-adapter")
+			if m := exposeRe.FindAllStringSubmatch(string(b), -1); len(m) > 0 {
+				d.AppPort = m[len(m)-1][1] // マルチステージなら最後の EXPOSE
+			}
+		}
+	}
+	if d.AppPort == "" {
+		d.AppPort = detectComposePort(dir)
+	}
 	d.HasTemplate = exists(filepath.Join(dir, "template.yaml"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -167,4 +180,28 @@ func detectStack(dir string) (framework, dbDriver string) {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+var (
+	exposeRe      = regexp.MustCompile(`(?mi)^\s*EXPOSE\s+(\d+)`)
+	composePortRe = regexp.MustCompile(`(?m)^\s*-\s*"?(?:\d+:)?(\d+)"?\s*$`)
+)
+
+// detectComposePort は compose の ports("8080:3000" の右側 = コンテナ側)を拾う。
+func detectComposePort(dir string) string {
+	for _, f := range []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"} {
+		b, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			continue
+		}
+		s := string(b)
+		i := strings.Index(s, "ports:")
+		if i < 0 {
+			continue
+		}
+		if m := composePortRe.FindStringSubmatch(s[i:]); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
