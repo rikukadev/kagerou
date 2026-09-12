@@ -1,12 +1,10 @@
 # kagerou
 
-Ephemeral preview environments on AWS.
-**Your app runs on ECS. Your previews don't have to.**
+Ephemeral environments on AWS.
 
-すでにコンテナで動いているアプリに、PR ごとのプレビュー環境を足すためのツール。
-同じイメージを Lambda(Web Adapter)で包んで、**開くと生え、閉じるか寿命が来ると消える**
-環境を自分の AWS アカウントに作る。SAM や CloudFormation の知識は要らない
-(プレビューの実装詳細であって、あなたのスタックではない)。
+**PR や E2E で使い捨てる環境を、既存のコンテナ定義から作成するツールです。**
+同じイメージを Lambda(Web Adapter)で包んで、自分の AWS アカウントに
+生やして、使って、消す。SAM や CloudFormation の知識は要りません。
 
 Named after 陽炎 — a heat shimmer — and 蜉蝣, the mayfly that lives for a day.
 Environments that appear, flicker, and are gone.
@@ -26,28 +24,35 @@ kagerou init
 
 - 既存の **Dockerfile を検出したら Lambda Web Adapter を 1 行注入**
   (Lambda の外では no-op。ローカルの docker build も ECS もそのまま)
-- listen ポートは `EXPOSE` / compose から検出して、テンプレートは **TODO なしの完成品**
+- listen ポートは `EXPOSE` / compose から検出します
 - AWS 側の準備(OIDC ロール・ECR・Variables)は **その場で適用 / スクリプト保存 / 手動**から選択
 - mysql2 等を検出したら [sashiki](https://github.com/rikukadev/sashiki)
   (使い捨て DB ブランチ)との連携が既定の選択肢になる
-
-生成後は PR を開くだけ。CI がビルドし、action が環境を上げ、PR に URL コメントが付く。
-閉じれば消える。忘れても TTL(既定 72h)と reap が最後の網。
 
 ```bash
 kagerou validate          # 契約(CONTRACT)をデプロイ前に検査
 kagerou iam-policy --with-ecr > ci-policy.json   # CI ロールの最小権限を構成別に生成
 ```
 
+## 手元から
+
+E2E・動作確認・デモ用の環境は、その場で生やしてその場で消せる:
+
+```bash
+kagerou up --name e2e-1     # 使い捨て環境を作る(冪等)
+kagerou url --name e2e-1    # URL を取る(E2E のターゲットに)
+kagerou down --name e2e-1   # 消す。忘れても TTL(既定 72h)+ reap が回収
+```
+
 ## CI から(composite action)
+
+PR を開くと環境が生え、URL コメントが付き、閉じると消える:
 
 ```yaml
 - uses: rikukadev/kagerou/action@v0
   with:
     name: pr-${{ github.event.pull_request.number }}
 ```
-
-手元からも同じことができる: `kagerou up --name pr-42` / `url` / `down`。
 
 ## しくみ(30 秒版)
 
