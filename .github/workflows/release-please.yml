@@ -48,3 +48,14 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 利用者が参照する移動メジャータグ(action@v0)を最新リリースに追従させる。
+      # examples / scaffold / README は @v0 を指しており、これが無いと解決できない。
+      # 軽量タグを force で貼り替えるだけ(GITHUB_TOKEN の push は他 workflow を起動しない)。
+      - name: Move major tag (v0)
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release-please.outputs.tag_name }}"
+          major="${tag%%.*}"   # v0.4.0 -> v0
+          git tag -f "$major" "$tag"
+          git push -f origin "$major"

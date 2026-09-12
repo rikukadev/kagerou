@@ -20,9 +20,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - uses: actions/setup-go@v7
+      - uses: rikukadev/kagerou/action@v0
         with:
-          go-version: stable
-          cache: false
-      - run: go install github.com/rikukadev/kagerou/cmd/kagerou@main
-      - run: kagerou reap --grace 1h
+          reap: "true"
+          grace: 1h

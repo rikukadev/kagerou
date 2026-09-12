@@ -34,7 +34,7 @@ jobs:
           sam package \
             --image-repository "${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}" \
             --output-template-file packaged.yaml
-      - uses: rikukadev/kagerou/action@main
+      - uses: rikukadev/kagerou/action@v0
         with:
           name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
 
@@ -47,7 +47,7 @@ jobs:
         with:
           role-to-assume: ${{"{{"}} vars.AWS_ROLE_ARN {{"}}"}}
           aws-region: ${{"{{"}} vars.AWS_REGION {{"}}"}}
-      - uses: rikukadev/kagerou/action@main
+      - uses: rikukadev/kagerou/action@v0
         with:
           name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
           down: "true"

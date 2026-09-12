@@ -35,7 +35,7 @@ func TestRunCreatesAll(t *testing.T) {
 	}
 
 	pv := read(t, dir, ".github/workflows/kagerou-preview.yml")
-	if !strings.Contains(pv, "${{ vars.AWS_ROLE_ARN }}") || !strings.Contains(pv, "rikukadev/kagerou/action@main") {
+	if !strings.Contains(pv, "${{ vars.AWS_ROLE_ARN }}") || !strings.Contains(pv, "rikukadev/kagerou/action@v0") {
 		t.Fatalf("preview.yml placeholders broken: %s", pv[:200])
 	}
 
