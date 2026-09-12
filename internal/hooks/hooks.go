@@ -15,14 +15,19 @@ import (
 const Timeout = 10 * time.Minute
 
 // Run は hook を sh -c で実行する。command が空なら何もしない。
+// extraEnv は親プロセスの環境に重ねて渡す(KAGEROU_* の受け渡し。CONTRACT §6)。
 // hook の出力は診断情報なので stderr に流す(stdout は kagerou の結果用)。
-func Run(ctx context.Context, name, command string) error {
+func Run(ctx context.Context, name, command string, extraEnv map[string]string) error {
 	if command == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = os.Environ()
+	for k, v := range extraEnv {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
