@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  {{.Project}} のプレビュー環境(kagerou init が生成した雛形)。
+  アプリを Lambda Web Adapter で包み、環境 = スタック 1 個で立てて消す。
+
+# アプリに届けたい値(kagerou の --env / kagerou.yaml の env)は Env<Key> で受ける。
+# 例: --env DB_HOST=... → EnvDbHost。宣言していないキーはエラーになる。
+Parameters:
+  EnvKagerouEnv:
+    Type: String
+    Description: 環境名。kagerou.yaml の env KAGEROU_ENV={name} で注入される
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+
+Resources:
+  AppFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: .
+      Dockerfile: Dockerfile # TODO: アプリを HTTP サーバーとして起動し LWA で包む
+      DockerTag: !Ref EnvKagerouEnv
+    Properties:
+      PackageType: Image
+      Environment:
+        Variables:
+          AWS_LWA_PORT: "3000" # TODO: アプリの listen ポートに合わせる
+          # /healthz を実装しておくと SSR 起動前の 502 を防げる
+          AWS_LWA_READINESS_CHECK_PATH: /healthz
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+
+Outputs:
+  # kagerou はこの Output を環境 URL として拾う(CONTRACT §5)
+  KagerouUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"

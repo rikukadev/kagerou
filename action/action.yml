@@ -4,11 +4,18 @@ description: >
   AWS 認証(aws-actions/configure-aws-credentials 等)は呼び出し側で済ませておく。
 inputs:
   name:
-    description: 環境名(例 pr-42)
-    required: true
+    description: 環境名(例 pr-42)。up / down では必須、reap では不要
+    required: false
+    default: ""
   down:
     description: "'true' で環境を削除する(それ以外は up)"
     default: "false"
+  reap:
+    description: "'true' で TTL 切れ環境の回収を実行する(name 不要)"
+    default: "false"
+  grace:
+    description: reap の猶予(例 1h)。期限切れからこの時間は消さない
+    default: ""
   comment:
     description: "'true' なら PR に URL コメントを冪等更新する(pull_request イベント時のみ)"
     default: "true"
@@ -113,12 +120,24 @@ runs:
       env:
         IN_NAME: ${{ inputs.name }}
         IN_DOWN: ${{ inputs.down }}
+        IN_REAP: ${{ inputs.reap }}
+        IN_GRACE: ${{ inputs.grace }}
         IN_CONFIG: ${{ inputs.config }}
         IN_TTL: ${{ inputs.ttl }}
         IN_ENV: ${{ inputs.env }}
         IN_PARAM: ${{ inputs.param }}
       run: |
         set -euo pipefail
+        if [ "$IN_REAP" = "true" ]; then
+          rargs=(--config "$IN_CONFIG")
+          [ -n "$IN_GRACE" ] && rargs+=(--grace "$IN_GRACE")
+          kagerou reap "${rargs[@]}"
+          exit 0
+        fi
+        if [ -z "$IN_NAME" ]; then
+          echo "::error::name は up / down で必須" >&2
+          exit 1
+        fi
         args=(--name "$IN_NAME" --config "$IN_CONFIG")
         [ -n "$IN_TTL" ] && args+=(--ttl "$IN_TTL")
         while IFS= read -r kv; do
