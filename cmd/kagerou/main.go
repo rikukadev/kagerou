@@ -33,6 +33,8 @@ func run(args []string, out *os.File) error {
 		return cmdURL(args[1:], out)
 	case "init":
 		return cmdInit(args[1:], out)
+	case "validate":
+		return cmdValidate(args[1:], out)
 	case "list":
 		return cmdList(args[1:], out)
 	case "reap":
@@ -48,6 +50,7 @@ func usage() {
 
 Usage:
   kagerou init [--sashiki]           generate the onboarding files (interactive)
+  kagerou validate [--name <name>]   check the template against the contract
   kagerou up --name <name> [flags]   create/update an environment (idempotent)
   kagerou down --name <name>         delete an environment (idempotent)
   kagerou list                       list environments
