@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1
+# kagerou init が生成した雛形(Go)。TODO を自分のビルドに合わせて調整すること。
+FROM golang:1-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# TODO: main パッケージが ./ でなければパスを変える(例 ./cmd/server)
+RUN CGO_ENABLED=0 go build -o /app .
+
+FROM gcr.io/distroless/static-debian12
+# Lambda Web Adapter: kagerou のプレビュー環境で Lambda として動かすための拡張。
+# Lambda の外(docker run / ECS)では何もしないので本番イメージに残してよい。
+{{.LWALine}}
+ENV PORT={{.Port}}
+EXPOSE {{.Port}}
+COPY --from=build /app /app
+# TODO: アプリが $PORT(={{.Port}})で listen することを確認する
+ENTRYPOINT ["/app"]

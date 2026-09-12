@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# kagerou init が生成した雛形(Node / {{.Framework}})。TODO を自分の構成に合わせること。
+FROM node:22-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+# TODO: ビルドが不要なら削る。SSR/SPA でコマンドが変わる
+RUN npm run build
+
+FROM node:22-slim
+WORKDIR /app
+# Lambda Web Adapter: kagerou のプレビュー環境で Lambda として動かすための拡張。
+# Lambda の外(docker run / ECS)では何もしないので本番イメージに残してよい。
+{{.LWALine}}
+ENV NODE_ENV=production
+ENV PORT={{.Port}}
+EXPOSE {{.Port}}
+COPY --from=build /app /app
+# TODO: 本番の起動コマンドに合わせる(例 SSR: node ./build/index.js)。
+#       アプリが $PORT(={{.Port}})で listen することを確認する
+CMD ["npm", "start"]

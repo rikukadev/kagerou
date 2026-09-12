@@ -15,11 +15,12 @@ import (
 var tmplFS embed.FS
 
 type Params struct {
-	Project      string
-	Region       string
-	Sashiki      bool   // sashiki 併用の hooks / DB env を含める
-	Port         string // アプリの listen ポート(検出値。空なら 3000 + TODO)
-	HasDockerfile bool  // 既存 Dockerfile を使う(template の TODO 文言が変わる)
+	Project       string
+	Region        string
+	Sashiki       bool   // sashiki 併用の hooks / DB env を含める
+	Port          string // アプリの listen ポート(検出値。空なら framework 既定)
+	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
+	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
 }
 
 type Result struct {
@@ -33,10 +34,13 @@ type Targets struct {
 	Preview     bool
 	Reap        bool
 	Template    bool
+	Dockerfile  bool // Dockerfile が無い人向けの雛形(#61)。既存があれば生成しない
 }
 
 // AllTargets は全部入り(非対話モードの既定)。
-func AllTargets() Targets { return Targets{KagerouYaml: true, Preview: true, Reap: true, Template: true} }
+func AllTargets() Targets {
+	return Targets{KagerouYaml: true, Preview: true, Reap: true, Template: true, Dockerfile: true}
+}
 
 // Run は dir に選択された生成物を書き出す。force は kagerou.yaml と workflows
 // のみ上書きを許す。template.yaml はアプリの実体なので force でも上書きしない。
@@ -69,7 +73,74 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		}
 		res.Created = append(res.Created, f.path)
 	}
+
+	// Dockerfile 雛形は「無い人向け」。既存は(force でも)絶対に上書きしない。
+	// 既知フレームワークの雛形が無ければ黙ってスキップ(init は失敗させない)。
+	if sel.Dockerfile {
+		if variant, ok := dockerfileVariant(p.Framework); ok {
+			dst := filepath.Join(dir, "Dockerfile")
+			if _, err := os.Stat(dst); err == nil {
+				res.Skipped = append(res.Skipped, "Dockerfile")
+			} else {
+				dp := p
+				if dp.Port == "" {
+					dp.Port = defaultPort(variant)
+				}
+				if err := renderDockerfile(dst, variant, dp); err != nil {
+					return res, err
+				}
+				res.Created = append(res.Created, "Dockerfile")
+			}
+		}
+	}
 	return res, nil
+}
+
+// dockerfileVariant は検出フレームワークを雛形テンプレート名に割り当てる。
+// 割り当てが無ければ雛形を作らない(ok=false)。Node 系 SSR はまとめて node に寄せる。
+func dockerfileVariant(framework string) (string, bool) {
+	switch framework {
+	case "go":
+		return "go", true
+	case "next":
+		return "next", true
+	case "node", "remix-run", "react-router", "nuxt", "sveltejs", "astro":
+		return "node", true
+	default:
+		return "", false
+	}
+}
+
+// defaultPort は Port が検出できなかったときの listen ポート既定。
+func defaultPort(variant string) string {
+	if variant == "go" {
+		return "8080"
+	}
+	return "3000" // node / next の慣習
+}
+
+// dockerfileData は Dockerfile テンプレートに渡す値。LWALine は既存注入(InjectLWA)と
+// 同じ 1 行を使い、バージョンの二重管理を避ける。
+type dockerfileData struct {
+	Params
+	LWALine string
+}
+
+func renderDockerfile(dst, variant string, p Params) error {
+	name := "dockerfile." + variant + ".tmpl"
+	t, err := template.ParseFS(tmplFS, "templates/"+name)
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if err := t.Execute(f, dockerfileData{Params: p, LWALine: LWALine}); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return f.Close()
 }
 
 func renderTo(dst, name string, p Params) error {

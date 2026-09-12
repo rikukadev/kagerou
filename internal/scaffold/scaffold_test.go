@@ -16,6 +16,96 @@ func read(t *testing.T, dir, path string) string {
 	return string(b)
 }
 
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDockerfileScaffoldGo(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Run(dir, Params{Project: "svc", Region: "r", Framework: "go"}, AllTargets(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(res.Created, "Dockerfile") {
+		t.Fatalf("go では Dockerfile を生成するはず: %v", res.Created)
+	}
+	df := read(t, dir, "Dockerfile")
+	for _, want := range []string{
+		LWALine,       // 既存注入と同じ LWA 行を焼き込む
+		"EXPOSE 8080", // go の既定ポート
+		"ENV PORT=8080",
+		"golang:1-alpine", // Go のマルチステージ
+	} {
+		if !strings.Contains(df, want) {
+			t.Errorf("go Dockerfile missing %q", want)
+		}
+	}
+}
+
+func TestDockerfileScaffoldNextUsesDetectedPort(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Run(dir, Params{Project: "web", Region: "r", Framework: "next", Port: "4000"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	df := read(t, dir, "Dockerfile")
+	if !strings.Contains(df, "EXPOSE 4000") || !strings.Contains(df, "ENV PORT=4000") {
+		t.Errorf("検出ポートを使うはず:\n%s", df)
+	}
+	if !strings.Contains(df, ".next/standalone") || !strings.Contains(df, "server.js") {
+		t.Errorf("Next.js standalone 雛形になっていない:\n%s", df)
+	}
+}
+
+func TestDockerfileScaffoldNodeSSR(t *testing.T) {
+	dir := t.TempDir()
+	// react-router などの Node SSR は node 雛形に寄せる。ポート未検出なら 3000。
+	if _, err := Run(dir, Params{Project: "app", Region: "r", Framework: "react-router"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	df := read(t, dir, "Dockerfile")
+	if !strings.Contains(df, "EXPOSE 3000") || !strings.Contains(df, `CMD ["npm", "start"]`) {
+		t.Errorf("node 雛形になっていない:\n%s", df)
+	}
+}
+
+func TestDockerfileScaffoldUnknownFrameworkSkips(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Run(dir, Params{Project: "x", Region: "r", Framework: "cobol"}, AllTargets(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(res.Created, "Dockerfile") {
+		t.Error("未知フレームワークでは Dockerfile を作らないはず")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
+		t.Error("Dockerfile が書き出されている")
+	}
+}
+
+func TestDockerfileScaffoldNeverOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	// 既存 Dockerfile は force でも上書きしない(アプリの実体)。
+	original := "FROM scratch\n# mine\n"
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(dir, Params{Project: "svc", Region: "r", Framework: "go"}, AllTargets(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(res.Skipped, "Dockerfile") {
+		t.Fatalf("既存 Dockerfile は skip のはず: %v", res.Skipped)
+	}
+	if got := read(t, dir, "Dockerfile"); got != original {
+		t.Errorf("既存 Dockerfile を上書きした:\n%s", got)
+	}
+}
+
 func TestRunCreatesAll(t *testing.T) {
 	dir := t.TempDir()
 	res, err := Run(dir, Params{Project: "myapp", Region: "ap-northeast-1"}, AllTargets(), false)
@@ -116,8 +206,8 @@ func TestWriteSetupScript(t *testing.T) {
 	s := string(b)
 	for _, want := range []string{
 		`OWNER="rikukadev"`, `REPO="myapp"`, `REGION="ap-northeast-1"`,
-		"create-open-id-connect-provider", // provider が無ければ作る
-		"repo:${OWNER}/${REPO}:*",         // 旧形式 sub
+		"create-open-id-connect-provider",                // provider が無ければ作る
+		"repo:${OWNER}/${REPO}:*",                        // 旧形式 sub
 		"repo:${OWNER}@${OWNER_ID}/${REPO}@${REPO_ID}:*", // ID 形式 sub(新 org)
 		"create-repository",
 		"gh variable set AWS_ROLE_ARN",
