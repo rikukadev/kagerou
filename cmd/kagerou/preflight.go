@@ -61,22 +61,23 @@ func ensureAuth(interactive bool, in io.Reader, out io.Writer) authStatus {
 	if st.AWS && st.GH {
 		return st
 	}
+	say := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
 
-	fmt.Fprintln(out, "kagerou init uses your AWS and GitHub credentials for detection and setup:")
-	fmt.Fprintf(out, "  aws  %s  (account detection, preview base, \"run it now\" setup)\n", mark(st.AWS))
-	fmt.Fprintf(out, "  gh   %s  (repo detection, variables, OIDC role IDs)\n", mark(st.GH))
+	say("kagerou init uses your AWS and GitHub credentials for detection and setup:\n")
+	say("  aws  %s  (account detection, preview base, \"run it now\" setup)\n", mark(st.AWS))
+	say("  gh   %s  (repo detection, variables, OIDC role IDs)\n", mark(st.GH))
 
 	if interactive {
 		r := bufio.NewReader(in)
 		if !st.GH {
-			fmt.Fprint(out, "Run `gh auth login` now? [Y/n] ")
+			say("Run `gh auth login` now? [Y/n] ")
 			if ans, _ := r.ReadString('\n'); strings.TrimSpace(strings.ToLower(ans)) != "n" {
 				_ = runInteractive("gh", "auth", "login")
 				st.GH = checkAuth().GH
 			}
 		}
 		if !st.AWS {
-			fmt.Fprint(out, "AWS login: [1] aws configure (access keys)  [2] aws sso login  [enter] continue without AWS: ")
+			say("AWS login: [1] aws configure (access keys)  [2] aws sso login  [enter] continue without AWS: ")
 			switch ans, _ := r.ReadString('\n'); strings.TrimSpace(ans) {
 			case "1":
 				_ = runInteractive("aws", "configure")
@@ -89,10 +90,10 @@ func ensureAuth(interactive bool, in io.Reader, out io.Writer) authStatus {
 	}
 
 	if !st.AWS {
-		fmt.Fprintln(out, "continuing without AWS — detection is limited and setup falls back to a script")
+		say("continuing without AWS — detection is limited and setup falls back to a script\n")
 	}
 	if !st.GH {
-		fmt.Fprintln(out, "continuing without gh — repo detection and variable checks are skipped")
+		say("continuing without gh — repo detection and variable checks are skipped\n")
 	}
 	return st
 }
