@@ -16,7 +16,7 @@ Sibling project: [sashiki](https://github.com/rikukadev/sashiki) — disposable 
 
 ```bash
 # CI から(composite action)
-- uses: rikukadev/kagerou/action@v1
+- uses: rikukadev/kagerou/action@v0
   with:
     name: pr-${{ github.event.pull_request.number }}
     env: |
