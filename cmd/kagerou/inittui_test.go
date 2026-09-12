@@ -26,8 +26,8 @@ func TestWizardDetectionSetsDefaults(t *testing.T) {
 	if m.questions[0].key != "db" || m.questions[0].selected != 0 {
 		t.Fatalf("mysql2 検出時は sashiki が既定になるはず: %+v", m.questions[0])
 	}
-	if !strings.Contains(m.View(), "mysql2 を検出") {
-		t.Fatal("検出内容が選択肢に出ていない")
+	if !strings.Contains(m.View(), "detected mysql2") {
+		t.Fatal("detection not shown in option")
 	}
 	// 検出なしなら「使わない」が既定
 	m2 := newInitModel(t.TempDir(), scaffold.Params{Project: "myapp", Region: "r"}, scaffold.Detection{VarsSet: map[string]bool{}}, false)

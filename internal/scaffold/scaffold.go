@@ -115,29 +115,29 @@ func Steps(p Params, d Detection) []Step {
 
 	varsDone := d.VarsSet["AWS_ROLE_ARN"] && d.VarsSet["AWS_REGION"] && d.VarsSet["ECR_REPOSITORY"]
 
-	oidcDetail := "新しめの org は sub クレームが repo:org@ID/repo@ID:* 形式な点に注意"
+	oidcDetail := "note: newer orgs use ID-style sub claims (repo:org@ID/repo@ID:*)"
 	if d.Owner != "" && d.Repo != "" {
-		oidcDetail = "信頼ポリシーの sub: repo:" + d.Owner + "/" + d.Repo + ":*(または ID 入り形式)\n" + oidcDetail
+		oidcDetail = "trust policy sub: repo:" + d.Owner + "/" + d.Repo + ":* (or the ID-style form)\n" + oidcDetail
 	}
 
 	steps := []Step{
 		{
-			Title:  "Dockerfile を用意し、template.yaml の TODO を埋める",
-			Detail: "アプリを HTTP サーバーとして起動し、Lambda Web Adapter で包む",
+			Title:  "Write a Dockerfile and fill the TODOs in template.yaml",
+			Detail: "run your app as an HTTP server and wrap it with Lambda Web Adapter",
 			Done:   d.HasDockerfile && d.HasTemplate, // どちらも元からあるなら経験者
 		},
 		{
-			Title:  "GitHub OIDC ロールを作る(このリポジトリ限定)",
+			Title:  "Create a GitHub OIDC role (scoped to this repository)",
 			Detail: oidcDetail,
 			Done:   d.VarsSet["AWS_ROLE_ARN"],
 		},
 		{
-			Title:  "ECR リポジトリを作る(sam package の押し先)",
+			Title:  "Create an ECR repository (push target for sam package)",
 			Detail: "aws ecr create-repository --repository-name " + repo,
 			Done:   d.VarsSet["ECR_REPOSITORY"],
 		},
 		{
-			Title: "GitHub Variables を 3 つ設定する",
+			Title: "Set the three GitHub Variables",
 			Detail: `gh variable set AWS_ROLE_ARN   --body "` + roleArn + `"
 gh variable set AWS_REGION     --body "` + region + `"
 gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
@@ -147,18 +147,18 @@ gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
 	if p.Sashiki {
 		steps = append(steps,
 			Step{
-				Title:  "kagerou.yaml の DB_HOST / DB_PASSWORD / DB_NAME の TODO を埋める",
-				Detail: "sashiki プロキシのホストと baseline の認証情報に合わせる",
+				Title:  "Fill the DB_HOST / DB_PASSWORD / DB_NAME TODOs in kagerou.yaml",
+				Detail: "match your sashiki proxy host and baseline credentials",
 			},
 			Step{
-				Title:  "runner から sashikid に届くことを確認する",
-				Detail: "hooks の sashiki create が動く場所(self-hosted / VPC 内)で workflow を実行する",
+				Title:  "Make sure the runner can reach sashikid",
+				Detail: "run the workflow where `sashiki create` works (self-hosted / inside the VPC)",
 			},
 		)
 	}
 	steps = append(steps, Step{
-		Title:  "PR を開いてプレビュー環境が生えるのを見届ける",
-		Detail: "閉じるか TTL(72h)で環境は消える",
+		Title:  "Open a PR and watch the environment appear",
+		Detail: "it vanishes on close or when the TTL (72h) expires",
 	})
 	return steps
 }
@@ -166,7 +166,7 @@ gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
 // PlainSteps は非 TTY(CI 等)向けのプレーンテキスト版チェックリスト。
 func PlainSteps(p Params, d Detection) string {
 	var b strings.Builder
-	b.WriteString("\n次にやること(リポジトリごとに 1 回):\n\n")
+	b.WriteString("\nNext steps (once per repository):\n\n")
 	for i, s := range Steps(p, d) {
 		mark := " "
 		if s.Done {

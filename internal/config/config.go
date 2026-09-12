@@ -80,7 +80,7 @@ func (c Config) validate() error {
 	switch c.Driver {
 	case "stack":
 	default:
-		return fmt.Errorf("unknown driver %q (v0.1 で使えるのは stack のみ)", c.Driver)
+		return fmt.Errorf("unknown driver %q (only \"stack\" is available in v0.1)", c.Driver)
 	}
 	if _, _, err := ParseTTL(c.TTL); err != nil {
 		return err
@@ -99,7 +99,7 @@ func ParseTTL(s string) (d time.Duration, hasTTL bool, err error) {
 		return 0, false, fmt.Errorf("ttl %q: %w", s, err)
 	}
 	if d <= 0 {
-		return 0, false, fmt.Errorf("ttl %q: 正の値か %q を指定する", s, TTLNone)
+		return 0, false, fmt.Errorf("ttl %q: must be positive or %q", s, TTLNone)
 	}
 	return d, true, nil
 }
@@ -111,13 +111,13 @@ var nameRe = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 // 使えるよう、最初から狭くしておく(広げるのは安全、狭めるのは既存名を壊す)。
 func ValidateName(name string) error {
 	if name == "" {
-		return errors.New("環境名が空")
+		return errors.New("environment name is empty")
 	}
 	if len(name) > 63 {
-		return fmt.Errorf("環境名 %q が長すぎる(63 文字まで)", name)
+		return fmt.Errorf("environment name %q is too long (max 63 chars)", name)
 	}
 	if !nameRe.MatchString(name) {
-		return fmt.Errorf("環境名 %q が不正(小文字英字始まり・小文字英数字とハイフン・末尾ハイフン禁止)", name)
+		return fmt.Errorf("invalid environment name %q (must start with a lowercase letter, contain only lowercase letters, digits and hyphens, and not end with a hyphen)", name)
 	}
 	return nil
 }

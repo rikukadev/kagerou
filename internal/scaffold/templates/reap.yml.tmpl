@@ -1,4 +1,5 @@
-# TTL 切れ環境の回収(最後の網)。close イベントの取りこぼしもここで消える。
+# Reap expired environments (the last safety net). Environments whose
+# close event was lost are also collected here.
 name: kagerou-reap
 
 on:

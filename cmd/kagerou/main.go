@@ -47,12 +47,12 @@ func usage() {
 	fmt.Fprint(os.Stderr, `kagerou — ephemeral environments on AWS
 
 Usage:
-  kagerou init [--sashiki]           導入ファイル一式を生成する
-  kagerou up --name <name> [flags]   環境を作成/更新する(冪等)
-  kagerou down --name <name>         環境を削除する(冪等)
-  kagerou list                       環境の一覧
-  kagerou url --name <name>          環境の URL を表示
-  kagerou reap [--dry-run]           TTL 切れ環境の回収
-  kagerou version                    バージョン表示
+  kagerou init [--sashiki]           generate the onboarding files (interactive)
+  kagerou up --name <name> [flags]   create/update an environment (idempotent)
+  kagerou down --name <name>         delete an environment (idempotent)
+  kagerou list                       list environments
+  kagerou url --name <name>          print the environment URL
+  kagerou reap [--dry-run]           collect environments past their TTL
+  kagerou version                    print version
 `)
 }
