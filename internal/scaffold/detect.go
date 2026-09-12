@@ -69,6 +69,15 @@ func Detect(dir string) Detection {
 			d.AccountID = s
 		}
 	}
+	// samconfig / 環境変数に無ければ ~/.aws/config(プロファイル解決込み)から。
+	// `aws configure get region` は env を見ないので、この順で env が勝つ
+	if d.Region == "" {
+		if out, err := execCommand(ctx, "aws", "configure", "get", "region"); err == nil {
+			if r := strings.TrimSpace(string(out)); r != "" {
+				d.Region = r
+			}
+		}
+	}
 	if out, err := execCommand(ctx, "aws", "route53", "list-hosted-zones",
 		"--query", "HostedZones[?Config.PrivateZone==`false`].Name", "--output", "json"); err == nil {
 		var zones []string
