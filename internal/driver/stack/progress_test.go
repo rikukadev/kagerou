@@ -1,11 +1,23 @@
 package stack
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cfntypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 )
+
+func TestIsInProgressErr(t *testing.T) {
+	// 別プロセスが更新中のときの CFN の弾き文言。
+	yes := errors.New("Stack [x] is in UPDATE_IN_PROGRESS state and can not be updated")
+	if !isInProgressErr(yes) {
+		t.Error("*_IN_PROGRESS を含むエラーは true のはず")
+	}
+	if isInProgressErr(nil) || isInProgressErr(errors.New("ValidationError: something else")) {
+		t.Error("該当しないエラーは false のはず")
+	}
+}
 
 func ev(logicalID, resType, status string) cfntypes.StackEvent {
 	return cfntypes.StackEvent{

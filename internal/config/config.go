@@ -22,22 +22,25 @@ const DefaultFile = "kagerou.yaml"
 const TTLNone = "none"
 
 type Config struct {
-	Project    string            `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
-	Driver     string            `yaml:"driver"`
-	Template   string            `yaml:"template"`
-	Region     string            `yaml:"region"`
-	NamePrefix string            `yaml:"name_prefix"`
+	Project    string `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
+	Driver     string `yaml:"driver"`
+	Template   string `yaml:"template"`
+	Region     string `yaml:"region"`
+	NamePrefix string `yaml:"name_prefix"`
 	// URLTemplate は環境 URL を作成前に確定させる(例 "https://{name}.preview.example.com")。
 	// CORS 許可元やコールバック URL の循環参照を避ける(CONTRACT §5)。
-	URLTemplate string           `yaml:"url_template"`
+	URLTemplate string `yaml:"url_template"`
 	// ReadinessPath を設定すると、up はこのパスに 200 が返るまで ready にしない(#26)。
 	// 未設定なら従来どおりスタック完成 = ready。
 	ReadinessPath    string `yaml:"readiness_path"`
 	ReadinessTimeout string `yaml:"readiness_timeout"` // 例 90s。未設定は 90s
-	TTL        string            `yaml:"ttl"`
-	Tags       map[string]string `yaml:"tags"`
-	Env        map[string]string `yaml:"env"`
-	Hooks      Hooks             `yaml:"hooks"`
+	TTL              string `yaml:"ttl"`
+	// MaxLifetime は touch(up ごとの TTL 延長)の上限。空なら既定 30 日。
+	// CI 用に数時間、sandbox 用に長め、と使い分ける(#51)。
+	MaxLifetime string            `yaml:"max_lifetime"`
+	Tags        map[string]string `yaml:"tags"`
+	Env         map[string]string `yaml:"env"`
+	Hooks       Hooks             `yaml:"hooks"`
 }
 
 type Hooks struct {
@@ -96,6 +99,11 @@ func (c Config) validate() error {
 	if c.ReadinessTimeout != "" {
 		if d, err := time.ParseDuration(c.ReadinessTimeout); err != nil || d <= 0 {
 			return fmt.Errorf("readiness_timeout %q: must be a positive duration", c.ReadinessTimeout)
+		}
+	}
+	if c.MaxLifetime != "" {
+		if d, err := time.ParseDuration(c.MaxLifetime); err != nil || d <= 0 {
+			return fmt.Errorf("max_lifetime %q: must be a positive duration", c.MaxLifetime)
 		}
 	}
 	return nil

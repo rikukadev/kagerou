@@ -181,7 +181,7 @@ runs:
 
         | | |
         |---|---|
-        | URL | ${URL:-'(no URL output)'} |
+        | URL | ${URL:-(no URL output)} |
         | Environment | \`${NAME}\` |
         | Expires | ${EXPIRES} |
 

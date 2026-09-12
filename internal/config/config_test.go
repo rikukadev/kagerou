@@ -68,6 +68,17 @@ func TestLoadRejectsUnknownDriver(t *testing.T) {
 	}
 }
 
+func TestMaxLifetimeValidation(t *testing.T) {
+	if _, err := Load(writeYAML(t, "max_lifetime: 6h")); err != nil {
+		t.Fatalf("正の duration は通るはず: %v", err)
+	}
+	for _, bad := range []string{"nope", "-1h", "0h"} {
+		if _, err := Load(writeYAML(t, "max_lifetime: "+bad)); err == nil || !strings.Contains(err.Error(), "max_lifetime") {
+			t.Errorf("max_lifetime %q は拒否のはず: %v", bad, err)
+		}
+	}
+}
+
 func TestLoadOrDefault(t *testing.T) {
 	cfg, err := LoadOrDefault(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {

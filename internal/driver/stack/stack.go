@@ -81,6 +81,7 @@ type UpInput struct {
 	Source       string            // opaque JSON。空なら省略
 	Version      string            // kagerou 自身のバージョン
 	Tags         map[string]string // kagerou.yaml の追加タグ
+	MaxLifetime  time.Duration     // touch の上限。0 なら既定の MaxLifetime 定数(#51)
 }
 
 // Info は環境の観測結果。Environment JSON(CONTRACT §3)の材料になる。
@@ -130,7 +131,12 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 		status = ""
 	}
 
-	// touch の上限: 初回作成(存在しなければ今)から MaxLifetime を超えない
+	// touch の上限: 初回作成(存在しなければ今)から maxLife を超えない。
+	// maxLife は kagerou.yaml の max_lifetime(未設定なら既定定数)(#51)。
+	maxLife := MaxLifetime
+	if in.MaxLifetime > 0 {
+		maxLife = in.MaxLifetime
+	}
 	if in.ExpiresAt != nil {
 		base := time.Now()
 		if status != "" {
@@ -138,7 +144,7 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 				base = info.CreationTime
 			}
 		}
-		if limit := base.Add(MaxLifetime); in.ExpiresAt.After(limit) {
+		if limit := base.Add(maxLife); in.ExpiresAt.After(limit) {
 			in.ExpiresAt = &limit
 		}
 	}
@@ -169,13 +175,21 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 			return nil, fmt.Errorf("create stack %s: %w", in.StackName, err)
 		}
 	} else { // 存在する → update(差分なしは成功扱い)
-		_, err = d.cfn.UpdateStack(ctx, &cloudformation.UpdateStackInput{
+		updateInput := &cloudformation.UpdateStackInput{
 			StackName:    &in.StackName,
 			TemplateBody: &in.TemplateBody,
 			Parameters:   params,
 			Tags:         tags,
 			Capabilities: caps,
-		})
+		}
+		_, err = d.cfn.UpdateStack(ctx, updateInput)
+		// 冒頭の waitUntilStable と UpdateStack の間に別プロセスが更新を始めると
+		// 「*_IN_PROGRESS で更新できない」で弾かれる。安定を待って 1 回だけ再試行する(#51)。
+		if err != nil && !isNoUpdateErr(err) && isInProgressErr(err) {
+			if _, werr := d.waitUntilStable(ctx, in.StackName); werr == nil {
+				_, err = d.cfn.UpdateStack(ctx, updateInput)
+			}
+		}
 		if err != nil {
 			if isNoUpdateErr(err) {
 				return d.Info(ctx, in.StackName)
@@ -187,7 +201,7 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 		err = w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout)
 		stop()
 		if err != nil {
-			return nil, fmt.Errorf("update stack %s: %w", in.StackName, err)
+			return nil, d.explainWaitFailure(ctx, in.StackName, "update", err)
 		}
 	}
 	return d.Info(ctx, in.StackName)
@@ -531,6 +545,24 @@ func buildTags(in UpInput) []cfntypes.Tag {
 
 func isNoUpdateErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "No updates are to be performed")
+}
+
+// isInProgressErr は「スタックが *_IN_PROGRESS で今は更新できない」系のエラーか。
+func isInProgressErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "_IN_PROGRESS")
+}
+
+// explainWaitFailure は待機失敗のエラーに状態別の対処案内を足す。特に
+// UPDATE_ROLLBACK_FAILED は continue-update-rollback が要る手詰まり状態(#51)。
+func (d *Driver) explainWaitFailure(ctx context.Context, stackName, op string, cause error) error {
+	if status, _ := d.stackStatus(ctx, stackName); status == string(cfntypes.StackStatusUpdateRollbackFailed) {
+		return fmt.Errorf("%s stack %s: %w\n"+
+			"  UPDATE_ROLLBACK_FAILED です。次のいずれかで復旧してください:\n"+
+			"    aws cloudformation continue-update-rollback --stack-name %s\n"+
+			"    kagerou down --name <name>   (削除して作り直す)",
+			op, stackName, cause, stackName)
+	}
+	return fmt.Errorf("%s stack %s: %w", op, stackName, cause)
 }
 
 func isNotExistErr(err error) bool {
