@@ -14,12 +14,23 @@ driver は個別に付ける責務を負う。
 |---|---|---|
 | `kagerou:managed` | `"true"` | 走査時の第一フィルタ |
 | `kagerou:name` | 環境名(例 `pr-42`) | |
-| `kagerou:project` | プロジェクト名(例 `todo`) | kagerou.yaml の `project`。未設定なら省略 |
+| `kagerou:project` | プロジェクト名(例 `todo`) | kagerou.yaml の `project`。未設定なら省略。**`reap` / `list` の分離境界**(下記) |
 | `kagerou:driver` | `stack` 等 | |
 | `kagerou:expires-at` | RFC3339 UTC(例 `2026-09-15T00:00:00Z`)または `none` | `none` = 明示的な無期限 |
 | `kagerou:url` | `url_template` で作成前に確定した環境 URL | 未設定なら省略。§5 参照 |
 | `kagerou:source` | opaque 文字列。URI 形式を推奨(例 `github_pr://rikukadev/todo/42`) | adapter が `--source` で渡す。kagerou は解釈しない。CFN タグ値の文字種制約(英数字と ` +-=._:/@`)により JSON は入らない |
 | `kagerou:version` | 作成した kagerou のバージョン | |
+
+**`kagerou:project` は `reap` / `list` の分離境界**。同じ AWS アカウント/リージョンに
+複数リポジトリ(プロジェクト)が同居しうるため:
+
+- `list` / `reap` は既定で `kagerou:project == kagerou.yaml の project` の環境だけを対象にする。
+- `--all-projects` で全プロジェクトを対象にできる(`list` の全件表示、`serve` 用)。
+- `reap --all-projects` は **`post_down` hook を実行しない**(対象がどのリポジトリの環境か
+  決められず、この kagerou.yaml の hook を他プロジェクトの環境名で実行してしまうため)。
+  各プロジェクトの孤児は、そのプロジェクトの `reap` が hook 付きで回収する。
+- `project` 未設定の kagerou.yaml で `reap` を実行すると、対象を絞れないため**拒否**する
+  (明示的に `--all-projects` を付けた場合のみ全件を対象にする)。
 
 ## 2. 環境名の制約
 
