@@ -266,13 +266,32 @@ func cmdInit(args []string, out *os.File) error {
 	return err
 }
 
+// filterByProject は kagerou:project タグで環境を絞る(#48: reap / list の分離境界)。
+// allProjects なら素通し。そうでなければ project タグが cfg.Project に一致するものだけ。
+// 別プロジェクト(別リポジトリ)の環境を list / reap が巻き込まないようにする。
+func filterByProject(infos []*stack.Info, project string, allProjects bool) []*stack.Info {
+	if allProjects {
+		return infos
+	}
+	out := infos[:0:0]
+	for _, info := range infos {
+		if info.Tags[stack.TagProject] == project {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
 func cmdList(args []string, out *os.File) error {
-	f, err := parseUpFlags("list", args)
-	if err != nil {
+	// list は名前/テンプレ等を取らないので専用の FlagSet(config/output/all-projects のみ)。
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	cfgPath := fs.String("config", config.DefaultFile, "config file")
+	output := fs.String("output", "text", "text | json")
+	allProjects := fs.Bool("all-projects", false, "list environments of all projects (default: this project only)")
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	// list は名前を取らないので loadConfigFor(名前検証つき)は通さない
-	cfg, err := config.LoadOrDefault(f.cfgPath)
+	cfg, err := config.LoadOrDefault(*cfgPath)
 	if err != nil {
 		return err
 	}
@@ -284,6 +303,8 @@ func cmdList(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	infos = filterByProject(infos, cfg.Project, *allProjects)
+	f := upFlags{output: *output} // 以降の分岐が f.output を見るため
 	if f.output == "json" {
 		envs := make([]map[string]any, 0, len(infos))
 		for _, info := range infos {
@@ -306,12 +327,18 @@ func cmdReap(args []string, out *os.File) error {
 	cfgPath := fs.String("config", config.DefaultFile, "config file")
 	dryRun := fs.Bool("dry-run", false, "show what would be reaped without deleting")
 	grace := fs.Duration("grace", 0, "grace period after expiry (e.g. 1h)")
+	allProjects := fs.Bool("all-projects", false, "reap across all projects (does NOT run post_down hooks)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	cfg, err := config.LoadOrDefault(*cfgPath)
 	if err != nil {
 		return err
+	}
+	// project スコープの安全確認(#48): kagerou:project が分離境界。project を絞れない
+	// まま全件 reap すると、同じアカウントの別リポジトリの環境まで消してしまう。
+	if !*allProjects && cfg.Project == "" {
+		return fmt.Errorf("reap: kagerou.yaml に project が無いため対象を絞れません。project を設定するか、明示的に --all-projects を付けてください(--all-projects は post_down を実行しません)")
 	}
 	drv, ctx, err := newDriver(cfg)
 	if err != nil {
@@ -321,6 +348,7 @@ func cmdReap(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	infos = filterByProject(infos, cfg.Project, *allProjects)
 	now := time.Now()
 	for _, info := range infos {
 		if !info.Expired(now, *grace) {
@@ -338,8 +366,11 @@ func cmdReap(args []string, out *os.File) error {
 			fmt.Fprintf(os.Stderr, "kagerou: reap %s: %v\n", name, err)
 			continue
 		}
-		// reap でも post_down を呼ぶ(呼ばないと sashiki 側に孤児が残る経路になる)
-		if hook := cfg.ExpandName(name).Hooks.PostDown; hook != "" {
+		// reap でも post_down を呼ぶ(呼ばないと sashiki 側に孤児が残る経路になる)。
+		// ただし --all-projects のときは、対象がどのリポジトリの環境か決められず
+		// この kagerou.yaml の post_down を他プロジェクトの環境名で実行してしまうため
+		// 呼ばない(#48)。その分の孤児は各プロジェクトの reap が回収する。
+		if hook := cfg.ExpandName(name).Hooks.PostDown; hook != "" && !*allProjects {
 			if err := hooks.Run(ctx, "post_down", hook, map[string]string{"KAGEROU_NAME": name}); err != nil {
 				fmt.Fprintf(os.Stderr, "kagerou: warning: %v\n", err)
 			}
