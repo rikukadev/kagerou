@@ -165,6 +165,7 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
 	sel := scaffold.Targets{KagerouYaml: true}
 	sel.Template = m.answer("template") == 0 // 質問なし(-1)= 既存なので生成しない
+	sel.Dockerfile = !p.HasDockerfile        // 持っていない人にだけ雛形を出す(#61。既存は上書きしない)
 	switch m.answer("workflows") {
 	case 0:
 		sel.Preview, sel.Reap = true, true

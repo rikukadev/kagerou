@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+# kagerou init が生成した雛形(Next.js)。standalone 出力を前提にしている。
+# next.config.js に `output: "standalone"` を入れておくこと。
+FROM node:22-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:22-slim
+WORKDIR /app
+# Lambda Web Adapter: kagerou のプレビュー環境で Lambda として動かすための拡張。
+# Lambda の外(docker run / ECS)では何もしないので本番イメージに残してよい。
+{{.LWALine}}
+ENV NODE_ENV=production
+ENV PORT={{.Port}}
+ENV HOSTNAME=0.0.0.0
+EXPOSE {{.Port}}
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
+CMD ["node", "server.js"]
