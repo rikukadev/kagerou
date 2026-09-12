@@ -15,6 +15,9 @@ Environments that appear, flicker, and are gone.
 
 ## 導入は init から
 
+前提は 2 つだけ: **`aws` CLI(ログイン済み)と `gh` CLI(`gh auth login` 済み)**。
+無ければ init の最初に確認して、その場でログインに誘導します。
+
 ```bash
 kagerou init
 ```
