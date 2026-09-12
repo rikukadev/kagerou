@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -42,6 +43,11 @@ const TTLNoneTagValue = "none"
 var urlOutputKeys = []string{"KagerouUrl", "PreviewUrl"}
 
 const waitTimeout = 30 * time.Minute
+
+// progressInterval は待機中に進捗を stderr へ出す間隔。SDK の waiter は無言で
+// ブロックするため、VPC Lambda の ENI 削除待ち(数分〜十数分)がハングと区別
+// できない(#47)。この間隔ごとに「今どのリソースで待っているか + 経過」を出す。
+const progressInterval = 30 * time.Second
 
 // MaxLifetime は touch(up ごとの TTL 延長)の上限。初回作成からこれを超えて
 // 延ばせない(無限延長の防止。DESIGN §8)。--ttl none の明示無期限には適用しない。
@@ -156,7 +162,10 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 			return nil, fmt.Errorf("create stack: %w", err)
 		}
 		w := cloudformation.NewStackCreateCompleteWaiter(d.cfn)
-		if err := w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout); err != nil {
+		stop := d.startProgress(ctx, "creating", in.StackName)
+		err = w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout)
+		stop()
+		if err != nil {
 			return nil, fmt.Errorf("create stack %s: %w", in.StackName, err)
 		}
 	} else { // 存在する → update(差分なしは成功扱い)
@@ -174,7 +183,10 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 			return nil, fmt.Errorf("update stack: %w", err)
 		}
 		w := cloudformation.NewStackUpdateCompleteWaiter(d.cfn)
-		if err := w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout); err != nil {
+		stop := d.startProgress(ctx, "updating", in.StackName)
+		err = w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout)
+		stop()
+		if err != nil {
 			return nil, fmt.Errorf("update stack %s: %w", in.StackName, err)
 		}
 	}
@@ -194,10 +206,77 @@ func (d *Driver) Down(ctx context.Context, stackName string) error {
 		return fmt.Errorf("delete stack: %w", err)
 	}
 	w := cloudformation.NewStackDeleteCompleteWaiter(d.cfn)
-	if err := w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &stackName}, waitTimeout); err != nil {
+	stop := d.startProgress(ctx, "deleting", stackName)
+	err = w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &stackName}, waitTimeout)
+	stop()
+	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", stackName, err)
 	}
 	return nil
+}
+
+// startProgress は待機中、progressInterval ごとに「今どのリソースで待っているか +
+// 経過時間」を stderr に出す goroutine を起動し、停止用の関数を返す(#47)。
+// 停止時、待機が 1 間隔を超えていたら完了行も出す(それ以下なら黙る)。
+func (d *Driver) startProgress(ctx context.Context, op, stackName string) func() {
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(progressInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				elapsed := time.Since(start).Round(time.Second)
+				if res := d.inProgressResource(ctx, stackName); res != "" {
+					fmt.Fprintf(os.Stderr, "kagerou: %s %s — waiting on %s (%s)\n", op, stackName, res, elapsed)
+				} else {
+					fmt.Fprintf(os.Stderr, "kagerou: %s %s (%s)\n", op, stackName, elapsed)
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		if el := time.Since(start); el >= progressInterval {
+			fmt.Fprintf(os.Stderr, "kagerou: %s %s done (%s)\n", op, stackName, el.Round(time.Second))
+		}
+	}
+}
+
+// inProgressResource は今まさに *_IN_PROGRESS のリソースを 1 つ返す(新しい順で最初)。
+// 取れなければ空文字。VPC Lambda の削除では Function/ENI が DELETE_IN_PROGRESS で出るので、
+// 「ENI 待ち」だと利用者が気づける。スタック自身のイベントは除く。
+func (d *Driver) inProgressResource(ctx context.Context, stackName string) string {
+	out, err := d.cfn.DescribeStackEvents(ctx, &cloudformation.DescribeStackEventsInput{StackName: &stackName})
+	if err != nil || len(out.StackEvents) == 0 {
+		return ""
+	}
+	return firstInProgress(out.StackEvents)
+}
+
+// firstInProgress は新しい順のイベント列から、最新イベントが *_IN_PROGRESS の
+// 非スタックリソースを 1 つ返す。同一リソースは最新イベントだけで判定する。
+func firstInProgress(events []cfntypes.StackEvent) string {
+	seen := map[string]bool{}
+	for _, e := range events {
+		id := aws.ToString(e.LogicalResourceId)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if aws.ToString(e.ResourceType) == "AWS::CloudFormation::Stack" {
+			continue
+		}
+		if strings.HasSuffix(string(e.ResourceStatus), "_IN_PROGRESS") {
+			return fmt.Sprintf("%s %s (%s)", aws.ToString(e.ResourceType), id, e.ResourceStatus)
+		}
+	}
+	return ""
 }
 
 // Info は環境の現在の観測結果を返す。
