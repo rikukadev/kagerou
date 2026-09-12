@@ -5,16 +5,33 @@
 package iampolicy
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
+// marshal は整形済み JSON にする。SetEscapeHTML(false) で <ACCOUNT_ID> 等の
+// 山括弧が < にならないようにする(ポリシー JSON は HTML ではない)。
+func marshal(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
 type Statement struct {
-	Sid      string   `json:"Sid"`
-	Effect   string   `json:"Effect"`
-	Action   []string `json:"Action"`
-	Resource any      `json:"Resource"` // string または []string
+	Sid         string   `json:"Sid"`
+	Effect      string   `json:"Effect"`
+	Action      []string `json:"Action"`
+	Resource    any      `json:"Resource,omitempty"`    // string または []string
+	NotResource any      `json:"NotResource,omitempty"` // Deny を名前空間外に絞るとき
+	Condition   any      `json:"Condition,omitempty"`
 }
 
 type Policy struct {
@@ -210,5 +227,171 @@ func Build(o Options) (Policy, error) {
 
 // JSON はポリシーを整形済み JSON にする。
 func (p Policy) JSON() ([]byte, error) {
-	return json.MarshalIndent(p, "", "  ")
+	return marshal(p)
+}
+
+// --- trust policy(デプロイロールを誰が assume できるか)------------------------
+//
+// Build が出すのは「何ができるか」の権限ポリシー。ロールを実際に立てるには
+// 「誰が assume できるか」の trust policy が対になって要る(#53 ②)。
+// GitHub Actions の OIDC を前提に、この 1 リポジトリの pull_request と既定ブランチ
+// だけに絞る。fork の PR は sub が repo:FORK/... になり一致しない(かつ GitHub は
+// fork PR の workflow に OIDC トークンを既定で渡さない)ので二重に閉じる。
+
+// AccountPlaceholder は --account 未指定時に trust / boundary の ARN へ埋める。
+// そのままでは使えないので、利用者に置換を促す(コマンド側が stderr で注意する)。
+const AccountPlaceholder = "<ACCOUNT_ID>"
+
+const githubOIDCHost = "token.actions.githubusercontent.com"
+
+type TrustStatement struct {
+	Effect    string         `json:"Effect"`
+	Principal map[string]any `json:"Principal"`
+	Action    string         `json:"Action"`
+	Condition map[string]any `json:"Condition"`
+}
+
+type TrustPolicy struct {
+	Version   string           `json:"Version"`
+	Statement []TrustStatement `json:"Statement"`
+}
+
+type TrustOptions struct {
+	Repo    string // owner/name(必須)。OIDC の sub を repo:owner/name:... に固定する
+	Account string // AWS アカウント ID。空なら AccountPlaceholder を埋める
+	Branch  string // 既定ブランチ(schedule の reap 等が assume する)。空なら main
+}
+
+// BuildTrust は GitHub Actions OIDC 用の trust policy を組む。
+func BuildTrust(o TrustOptions) (TrustPolicy, error) {
+	if o.Repo == "" {
+		return TrustPolicy{}, errors.New("repo is required (--repo owner/name)")
+	}
+	if !strings.Contains(o.Repo, "/") || strings.HasPrefix(o.Repo, "/") || strings.HasSuffix(o.Repo, "/") {
+		return TrustPolicy{}, fmt.Errorf("repo must be owner/name: %q", o.Repo)
+	}
+	acct := o.Account
+	if acct == "" {
+		acct = AccountPlaceholder
+	}
+	branch := o.Branch
+	if branch == "" {
+		branch = "main"
+	}
+	providerArn := fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", acct, githubOIDCHost)
+	subs := []string{
+		fmt.Sprintf("repo:%s:pull_request", o.Repo),              // preview は pull_request イベント
+		fmt.Sprintf("repo:%s:ref:refs/heads/%s", o.Repo, branch), // reap の schedule / 手動実行
+	}
+	return TrustPolicy{
+		Version: "2012-10-17",
+		Statement: []TrustStatement{{
+			Effect:    "Allow",
+			Principal: map[string]any{"Federated": providerArn},
+			Action:    "sts:AssumeRoleWithWebIdentity",
+			Condition: map[string]any{
+				"StringEquals": map[string]any{
+					// aud を固定しないと別 workflow の混入を許す
+					githubOIDCHost + ":aud": "sts.amazonaws.com",
+					// sub をこのリポジトリの 2 コンテキストだけに固定 = fork ガード
+					githubOIDCHost + ":sub": subs,
+				},
+			},
+		}},
+	}, nil
+}
+
+// JSON はポリシーを整形済み JSON にする。
+func (t TrustPolicy) JSON() ([]byte, error) {
+	return marshal(t)
+}
+
+// --- permissions boundary(自己サーブの天井)----------------------------------
+//
+// boundary は「上限」。実効権限 = アイデンティティポリシー(Build の出力)∩ boundary。
+// なので base は Allow *:* で広く取り、Deny のカーブアウトで sandbox を封じる:
+// region 外・IAM 昇格・name_prefix 名前空間外の IAM 書込・組織/課金 を落とす。
+// デプロイロールにも、それが作る preview ロールにも同じ boundary を付ける前提
+// (作成ロールへの boundary 付与を Deny で強制 = 再帰的に封じる)(#53 ③)。
+
+type BoundaryOptions struct {
+	Prefix      string   // name_prefix。IAM リソースを絞る名前空間(必須)
+	Regions     []string // 許可する region(必須)。ここ以外の regional アクションを落とす
+	BoundaryArn string   // この boundary 自身の ARN。空なら Account から組む/placeholder
+	Account     string   // BoundaryArn 未指定時に ARN を組むためのアカウント ID
+}
+
+// BuildBoundary は自己サーブ用の permissions boundary を組む。
+func BuildBoundary(o BoundaryOptions) (Policy, error) {
+	if o.Prefix == "" {
+		return Policy{}, errors.New("prefix is required (name_prefix in kagerou.yaml, or --prefix)")
+	}
+	if len(o.Regions) == 0 {
+		return Policy{}, errors.New("at least one region is required (region in kagerou.yaml, or --region)")
+	}
+	boundaryArn := o.BoundaryArn
+	if boundaryArn == "" {
+		acct := o.Account
+		if acct == "" {
+			acct = AccountPlaceholder
+		}
+		boundaryArn = fmt.Sprintf("arn:aws:iam::%s:policy/%sboundary", acct, o.Prefix)
+	}
+	roleNamespace := fmt.Sprintf("arn:aws:iam::*:role/%s*", o.Prefix)
+
+	sts := []Statement{
+		{
+			// 天井の base。実際の絞り込みは Build のアイデンティティポリシー側。
+			Sid: "PermissiveBase", Effect: "Allow",
+			Action: []string{"*"}, Resource: "*",
+		},
+		{
+			// region ロック。IfExists にしないと region キーを持たない
+			// グローバルサービス(IAM/CloudFront/Route53 等)まで落ちる。
+			Sid: "DenyOutsideRegions", Effect: "Deny",
+			Action:    []string{"*"},
+			Resource:  "*",
+			Condition: map[string]any{"StringNotEqualsIfExists": map[string]any{"aws:RequestedRegion": o.Regions}},
+		},
+		{
+			// IAM 昇格の定番経路を塞ぐ(ユーザ/グループ/ポリシー版/IdP)。
+			Sid: "DenyIamPrivilegeEscalation", Effect: "Deny",
+			Action: []string{
+				"iam:CreateUser", "iam:CreateAccessKey", "iam:UpdateAccessKey",
+				"iam:CreateLoginProfile", "iam:UpdateLoginProfile",
+				"iam:AttachUserPolicy", "iam:PutUserPolicy", "iam:AddUserToGroup",
+				"iam:CreateGroup", "iam:AttachGroupPolicy", "iam:PutGroupPolicy",
+				"iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion",
+				"iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+				"iam:CreateSAMLProvider", "iam:UpdateSAMLProvider",
+			},
+			Resource: "*",
+		},
+		{
+			// IAM の書込は name_prefix のロールだけ。PassRole も同様(admin ロールを
+			// Lambda に渡す経路を塞ぐ)。boundary の外し(Delete...PermissionsBoundary)も含む。
+			Sid: "DenyRoleWritesOutsideNamespace", Effect: "Deny",
+			Action: []string{
+				"iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateAssumeRolePolicy",
+				"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+				"iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary", "iam:PassRole",
+			},
+			NotResource: roleNamespace,
+		},
+		{
+			// 作る role には必ずこの boundary を付けさせる = 子ロールも同じ天井に。
+			// これが無いと「boundary 無しの namespace ロール」を作って昇格できる。
+			Sid: "RequireBoundaryOnNewRoles", Effect: "Deny",
+			Action:    []string{"iam:CreateRole"},
+			Resource:  "*",
+			Condition: map[string]any{"StringNotEquals": map[string]any{"iam:PermissionsBoundary": boundaryArn}},
+		},
+		{
+			// 組織・アカウント・課金は preview の管轄外。触らせない。
+			Sid: "DenyOrgAccountBilling", Effect: "Deny",
+			Action:   []string{"organizations:*", "account:*", "aws-portal:*", "budgets:*", "ce:*"},
+			Resource: "*",
+		},
+	}
+	return Policy{Version: "2012-10-17", Statement: sts}, nil
 }

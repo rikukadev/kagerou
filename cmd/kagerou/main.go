@@ -54,6 +54,8 @@ Usage:
   kagerou init [--sashiki]           generate the onboarding files (interactive)
   kagerou validate [--name <name>]   check the template against the contract
   kagerou iam-policy [--with-*]      generate a least-privilege CI role policy
+  kagerou iam-policy --doc trust     generate the deploy role's OIDC trust policy
+  kagerou iam-policy --doc boundary  generate the self-serve permissions boundary
   kagerou up --name <name> [flags]   create/update an environment (idempotent)
   kagerou down --name <name>         delete an environment (idempotent)
   kagerou list                       list environments
