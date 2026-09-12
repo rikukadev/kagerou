@@ -44,8 +44,8 @@ type Config struct {
 	Hooks       Hooks             `yaml:"hooks"`
 }
 
-// Static は driver: static の設定。bucket は preview base の Output
-// (未設定なら実行時に Exports から解決する)。
+// Static は driver: static の設定。bucket は preview base スタックの
+// Output(kagerou-preview-base:…:bucket)を写す。
 type Static struct {
 	Dist   string `yaml:"dist"`
 	Bucket string `yaml:"bucket"`
@@ -111,6 +111,9 @@ func (c Config) validate() error {
 		}
 		if c.Static.Dist == "" {
 			return errors.New(`driver "static" requires static.dist (the built output directory)`)
+		}
+		if c.Static.Bucket == "" {
+			return errors.New(`driver "static" requires static.bucket (the preview base bucket output)`)
 		}
 	default:
 		return fmt.Errorf("unknown driver %q (\"stack\" or \"static\")", c.Driver)
