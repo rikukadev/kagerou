@@ -31,7 +31,7 @@ func Wait(ctx context.Context, baseURL, path string, timeout time.Duration) erro
 		if err != nil {
 			last = err.Error()
 		} else {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
