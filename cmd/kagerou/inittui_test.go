@@ -252,3 +252,63 @@ func TestWizardDomainQuestion(t *testing.T) {
 		t.Fatalf("no-zone plan = %+v", p0)
 	}
 }
+
+// AWS に触る前に必ず関門を通ること。ファイル生成と同じ enter で
+// 通り抜けられると「気づいたら課金されるものが作られていた」になる。
+func TestConfirmAWSGate(t *testing.T) {
+	dir := t.TempDir()
+	newModel := func() initModel {
+		p := scaffold.Params{Project: "demo", Region: "ap-northeast-1"}
+		det := scaffold.Detection{AccountID: "123456789012", Owner: "acme", Repo: "demo"}
+		m := newInitModel(dir, p, det, true)
+		return chooseSetup(m, setupRun)
+	}
+
+	t.Run("生成の enter では AWS に進まない", func(t *testing.T) {
+		m := answerAll(t, newModel())
+		if m.phase != phaseSummary {
+			t.Fatalf("phase = %d, want summary", m.phase)
+		}
+		m = step(t, m, enter) // ここでファイルが書かれる
+		if m.phase != phaseConfirmAWS {
+			t.Fatalf("phase = %d, want confirmAWS(生成の enter で適用まで走ってはいけない)", m.phase)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "kagerou.yaml")); err != nil {
+			t.Errorf("ファイルは生成されているべき: %v", err)
+		}
+	})
+
+	t.Run("断るとスクリプトが残り、AWS には触らない", func(t *testing.T) {
+		m := step(t, answerAll(t, newModel()), enter)
+		m = step(t, m, key('n'))
+		if m.phase != phaseResult {
+			t.Fatalf("phase = %d, want result", m.phase)
+		}
+		if m.setupMode != scaffold.SetupScript {
+			t.Errorf("setupMode = %v, 断ったらスクリプトを残すべき(選択肢を減らさない)", m.setupMode)
+		}
+		if _, err := os.Stat(filepath.Join(dir, scaffold.SetupScriptName)); err != nil {
+			t.Errorf("%s が無い: %v", scaffold.SetupScriptName, err)
+		}
+	})
+
+	// enter は「読み飛ばして進む」キーとして使ってきたので、ここでも
+	// 肯定に倒すと事故る。y を押したときだけ進む。
+	t.Run("enter は肯定ではない", func(t *testing.T) {
+		m := step(t, answerAll(t, newModel()), enter)
+		m = step(t, m, enter)
+		if m.phase == phaseApplying {
+			t.Fatal("enter で AWS に進んでしまった。肯定は y のみであるべき")
+		}
+	})
+
+	t.Run("見せる内容が実際に作るものと揃っている", func(t *testing.T) {
+		m := step(t, answerAll(t, newModel()), enter)
+		view := m.View()
+		for _, want := range []string{"demo-github-actions", "ECR repository", "費用の目安", "取り壊すとき", "[y/N]"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("確認画面に %q が無い", want)
+			}
+		}
+	})
+}

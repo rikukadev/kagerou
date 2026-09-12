@@ -394,6 +394,11 @@ func cmdInit(args []string, out *os.File) error {
 			return err
 		}
 	}
+	// 非対話では AWS に触らない(スクリプトを置くだけ)。それでも中身と費用は
+	// 出す — 実行するかどうかを決めるのに必要な情報は、TUI かどうかで変わらない。
+	if _, err := fmt.Fprintf(out, "\n%s\n", scaffold.BuildAWSPlan(p, det).Render()); err != nil {
+		return err
+	}
 	_, err = fmt.Fprint(out, scaffold.PlainSteps(p, det))
 	return err
 }

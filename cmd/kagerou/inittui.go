@@ -40,6 +40,10 @@ type question struct {
 const (
 	phaseAsk = iota
 	phaseSummary
+	// phaseConfirmAWS はファイル生成の**後**、AWS に触る直前に挟む関門。
+	// ファイルは消せばよいが、AWS のリソースは課金されるし手で消すしかない。
+	// 同じ enter で通してしまうと「気づいたら作られていた」になる。
+	phaseConfirmAWS
 	phaseApplying
 	phaseResult
 	phaseCanceled
@@ -69,6 +73,7 @@ type initModel struct {
 
 	result      scaffold.Result
 	runErr      error
+	plan        scaffold.AWSPlan
 	setupMode   scaffold.SetupMode
 	setupOutput string
 	setupErr    error
@@ -290,8 +295,11 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.phase = phaseResult
 					return m, nil
 				}
-				m.phase = phaseApplying
-				return m, applySetup(m.dir)
+				// ファイルはここまでで出来ている。AWS に触るのはこの先なので、
+				// 何が作られて幾らかかるかを見せてから y/n を取る。
+				m.plan = scaffold.BuildAWSPlan(p, m.det)
+				m.phase = phaseConfirmAWS
+				return m, nil
 			case setupScript:
 				if _, err := scaffold.WriteSetupScript(m.dir, p, m.det); err != nil {
 					m.setupErr, m.setupMode = err, scaffold.SetupSkip
@@ -303,6 +311,19 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setupMode = scaffold.SetupSkip
 			}
 			m.steps = scaffold.Steps(p, m.det, m.setupMode)
+			m.phase = phaseResult
+		}
+	case phaseConfirmAWS:
+		switch k.String() {
+		case "y", "Y":
+			m.phase = phaseApplying
+			return m, applySetup(m.dir)
+		case "n", "N", "enter":
+			// 断ってもスクリプトは残す。中身を読んでから自分で流せる。
+			// ここで消すと「確認したせいで選択肢が減る」ことになる。
+			m.setupMode = scaffold.SetupScript
+			m.result.Created = append(m.result.Created, scaffold.SetupScriptName)
+			m.steps = scaffold.Steps(m.params, m.det, m.setupMode)
 			m.phase = phaseResult
 		}
 	case phaseResult:
@@ -367,11 +388,17 @@ func (m initModel) View() string {
 		}
 		switch m.answer("setup") {
 		case setupRun:
-			b.WriteString("  + AWS setup: run now (role / ECR / variables)\n")
+			b.WriteString(tuiFaint.Render("  then: AWS setup — shown with costs before anything is created") + "\n")
 		case setupScript:
 			b.WriteString("  + AWS setup: " + scaffold.SetupScriptName + "\n")
 		}
-		b.WriteString("\n" + tuiHint.Render("enter generate · ← back · q cancel"))
+		b.WriteString("\n" + tuiHint.Render("enter generate files · ← back · q cancel"))
+	case phaseConfirmAWS:
+		b.WriteString(header)
+		b.WriteString(tuiTitle.Render("Files are written. Next: AWS") + "\n\n")
+		b.WriteString(m.plan.Render())
+		b.WriteString("\n" + tuiTitle.Render("Create these in AWS? [y/N]") + "\n")
+		b.WriteString(tuiHint.Render("y create now · n / enter save " + scaffold.SetupScriptName + " and stop · q cancel"))
 	case phaseApplying:
 		b.WriteString(header)
 		b.WriteString("Applying AWS setup (role / ECR / variables)…\n")
