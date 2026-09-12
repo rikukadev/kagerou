@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -394,4 +395,165 @@ func BuildBoundary(o BoundaryOptions) (Policy, error) {
 		},
 	}
 	return Policy{Version: "2012-10-17", Statement: sts}, nil
+}
+
+// --- execution role(preview の Lambda がランタイムで使う)-------------------
+//
+// deploy ロールとは別。触る ARN はアプリが宣言できる(#53 ①)。Policy Sentry の
+// 発想を軽量に持ち込み、宣言(--allow 'actions=resources')から最小ポリシーを組む。
+// ベースは Lambda 必須の logs、VPC 内なら ENI 管理。
+
+// AllowRule は「これらのアクションを、これらの ARN にだけ許す」1 文。
+type AllowRule struct {
+	Actions   []string
+	Resources []string
+}
+
+type ExecutionOptions struct {
+	Prefix string      // name_prefix。ロググループ ARN を絞る(必須)
+	VPC    bool        // VPC 内 Lambda(ENI 管理を足す)
+	Allow  []AllowRule // アプリが宣言した ARN + アクション
+}
+
+// BuildExecution は Lambda 実行ロールの最小権限ポリシーを組む。
+func BuildExecution(o ExecutionOptions) (Policy, error) {
+	if o.Prefix == "" {
+		return Policy{}, errors.New("prefix is required (name_prefix in kagerou.yaml, or --prefix)")
+	}
+	sts := []Statement{
+		{
+			// Lambda 必須。CreateLogGroup はグループ ARN、Put/CreateStream は
+			// ストリーム(:*)まで要るので両方を対象にする。
+			Sid: "Logs", Effect: "Allow",
+			Action: []string{"logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"},
+			Resource: []string{
+				fmt.Sprintf("arn:aws:logs:*:*:log-group:/aws/lambda/%s*", o.Prefix),
+				fmt.Sprintf("arn:aws:logs:*:*:log-group:/aws/lambda/%s*:*", o.Prefix),
+			},
+		},
+	}
+	if o.VPC {
+		sts = append(sts, Statement{
+			// VPC 内へ繋ぐ Lambda の ENI 管理。ENI 系は ARN で絞れない。
+			Sid: "VpcAccess", Effect: "Allow",
+			Action: []string{
+				"ec2:CreateNetworkInterface", "ec2:DeleteNetworkInterface", "ec2:DescribeNetworkInterfaces",
+			},
+			Resource: "*",
+		})
+	}
+	for i, a := range o.Allow {
+		if len(a.Actions) == 0 || len(a.Resources) == 0 {
+			return Policy{}, fmt.Errorf("--allow rule %d: actions and resources are both required", i+1)
+		}
+		sts = append(sts, Statement{
+			Sid: fmt.Sprintf("Allow%d", i+1), Effect: "Allow",
+			Action: a.Actions, Resource: a.Resources,
+		})
+	}
+	return Policy{Version: "2012-10-17", Statement: sts}, nil
+}
+
+// --- drift 検出(生成ポリシー vs 実際に attach されたポリシー)------------------
+//
+// #53 ④。CI で「生成される最小ポリシー」を基準に、実 attach ポリシーの
+// アクション差分を出す。**アクション集合の比較**で resource スコープの緩さは見ない
+// (`s3:*` のような広いアクションの混入を掴む用途)。Access Analyzer / Cloudsplaining の
+// 前段の軽いガードとして CI に置く。
+
+// PolicyAllowActions は Effect=Allow の Action 集合を返す(生成側)。
+func PolicyAllowActions(p Policy) map[string]bool {
+	set := map[string]bool{}
+	for _, s := range p.Statement {
+		if !strings.EqualFold(s.Effect, "Allow") {
+			continue
+		}
+		for _, a := range s.Action {
+			set[a] = true
+		}
+	}
+	return set
+}
+
+// attachedPolicy は実 attach ポリシー JSON をゆるく読む(Action は string でも配列でも可、
+// Statement 単体でも配列でも可)。
+type attachedPolicy struct {
+	Statement stmtList `json:"Statement"`
+}
+
+type stmtList []struct {
+	Effect string     `json:"Effect"`
+	Action stringList `json:"Action"`
+}
+
+func (l *stmtList) UnmarshalJSON(b []byte) error {
+	// Statement は配列が普通だが、単体オブジェクトも許容する。
+	trimmed := strings.TrimSpace(string(b))
+	if strings.HasPrefix(trimmed, "{") {
+		var one struct {
+			Effect string     `json:"Effect"`
+			Action stringList `json:"Action"`
+		}
+		if err := json.Unmarshal(b, &one); err != nil {
+			return err
+		}
+		*l = stmtList{one}
+		return nil
+	}
+	type raw stmtList
+	return json.Unmarshal(b, (*raw)(l))
+}
+
+// stringList は "s3:*" と ["s3:Get","s3:Put"] の両方を受ける。
+type stringList []string
+
+func (s *stringList) UnmarshalJSON(b []byte) error {
+	trimmed := strings.TrimSpace(string(b))
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return err
+		}
+		*s = arr
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(b, &one); err != nil {
+		return err
+	}
+	*s = []string{one}
+	return nil
+}
+
+// CheckDrift は生成ポリシー generated を基準に、attached の Allow アクションを比べる。
+// extra = attached にあって generated に無い(過剰権限の疑い)、
+// missing = generated が必要とするが attached に無い(壊れる恐れ)。いずれもソート済み。
+func CheckDrift(generated Policy, attached []byte) (extra, missing []string, err error) {
+	var ap attachedPolicy
+	if err := json.Unmarshal(attached, &ap); err != nil {
+		return nil, nil, fmt.Errorf("attached policy JSON: %w", err)
+	}
+	att := map[string]bool{}
+	for _, s := range ap.Statement {
+		if !strings.EqualFold(s.Effect, "Allow") {
+			continue
+		}
+		for _, a := range s.Action {
+			att[a] = true
+		}
+	}
+	gen := PolicyAllowActions(generated)
+	for a := range att {
+		if !gen[a] {
+			extra = append(extra, a)
+		}
+	}
+	for a := range gen {
+		if !att[a] {
+			missing = append(missing, a)
+		}
+	}
+	sort.Strings(extra)
+	sort.Strings(missing)
+	return extra, missing, nil
 }
