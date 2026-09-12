@@ -188,3 +188,25 @@ func TestContentType(t *testing.T) {
 		}
 	}
 }
+
+func TestClientForResolvesBucketRegion(t *testing.T) {
+	d, ctx := testDriver(t)
+	bucket := "kagerou-test-static-region"
+	makeBucket(t, d, ctx, bucket)
+
+	cli, err := d.clientFor(ctx, bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cli == nil {
+		t.Fatal("client should not be nil")
+	}
+	// 2 回目はキャッシュから同じクライアントが返る
+	cli2, err := d.clientFor(ctx, bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cli != cli2 {
+		t.Fatal("client should be cached per region")
+	}
+}
