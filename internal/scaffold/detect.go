@@ -36,6 +36,18 @@ type BaseInfo struct {
 	Bucket string
 }
 
+// applyBaseKV は base 検出の 1 キーを Bases に畳み込む。
+func applyBaseKV(bases map[string]BaseInfo, project, field, value string) {
+	b := bases[project]
+	switch field {
+	case "domain":
+		b.Domain = value
+	case "bucket":
+		b.Bucket = value
+	}
+	bases[project] = b
+}
+
 // Base は project の preview base を返す。project 用が無ければ、旧アカウント
 // 単位 base(Export に project セグメントが無い頃のもの)に fallback する。
 func (d Detection) Base(project string) (BaseInfo, bool) {
@@ -102,36 +114,45 @@ func Detect(dir string) Detection {
 			}
 		}
 	}
-	// preview base(us-east-1 固定)の Exports から既存基盤を検出。
-	// per-app 形式 kagerou-preview-base:<project>:<field> をプロジェクト別に集め、
-	// 旧アカウント単位形式 kagerou-preview-base:<field> は key "" に入れる(fallback 用)。
+	// preview base(us-east-1 固定)の検出。真実の源は SSM のデータ契約
+	// /kagerou/base/<project>/{domain,bucket,...}(CONTRACT §9)。ベースの IaC が
+	// CFN でも Terraform でも同じキーを書けばよい(ツール非依存、#75)。
+	// SSM を書かない頃の CFN Exports(kagerou-preview-base:*)には fallback する。
+	d.Bases = map[string]BaseInfo{}
 	if out, err := execCommand(ctx, "aws", "cloudformation", "list-exports", "--region", "us-east-1",
 		"--query", "Exports[?starts_with(Name, `kagerou-preview-base`)].[Name,Value]", "--output", "json"); err == nil {
 		var kv [][]string
 		if json.Unmarshal(out, &kv) == nil {
-			d.Bases = map[string]BaseInfo{}
 			for _, e := range kv {
 				if len(e) != 2 {
 					continue
 				}
 				parts := strings.Split(e[0], ":")
-				var project, field string
 				switch len(parts) {
-				case 2: // 旧: kagerou-preview-base:domain
-					project, field = "", parts[1]
+				case 2: // 旧: kagerou-preview-base:domain(アカウント単位、key "")
+					applyBaseKV(d.Bases, "", parts[1], e[1])
 				case 3: // per-app: kagerou-preview-base:todo:domain
-					project, field = parts[1], parts[2]
-				default:
+					applyBaseKV(d.Bases, parts[1], parts[2], e[1])
+				}
+			}
+		}
+	}
+	// SSM は Exports より後に読む = 同じ project では SSM が勝つ(契約が真実の源)
+	if out, err := execCommand(ctx, "aws", "ssm", "get-parameters-by-path", "--path", "/kagerou/base",
+		"--recursive", "--region", "us-east-1",
+		"--query", "Parameters[].[Name,Value]", "--output", "json"); err == nil {
+		var kv [][]string
+		if json.Unmarshal(out, &kv) == nil {
+			for _, e := range kv {
+				if len(e) != 2 {
 					continue
 				}
-				b := d.Bases[project]
-				switch field {
-				case "domain":
-					b.Domain = e[1]
-				case "bucket":
-					b.Bucket = e[1]
+				// /kagerou/base/<project>/<field>
+				parts := strings.Split(strings.TrimPrefix(e[0], "/"), "/")
+				if len(parts) != 4 || parts[0] != "kagerou" || parts[1] != "base" {
+					continue
 				}
-				d.Bases[project] = b
+				applyBaseKV(d.Bases, parts[2], parts[3], e[1])
 			}
 		}
 	}

@@ -126,6 +126,28 @@ Resources:
         DNSName: !GetAtt Distribution.DomainName
         HostedZoneId: Z2FDTNDATAQYW2 # CloudFront の固定 hosted zone
 
+  # ベース↔環境のデータ契約(CONTRACT §9)。kagerou init はこの SSM キーで
+  # 既存ベースを検出する。ベースを CFN 以外(Terraform 等)で作る場合も、
+  # 同じキーを書けば kagerou からは同じに見える(ツール非依存)。
+  DomainParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/domain"
+      Type: String
+      Value: !Ref DomainName
+  BucketParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/bucket"
+      Type: String
+      Value: !Ref Bucket
+  DistributionParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/distribution"
+      Type: String
+      Value: !Ref Distribution
+
 Outputs:
   Domain:
     Value: !Ref DomainName
