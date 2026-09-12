@@ -67,8 +67,11 @@ gh variable set ECR_REPOSITORY --body "${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.co
 
 {{- if .SetupBase}}
 
-# Preview base — shared CloudFront + wildcard certificate + DNS.
-# One-time per account. Must live in us-east-1 (CloudFront certificate constraint).
+# Preview base — this app's shared CloudFront + wildcard certificate + DNS.
+# One-time per app, in us-east-1 (CloudFront certificate constraint).
+# The template lives in this repository (deploy/preview-base.yaml), so anyone
+# on the repo can update the base later by re-running this deploy (idempotent).
+PROJECT="{{.Project}}"
 DOMAIN="{{.Domain}}"
 PARENT="${DOMAIN#*.}"
 ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARENT" \
@@ -79,9 +82,9 @@ if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ]; then
 fi
 echo "deploying preview base for *.${DOMAIN} (takes ~15 min: certificate validation + CloudFront)"
 aws cloudformation deploy --region us-east-1 \
-  --stack-name kagerou-preview-base \
+  --stack-name "kagerou-preview-base-${PROJECT}" \
   --template-file deploy/preview-base.yaml \
-  --parameter-overrides DomainName="$DOMAIN" HostedZoneId="$ZONE_ID"
+  --parameter-overrides Project="$PROJECT" DomainName="$DOMAIN" HostedZoneId="$ZONE_ID"
 {{- end}}
 
 echo "done:"
