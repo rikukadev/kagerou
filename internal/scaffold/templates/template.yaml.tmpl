@@ -22,13 +22,21 @@ Resources:
     Type: AWS::Serverless::Function
     Metadata:
       DockerContext: .
+{{- if .HasDockerfile}}
+      Dockerfile: Dockerfile # 既存の Dockerfile(LWA 拡張入り)をそのまま使う
+{{- else}}
       Dockerfile: Dockerfile # TODO: run your app as an HTTP server wrapped by LWA
+{{- end}}
       DockerTag: !Ref EnvKagerouEnv
     Properties:
       PackageType: Image
       Environment:
         Variables:
+{{- if .Port}}
+          AWS_LWA_PORT: "{{.Port}}" # detected from your Dockerfile/compose
+{{- else}}
           AWS_LWA_PORT: "3000" # TODO: match your app's listen port
+{{- end}}
           # Implement /healthz to avoid 502s before the server is ready
           AWS_LWA_READINESS_CHECK_PATH: /healthz
           KAGEROU_ENV: !Ref EnvKagerouEnv
