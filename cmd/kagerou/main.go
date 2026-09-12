@@ -31,6 +31,8 @@ func run(args []string, out *os.File) error {
 		return cmdDown(args[1:], out)
 	case "url":
 		return cmdURL(args[1:], out)
+	case "init":
+		return cmdInit(args[1:], out)
 	case "list":
 		return cmdList(args[1:], out)
 	case "reap":
@@ -45,6 +47,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `kagerou — ephemeral environments on AWS
 
 Usage:
+  kagerou init [--sashiki]           導入ファイル一式を生成する
   kagerou up --name <name> [flags]   環境を作成/更新する(冪等)
   kagerou down --name <name>         環境を削除する(冪等)
   kagerou list                       環境の一覧
