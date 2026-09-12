@@ -258,6 +258,9 @@ func cmdInit(args []string, out *os.File) error {
 		return fmt.Errorf("project name does not fit the naming rule (set --project): %w", err)
 	}
 
+	// プリフライト: 検出の前に資格情報を確認し、無ければログインに誘導
+	ensureAuth(!*plain && term.IsTerminal(int(out.Fd())), os.Stdin, os.Stderr)
+
 	det := scaffold.Detect(*dir)
 	if *region == "ap-northeast-1" && det.Region != "" { // フラグ未指定なら検出値を使う
 		*region = det.Region
