@@ -35,6 +35,7 @@ type Config struct {
 
 type Hooks struct {
 	PreUp    string `yaml:"pre_up"`
+	PostUp   string `yaml:"post_up"` // 環境作成後の仕上げ。Outputs が KAGEROU_* で届く(CONTRACT §7)
 	PostDown string `yaml:"post_down"`
 }
 
@@ -163,6 +164,7 @@ func (c Config) ExpandName(name string) Config {
 		}
 	}
 	out.Hooks.PreUp = strings.ReplaceAll(c.Hooks.PreUp, "{name}", name)
+	out.Hooks.PostUp = strings.ReplaceAll(c.Hooks.PostUp, "{name}", name)
 	out.Hooks.PostDown = strings.ReplaceAll(c.Hooks.PostDown, "{name}", name)
 	return out
 }

@@ -118,7 +118,7 @@ func cmdUp(args []string, out *os.File) error {
 		return err
 	}
 	// pre_up 失敗は up を止める(DESIGN §8)
-	if err := hooks.Run(ctx, "pre_up", cfg.Hooks.PreUp); err != nil {
+	if err := hooks.Run(ctx, "pre_up", cfg.Hooks.PreUp, map[string]string{"KAGEROU_NAME": f.name}); err != nil {
 		return err
 	}
 	info, err := drv.Up(ctx, stack.UpInput{
@@ -136,7 +136,27 @@ func cmdUp(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	// post_up: 環境作成後の仕上げ(config.json 生成・静的成果物の配置など)。
+	// 失敗は up の失敗にする — 環境はあるが仕上がっていない状態を green にしない
+	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnvForUp(f.name, info)); err != nil {
+		return err
+	}
 	return printEnvironment(out, f.output, f.name, info)
+}
+
+// hookEnvForUp は post_up に渡す KAGEROU_* 環境変数(CONTRACT §7)。
+func hookEnvForUp(name string, info *stack.Info) map[string]string {
+	env := map[string]string{"KAGEROU_NAME": name}
+	if u, ok := stack.URL(info.Outputs); ok {
+		env["KAGEROU_URL"] = u
+	}
+	for k, v := range info.Outputs {
+		env["KAGEROU_OUTPUT_"+strings.ToUpper(k)] = v
+	}
+	if b, err := json.Marshal(environmentJSON(name, info)); err == nil {
+		env["KAGEROU_ENVIRONMENT_JSON"] = string(b)
+	}
+	return env
 }
 
 func cmdDown(args []string, _ *os.File) error {
@@ -156,7 +176,7 @@ func cmdDown(args []string, _ *os.File) error {
 		return err
 	}
 	// post_down 失敗は記録して続行(環境自体は消えている)
-	if err := hooks.Run(ctx, "post_down", cfg.Hooks.PostDown); err != nil {
+	if err := hooks.Run(ctx, "post_down", cfg.Hooks.PostDown, map[string]string{"KAGEROU_NAME": f.name}); err != nil {
 		fmt.Fprintf(os.Stderr, "kagerou: warning: %v\n", err)
 	}
 	return nil
@@ -319,7 +339,7 @@ func cmdReap(args []string, out *os.File) error {
 		}
 		// reap でも post_down を呼ぶ(呼ばないと sashiki 側に孤児が残る経路になる)
 		if hook := cfg.ExpandName(name).Hooks.PostDown; hook != "" {
-			if err := hooks.Run(ctx, "post_down", hook); err != nil {
+			if err := hooks.Run(ctx, "post_down", hook, map[string]string{"KAGEROU_NAME": name}); err != nil {
 				fmt.Fprintf(os.Stderr, "kagerou: warning: %v\n", err)
 			}
 		}

@@ -85,3 +85,27 @@ CFN Outputs のキー `KagerouUrl`(優先)または `PreviewUrl` を環境 URL �
 Backstage 等からの読み取りは `kagerou serve`(読み取り専用 HTTP、Lambda function
 URL 想定)を提供予定。書き込み(down / TTL 延長)は AWS を直接叩かず、CI の
 `workflow_dispatch` 経由で kagerou を起動する。
+
+## 7. Hooks に渡る環境変数
+
+kagerou.yaml の hooks(`pre_up` / `post_up` / `post_down`)は `sh -c` で実行され、
+以下の環境変数を受け取る。以後の変更は追加のみ。
+
+| 変数 | 中身 | 渡るフック |
+|---|---|---|
+| `KAGEROU_NAME` | 環境名 | すべて |
+| `KAGEROU_URL` | 環境 URL(§5 の Output。無ければ未設定) | post_up |
+| `KAGEROU_OUTPUT_<KEY>` | 任意の CFN Output。キーは大文字化(`ApiUrl` → `KAGEROU_OUTPUT_APIURL`) | post_up |
+| `KAGEROU_ENVIRONMENT_JSON` | §3 の Environment JSON そのもの | post_up |
+
+失敗時の扱い: `pre_up` / `post_up` の失敗は up を失敗させる(post_up は
+「環境はあるが仕上がっていない」を green にしないため)。`post_down` の失敗は
+記録して続行する。1 フックの実行上限は 10 分。
+
+```yaml
+# 例: SPA の config.json を生成して静的成果物を配置する(3 層構成の定型)
+hooks:
+  post_up: |
+    printf '{"apiBaseUrl":"%s"}' "$KAGEROU_OUTPUT_APIURL" > web/dist/config.json
+    aws s3 sync web/dist/ "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/" --delete
+```
