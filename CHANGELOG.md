@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.0](https://github.com/rikukadev/kagerou/compare/v0.5.0...v0.6.0) (2026-09-12)
+
+
+### Features
+
+* add kagerou serve (read-only HTTP for environments) ([#16](https://github.com/rikukadev/kagerou/issues/16)) ([#66](https://github.com/rikukadev/kagerou/issues/66)) ([e04868e](https://github.com/rikukadev/kagerou/commit/e04868e72dd2e58a44cd8d531136b2506af3f888))
+* base↔env data contract over SSM + Terraform reference base ([#75](https://github.com/rikukadev/kagerou/issues/75)) ([#82](https://github.com/rikukadev/kagerou/issues/82)) ([95e82c1](https://github.com/rikukadev/kagerou/commit/95e82c1da6387599c4aa532679a77e23286c2a57))
+* generate OIDC trust policy and permissions boundary (iam-policy --doc) ([#63](https://github.com/rikukadev/kagerou/issues/63)) ([d4d4fa1](https://github.com/rikukadev/kagerou/commit/d4d4fa18e84d915ef25c43f86fc90131b8856691))
+* iam-policy execution role and drift check (completes [#53](https://github.com/rikukadev/kagerou/issues/53)) ([#69](https://github.com/rikukadev/kagerou/issues/69)) ([954d0ce](https://github.com/rikukadev/kagerou/commit/954d0ce9f150c3d5319fbb03aeb12b1e37398db4))
+* **init:** AWS に作る前に構成と費用を見せて y/n を取る ([#85](https://github.com/rikukadev/kagerou/issues/85)) ([31134e5](https://github.com/rikukadev/kagerou/commit/31134e527b25b013d2fe54378d22ab531f72846b))
+* **init:** preflight auth check with in-place login ([#73](https://github.com/rikukadev/kagerou/issues/73)) ([0352824](https://github.com/rikukadev/kagerou/commit/0352824c7062469444a1aceb7a30d2a574dbb457))
+* make the preview base per-app ({name}.{project}.&lt;zone&gt;) ([#77](https://github.com/rikukadev/kagerou/issues/77)) ([9844d1a](https://github.com/rikukadev/kagerou/commit/9844d1a41e68f8d06896c2972c581e4350669e7f))
+* reject up onto another user's environment (kagerou:owner) ([#78](https://github.com/rikukadev/kagerou/issues/78)) ([5c9c530](https://github.com/rikukadev/kagerou/commit/5c9c5309c5fa22443886bf3698180ad8a13c04ca))
+* scaffold a framework-specific Dockerfile in init ([#61](https://github.com/rikukadev/kagerou/issues/61)) ([#67](https://github.com/rikukadev/kagerou/issues/67)) ([a9a8756](https://github.com/rikukadev/kagerou/commit/a9a875616f8c96dde38781762180c892b84a3a3a))
+* stream stack progress during up/down waits ([#47](https://github.com/rikukadev/kagerou/issues/47)) ([#65](https://github.com/rikukadev/kagerou/issues/65)) ([b119bf5](https://github.com/rikukadev/kagerou/commit/b119bf595161d30bf47712cf1237461f00bfd480))
+
+
+### Bug Fixes
+
+* chip away at v0.3 review follow-ups ([#51](https://github.com/rikukadev/kagerou/issues/51)) ([#68](https://github.com/rikukadev/kagerou/issues/68)) ([8043435](https://github.com/rikukadev/kagerou/commit/804343511146a2393d7ea93e9ad9c2820287b592))
+* **static:** resolve the bucket's region before uploading ([#83](https://github.com/rikukadev/kagerou/issues/83)) ([e8a5a62](https://github.com/rikukadev/kagerou/commit/e8a5a6272adb155ba1a83a812ee9e08965c083c8))
+* **static:** run post_up before the content sync ([#84](https://github.com/rikukadev/kagerou/issues/84)) ([37bba56](https://github.com/rikukadev/kagerou/commit/37bba568f4fee6225be8bb0efdd9660797505b7e))
+
+
+### Documentation
+
+* README刷新(ECSペルソナ)+ 配信基盤/static driver 設計案 ([#62](https://github.com/rikukadev/kagerou/issues/62)) ([389194e](https://github.com/rikukadev/kagerou/commit/389194e69ffd38a12f5daf90624dde3d5604f054))
+
 ## [0.5.0](https://github.com/rikukadev/kagerou/compare/v0.4.0...v0.5.0) (2026-09-12)
 
 
