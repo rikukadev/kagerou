@@ -13,6 +13,7 @@ import (
 	"github.com/rikukadev/kagerou/internal/config"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
 	"github.com/rikukadev/kagerou/internal/hooks"
+	"github.com/rikukadev/kagerou/internal/readiness"
 	"github.com/rikukadev/kagerou/internal/scaffold"
 	"github.com/rikukadev/kagerou/internal/validate"
 	"golang.org/x/term"
@@ -141,6 +142,24 @@ func cmdUp(args []string, out *os.File) error {
 	// 失敗は up の失敗にする — 環境はあるが仕上がっていない状態を green にしない
 	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnvForUp(f.name, info)); err != nil {
 		return err
+	}
+	// readiness: アプリが応答するまで ready にしない(#26)。post_up の後に見るのは
+	// SPA の配置などが済んでから初めて 200 が返る構成があるため
+	if cfg.ReadinessPath != "" {
+		u, ok := info.EnvironmentURL()
+		if !ok {
+			return fmt.Errorf("readiness_path is set but the environment has no URL (set url_template or a KagerouUrl output)")
+		}
+		timeout := readiness.DefaultTimeout
+		if cfg.ReadinessTimeout != "" {
+			timeout, _ = time.ParseDuration(cfg.ReadinessTimeout) // 妥当性は config.Load 済み
+		}
+		if err := readiness.Wait(ctx, u, cfg.ReadinessPath, timeout); err != nil {
+			// スタックは出来ている(down の対象ではある)ので failed にはせず、
+			// ready でもない "starting" として情報を返してから失敗させる
+			_ = printEnvironmentState(out, f.output, f.name, info, "starting")
+			return fmt.Errorf("environment is up but %v", err)
+		}
 	}
 	return printEnvironment(out, f.output, f.name, info)
 }
@@ -471,10 +490,19 @@ func environmentJSON(name string, info *stack.Info) map[string]any {
 }
 
 func printEnvironment(out *os.File, format, name string, info *stack.Info) error {
+	return printEnvironmentState(out, format, name, info, "")
+}
+
+func printEnvironmentState(out *os.File, format, name string, info *stack.Info, stateOverride string) error {
+	env := environmentJSON(name, info)
+	if stateOverride != "" {
+		env["state"] = stateOverride
+	}
 	if format == "json" {
-		return json.NewEncoder(out).Encode(environmentJSON(name, info))
+		return json.NewEncoder(out).Encode(env)
 	}
 	u, _ := info.EnvironmentURL()
-	_, err := fmt.Fprintf(out, "%s\t%s\t%s\n", name, info.State(), u)
+	state, _ := env["state"].(string)
+	_, err := fmt.Fprintf(out, "%s\t%s\t%s\n", name, state, u)
 	return err
 }
