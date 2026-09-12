@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  実 AWS E2E の 3 層側フィクスチャ(静的配信 + Lambda + HttpApi)。
+  kagerou-3tier-demo の形を最小化したもので、アプリとしての中身は無い。
+
+  関数のコードは InlineCode にしてある。ビルドと sam package を挟まずに
+  **Transform は通る**ので、E2E の所要が縮む一方で、SAM の Transform 展開と
+  そこに要る IAM(CreateChangeSet の対象に Transform 自体が入る)は検証できる。
+
+Parameters:
+  # CONTRACT §4: --env の KEY は Env<Key> パラメータへ写る。
+  EnvKagerouEnv:
+    Type: String
+    Description: 環境名。kagerou.yaml の env で注入される
+  # --env が実際にアプリへ届いているかを応答で確かめるための値。
+  EnvGreeting:
+    Type: String
+    Default: ""
+
+Resources:
+  # 静的配信。ここが「環境ごとに作られて環境ごとに消える」ことを確かめる。
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 256
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+          GREETING: !Ref EnvGreeting
+      InlineCode: |
+        exports.handler = async () => ({
+          statusCode: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            env: process.env.KAGEROU_ENV || "",
+            greeting: process.env.GREETING || "",
+          }),
+        });
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+
+Outputs:
+  # kagerou はこのキーを環境 URL として拾う(CONTRACT §5)。
+  # 利用者が最初に開くのは静的配信側なのでこちらを返す。
+  KagerouUrl:
+    Value: !GetAtt WebBucket.WebsiteURL
+  ApiUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  WebBucketName:
+    Description: post_up がここへ index.html を置く
+    Value: !Ref WebBucket

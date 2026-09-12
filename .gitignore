@@ -2,3 +2,7 @@ bin/
 dist/
 *.log
 .DS_Store
+
+# 実 AWS E2E のビルド成果物
+.aws-sam/
+packaged-ssr.yaml

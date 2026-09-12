@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  実 AWS E2E の SSR 側フィクスチャ(コンテナ配布の Lambda + HttpApi)。
+  kagerou-ssr-demo の形を最小化したもの。
+
+  3 層側と違ってイメージを ECR へ push する経路が入るので、
+  sam package が ImageUri を書き換えたテンプレートを kagerou が受け取る
+  形になる。ここが壊れると「手元では動くが CI で上がらない」になる。
+
+Parameters:
+  EnvKagerouEnv:
+    Type: String
+  EnvGreeting:
+    Type: String
+    Default: ""
+
+Resources:
+  AppFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Timeout: 10
+      MemorySize: 512
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+          GREETING: !Ref EnvGreeting
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+    Metadata:
+      # DockerContext はテンプレートの場所からの相対。リポジトリルートからでは
+      # ないので "." が正しい(ここを間違えると sam build が Dockerfile を
+      # 見つけられず、原因がテンプレート側だと気づきにくい)。
+      DockerContext: .
+      Dockerfile: Dockerfile
+      DockerTag: latest
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+
+Outputs:
+  # SSR 単体構成は 1 つの入口で全部受けるので、API がそのまま環境 URL。
+  KagerouUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
