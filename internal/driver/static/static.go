@@ -98,16 +98,15 @@ type UpInput struct {
 	Dist          string // 配置するローカルディレクトリ
 }
 
-// Up はメタスタックを作り(タグの担い手)、dist を {name}/ プレフィックスへ同期する。
-func (d *Driver) Up(ctx context.Context, in UpInput) (*stack.Info, error) {
+// UpMeta はメタスタックだけを作る(タグと URL の担い手)。内容の同期は Sync で、
+// 間に post_up を挟めるように分けてある(static は「同期 = 公開」なので、
+// 環境固有のファイル生成は同期より前でなければ反映されない)。
+func (d *Driver) UpMeta(ctx context.Context, in UpInput) (*stack.Info, error) {
 	if in.Bucket == "" {
 		return nil, errors.New("static driver needs a bucket (set static.bucket, or deploy the preview base)")
 	}
 	if in.Dist == "" {
 		return nil, errors.New("static driver needs a dist directory (set static.dist)")
-	}
-	if fi, err := os.Stat(in.Dist); err != nil || !fi.IsDir() {
-		return nil, fmt.Errorf("static.dist %q is not a directory (build first)", in.Dist)
 	}
 
 	si := in.UpInput
@@ -116,7 +115,12 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*stack.Info, error) {
 	if si.URL != "" {
 		si.Env["KAGEROU_URL"] = si.URL
 	}
-	info, err := d.stack.Up(ctx, si)
+	return d.stack.Up(ctx, si)
+}
+
+// Up は UpMeta + Sync(フックを挟まない呼び出し用)。
+func (d *Driver) Up(ctx context.Context, in UpInput) (*stack.Info, error) {
+	info, err := d.UpMeta(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +143,9 @@ func (d *Driver) Down(ctx context.Context, stackName, bucket, name string) error
 
 // Sync は dist を s3://bucket/name/ に同期する(ローカルに無いものは消す)。
 func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
+	if fi, err := os.Stat(dist); err != nil || !fi.IsDir() {
+		return fmt.Errorf("static.dist %q is not a directory (build first)", dist)
+	}
 	cli, err := d.clientFor(ctx, bucket)
 	if err != nil {
 		return err

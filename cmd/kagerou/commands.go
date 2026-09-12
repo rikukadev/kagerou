@@ -220,7 +220,7 @@ func upStatic(out *os.File, f upFlags, cfg config.Config) error {
 	if err := hooks.Run(ctx, "pre_up", cfg.Hooks.PreUp, map[string]string{"KAGEROU_NAME": f.name}); err != nil {
 		return err
 	}
-	info, err := drv.Up(ctx, staticdrv.UpInput{
+	in := staticdrv.UpInput{
 		UpInput: stack.UpInput{
 			StackName: cfg.StackName(f.name),
 			Name:      f.name,
@@ -233,11 +233,18 @@ func upStatic(out *os.File, f upFlags, cfg config.Config) error {
 		},
 		Bucket: cfg.Static.Bucket,
 		Dist:   cfg.Static.Dist,
-	})
+	}
+	// static は「同期 = 公開」なので、post_up(環境固有ファイルの生成)は
+	// 同期より前に走らせないと反映されない。URL は url_template で作成前に
+	// 確定しているので、フックに渡す情報は揃っている
+	info, err := drv.UpMeta(ctx, in)
 	if err != nil {
 		return err
 	}
 	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnv(f.name, info)); err != nil {
+		return err
+	}
+	if err := drv.Sync(ctx, in.Bucket, in.Name, in.Dist); err != nil {
 		return err
 	}
 	return printEnvironment(out, f.output, f.name, info)

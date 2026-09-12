@@ -210,3 +210,36 @@ func TestClientForResolvesBucketRegion(t *testing.T) {
 		t.Fatal("client should be cached per region")
 	}
 }
+
+func TestUpMetaThenSyncOrder(t *testing.T) {
+	d, ctx := testDriver(t)
+	bucket := "kagerou-test-static-order"
+	makeBucket(t, d, ctx, bucket)
+	stackName := "kagerou-test-static-order-stack"
+	t.Cleanup(func() { _ = d.Down(ctx, stackName, bucket, "pr-2") })
+
+	// dist はまだ空(hook がこれから書く想定)
+	dist := t.TempDir()
+	in := UpInput{
+		UpInput: stack.UpInput{StackName: stackName, Name: "pr-2", Project: "spa", URL: "https://pr-2.spa.example.test"},
+		Bucket:  bucket, Dist: dist,
+	}
+	// UpMeta は dist が空でも通る(タグと URL の担い手を先に作る)
+	info, err := d.UpMeta(ctx, in)
+	if err != nil {
+		t.Fatalf("UpMeta with empty dist should succeed: %v", err)
+	}
+	if u, _ := info.EnvironmentURL(); u != "https://pr-2.spa.example.test" {
+		t.Fatalf("URL should be known before sync: %q", u)
+	}
+	// ここが post_up 相当 — 環境固有ファイルを書いてから同期する
+	if err := os.WriteFile(filepath.Join(dist, "config.json"), []byte(`{"env":"pr-2"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Sync(ctx, bucket, "pr-2", dist); err != nil {
+		t.Fatal(err)
+	}
+	if got := keysUnder(t, d, ctx, bucket, "pr-2"); len(got) != 1 || got[0] != "pr-2/config.json" {
+		t.Fatalf("hook-generated file should be synced: %v", got)
+	}
+}
