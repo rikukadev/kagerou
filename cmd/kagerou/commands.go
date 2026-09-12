@@ -14,6 +14,7 @@ import (
 	"github.com/rikukadev/kagerou/internal/driver/stack"
 	"github.com/rikukadev/kagerou/internal/hooks"
 	"github.com/rikukadev/kagerou/internal/scaffold"
+	"github.com/rikukadev/kagerou/internal/validate"
 	"golang.org/x/term"
 )
 
@@ -323,6 +324,65 @@ func cmdReap(args []string, out *os.File) error {
 			}
 		}
 		if _, err := fmt.Fprintf(out, "reaped\t%s\t(expired %s)\n", name, info.Tags[stack.TagExpiresAt]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cmdValidate(args []string, out *os.File) error {
+	f, err := parseUpFlags("validate", args)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.LoadOrDefault(f.cfgPath) // driver / ttl / 未知キーはここで落ちる
+	if err != nil {
+		return err
+	}
+	if f.template != "" {
+		cfg.Template = f.template
+	}
+	// name があれば {name} 展開後の env で検査(dev@{name} 等を実値に)
+	name := f.name
+	if name != "" {
+		cfg = cfg.ExpandName(name)
+	}
+	for k, v := range f.env {
+		if cfg.Env == nil {
+			cfg.Env = map[string]string{}
+		}
+		cfg.Env[k] = v
+	}
+
+	// packaged.yaml(ビルド後の成果物)が無ければ、書いている素の template.yaml を見る
+	tpl := cfg.Template
+	if _, err := os.Stat(tpl); err != nil {
+		if _, err2 := os.Stat("template.yaml"); err2 == nil {
+			fmt.Fprintf(os.Stderr, "kagerou: note: %s not found, validating template.yaml instead\n", tpl)
+			tpl = "template.yaml"
+		}
+	}
+
+	findings, err := validate.Run(cfg, tpl, name)
+	if err != nil {
+		return err
+	}
+	for _, fd := range findings {
+		if _, err := fmt.Fprintf(out, "%s\t%s\n", fd.Level, fd.Msg); err != nil {
+			return err
+		}
+	}
+	if validate.HasErrors(findings) {
+		errs := 0
+		for _, fd := range findings {
+			if fd.Level == validate.Error {
+				errs++
+			}
+		}
+		return fmt.Errorf("validation failed: %d error(s)", errs)
+	}
+	if len(findings) == 0 {
+		if _, err := fmt.Fprintln(out, "ok\ttemplate satisfies the contract"); err != nil {
 			return err
 		}
 	}

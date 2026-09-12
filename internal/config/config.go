@@ -122,6 +122,36 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// NormalizeName は環境名の制約(CONTRACT §2)を満たす候補に変換する。
+// 例: "feature/Foo_Bar" → "feature-foo-bar"。何も残らなければ空を返す。
+func NormalizeName(raw string) string {
+	var b []rune
+	for _, r := range strings.ToLower(raw) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b = append(b, r)
+		default:
+			if len(b) > 0 && b[len(b)-1] != '-' {
+				b = append(b, '-')
+			}
+		}
+	}
+	// 先頭は小文字英字: それ以外を削る
+	for len(b) > 0 && !(b[0] >= 'a' && b[0] <= 'z') {
+		b = b[1:]
+	}
+	for len(b) > 0 && b[len(b)-1] == '-' {
+		b = b[:len(b)-1]
+	}
+	if len(b) > 63 {
+		b = b[:63]
+		for len(b) > 0 && b[len(b)-1] == '-' {
+			b = b[:len(b)-1]
+		}
+	}
+	return string(b)
+}
+
 // ExpandName は env 値と hooks 内の {name} を展開した複製を返す。
 // 展開対象を値側に限るのは、キーまで動的になると追えなくなるため。
 func (c Config) ExpandName(name string) Config {
