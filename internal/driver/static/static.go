@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -44,8 +45,10 @@ Outputs:
 `
 
 type Driver struct {
-	stack *stack.Driver
-	s3    *s3.Client
+	stack    *stack.Driver
+	s3       *s3.Client // 既定 region のクライアント(バケット region の解決に使う)
+	cfg      aws.Config
+	byRegion map[string]*s3.Client
 }
 
 func New(ctx context.Context, region string) (*Driver, error) {
@@ -61,7 +64,32 @@ func New(ctx context.Context, region string) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Driver{stack: sd, s3: s3.NewFromConfig(cfg)}, nil
+	return &Driver{
+		stack: sd, s3: s3.NewFromConfig(cfg), cfg: cfg,
+		byRegion: map[string]*s3.Client{},
+	}, nil
+}
+
+// clientFor はバケットの region に合ったクライアントを返す。preview base の
+// バケットは us-east-1 固定(CloudFront 証明書の制約)なので、アプリの region と
+// 食い違うのが普通。region が違うと PutObject が 301 PermanentRedirect になる。
+func (d *Driver) clientFor(ctx context.Context, bucket string) (*s3.Client, error) {
+	loc, err := d.s3.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: &bucket})
+	if err != nil {
+		return nil, fmt.Errorf("get bucket location %s: %w", bucket, err)
+	}
+	region := string(loc.LocationConstraint)
+	if region == "" {
+		region = "us-east-1" // 空は us-east-1(API の歴史的仕様)
+	}
+	if c, ok := d.byRegion[region]; ok {
+		return c, nil
+	}
+	cfg := d.cfg.Copy()
+	cfg.Region = region
+	c := s3.NewFromConfig(cfg)
+	d.byRegion[region] = c
+	return c, nil
 }
 
 type UpInput struct {
@@ -111,8 +139,12 @@ func (d *Driver) Down(ctx context.Context, stackName, bucket, name string) error
 
 // Sync は dist を s3://bucket/name/ に同期する(ローカルに無いものは消す)。
 func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
+	cli, err := d.clientFor(ctx, bucket)
+	if err != nil {
+		return err
+	}
 	local := map[string]string{} // key -> path
-	err := filepath.WalkDir(dist, func(path string, entry os.DirEntry, err error) error {
+	err = filepath.WalkDir(dist, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
 		}
@@ -135,7 +167,7 @@ func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
 		if err != nil {
 			return err
 		}
-		_, err = d.s3.PutObject(ctx, &s3.PutObjectInput{
+		_, err = cli.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      &bucket,
 			Key:         &key,
 			Body:        f,
@@ -148,7 +180,7 @@ func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
 	}
 
 	// ローカルに無い残骸を消す(aws s3 sync --delete 相当)
-	remote, err := d.listPrefix(ctx, bucket, name)
+	remote, err := d.listPrefixWith(ctx, cli, bucket, name)
 	if err != nil {
 		return err
 	}
@@ -159,13 +191,21 @@ func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
 			stale = append(stale, s3types.ObjectIdentifier{Key: &k})
 		}
 	}
-	return d.deleteObjects(ctx, bucket, stale)
+	return d.deleteObjectsWith(ctx, cli, bucket, stale)
 }
 
 func (d *Driver) listPrefix(ctx context.Context, bucket, name string) ([]string, error) {
+	cli, err := d.clientFor(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	return d.listPrefixWith(ctx, cli, bucket, name)
+}
+
+func (d *Driver) listPrefixWith(ctx context.Context, cli *s3.Client, bucket, name string) ([]string, error) {
 	prefix := name + "/"
 	var keys []string
-	p := s3.NewListObjectsV2Paginator(d.s3, &s3.ListObjectsV2Input{Bucket: &bucket, Prefix: &prefix})
+	p := s3.NewListObjectsV2Paginator(cli, &s3.ListObjectsV2Input{Bucket: &bucket, Prefix: &prefix})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
@@ -190,13 +230,17 @@ func (d *Driver) deletePrefix(ctx context.Context, bucket, name string) error {
 		key := k
 		objs = append(objs, s3types.ObjectIdentifier{Key: &key})
 	}
-	return d.deleteObjects(ctx, bucket, objs)
+	cli, err := d.clientFor(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	return d.deleteObjectsWith(ctx, cli, bucket, objs)
 }
 
-func (d *Driver) deleteObjects(ctx context.Context, bucket string, objs []s3types.ObjectIdentifier) error {
+func (d *Driver) deleteObjectsWith(ctx context.Context, cli *s3.Client, bucket string, objs []s3types.ObjectIdentifier) error {
 	for len(objs) > 0 {
 		n := min(len(objs), 1000) // DeleteObjects の上限
-		_, err := d.s3.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		_, err := cli.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: &bucket,
 			Delete: &s3types.Delete{Objects: objs[:n]},
 		})
