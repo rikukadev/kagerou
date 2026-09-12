@@ -129,6 +129,7 @@ func cmdUp(args []string, out *os.File) error {
 		Params:       f.params,
 		Env:          mergeKV(cfg.Env, f.env),
 		ExpiresAt:    expiresAt,
+		URL:          cfg.URLTemplate, // ExpandName 済み。空なら Output に任せる
 		Source:       f.source,
 		Version:      version,
 		Tags:         cfg.Tags,
@@ -147,7 +148,7 @@ func cmdUp(args []string, out *os.File) error {
 // hookEnvForUp は post_up に渡す KAGEROU_* 環境変数(CONTRACT §7)。
 func hookEnvForUp(name string, info *stack.Info) map[string]string {
 	env := map[string]string{"KAGEROU_NAME": name}
-	if u, ok := stack.URL(info.Outputs); ok {
+	if u, ok := info.EnvironmentURL(); ok {
 		env["KAGEROU_URL"] = u
 	}
 	for k, v := range info.Outputs {
@@ -202,9 +203,9 @@ func cmdURL(args []string, out *os.File) error {
 	if f.output == "json" {
 		return printEnvironment(out, "json", f.name, info)
 	}
-	u, ok := stack.URL(info.Outputs)
+	u, ok := info.EnvironmentURL()
 	if !ok {
-		return fmt.Errorf("stack has no URL output (KagerouUrl / PreviewUrl)")
+		return fmt.Errorf("no environment URL (set url_template, or declare a KagerouUrl / PreviewUrl output)")
 	}
 	_, err = fmt.Fprintln(out, u)
 	return err
@@ -291,7 +292,7 @@ func cmdList(args []string, out *os.File) error {
 		return json.NewEncoder(out).Encode(envs)
 	}
 	for _, info := range infos {
-		u, _ := stack.URL(info.Outputs)
+		u, _ := info.EnvironmentURL()
 		if _, err := fmt.Fprintf(out, "%s\t%s\t%s\t%s\n",
 			info.Tags[stack.TagName], info.State(), info.Tags[stack.TagExpiresAt], u); err != nil {
 			return err
@@ -426,7 +427,7 @@ func environmentJSON(name string, info *stack.Info) map[string]any {
 			"status": info.Status,
 		},
 	}
-	if u, ok := stack.URL(info.Outputs); ok {
+	if u, ok := info.EnvironmentURL(); ok {
 		env["url"] = u
 	}
 	if v := info.Tags[stack.TagExpiresAt]; v != "" && v != stack.TTLNoneTagValue {
@@ -442,7 +443,7 @@ func printEnvironment(out *os.File, format, name string, info *stack.Info) error
 	if format == "json" {
 		return json.NewEncoder(out).Encode(environmentJSON(name, info))
 	}
-	u, _ := stack.URL(info.Outputs)
+	u, _ := info.EnvironmentURL()
 	_, err := fmt.Fprintf(out, "%s\t%s\t%s\n", name, info.State(), u)
 	return err
 }

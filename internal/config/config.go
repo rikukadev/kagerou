@@ -27,6 +27,9 @@ type Config struct {
 	Template   string            `yaml:"template"`
 	Region     string            `yaml:"region"`
 	NamePrefix string            `yaml:"name_prefix"`
+	// URLTemplate は環境 URL を作成前に確定させる(例 "https://{name}.preview.example.com")。
+	// CORS 許可元やコールバック URL の循環参照を避ける(CONTRACT §5)。
+	URLTemplate string           `yaml:"url_template"`
 	TTL        string            `yaml:"ttl"`
 	Tags       map[string]string `yaml:"tags"`
 	Env        map[string]string `yaml:"env"`
@@ -163,6 +166,7 @@ func (c Config) ExpandName(name string) Config {
 			out.Env[k] = strings.ReplaceAll(v, "{name}", name)
 		}
 	}
+	out.URLTemplate = strings.ReplaceAll(c.URLTemplate, "{name}", name)
 	out.Hooks.PreUp = strings.ReplaceAll(c.Hooks.PreUp, "{name}", name)
 	out.Hooks.PostUp = strings.ReplaceAll(c.Hooks.PostUp, "{name}", name)
 	out.Hooks.PostDown = strings.ReplaceAll(c.Hooks.PostDown, "{name}", name)

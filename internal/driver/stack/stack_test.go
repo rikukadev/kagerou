@@ -322,3 +322,49 @@ func TestInfoState(t *testing.T) {
 		}
 	}
 }
+
+func TestUpWithPredeterminedURL(t *testing.T) {
+	d, ctx := testDriver(t)
+	stackName := "kagerou-test-url"
+	t.Cleanup(func() { _ = d.Down(ctx, stackName) })
+
+	// Parameters 直下に EnvKagerouUrl を挿す(受け取り口の宣言)
+	tpl := strings.Replace(testTemplate, "Parameters:\n", "Parameters:\n  EnvKagerouUrl:\n    Type: String\n    Default: \"\"\n", 1)
+
+	url := "https://pr-9.preview.example.test"
+	info, err := d.Up(ctx, UpInput{
+		StackName:    stackName,
+		Name:         "pr-9",
+		TemplateBody: tpl,
+		URL:          url,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// タグに確定 URL が入り、解決順の先頭になる(Output より優先)
+	if info.Tags[TagURL] != url {
+		t.Fatalf("kagerou:url tag = %q, want %q", info.Tags[TagURL], url)
+	}
+	if got, ok := info.EnvironmentURL(); !ok || got != url {
+		t.Fatalf("EnvironmentURL = %q, want %q (tag should win over output)", got, url)
+	}
+	// EnvKagerouUrl パラメータにも届いている
+	out, err := d.cfn.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: &stackName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range out.Stacks[0].Parameters {
+		got[aws.ToString(p.ParameterKey)] = aws.ToString(p.ParameterValue)
+	}
+	if got["EnvKagerouUrl"] != url {
+		t.Fatalf("EnvKagerouUrl param = %q, want %q", got["EnvKagerouUrl"], url)
+	}
+}
+
+func TestEnvironmentURLFallsBackToOutputs(t *testing.T) {
+	i := &Info{Tags: map[string]string{}, Outputs: map[string]string{"KagerouUrl": "https://out"}}
+	if u, ok := i.EnvironmentURL(); !ok || u != "https://out" {
+		t.Fatalf("fallback broken: %q", u)
+	}
+}

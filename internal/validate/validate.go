@@ -81,10 +81,17 @@ func Run(cfg config.Config, templatePath, name string) ([]Finding, error) {
 		}
 	}
 
-	// §5: URL Output
+	// url_template を使うなら、受け取り口 EnvKagerouUrl があると CORS 等に使える
+	if cfg.URLTemplate != "" {
+		if _, ok := t.Parameters["EnvKagerouUrl"]; !ok {
+			fs = append(fs, Finding{Warn, "url_template is set but the template does not declare EnvKagerouUrl — the app cannot receive the URL (CORS / callback values)"})
+		}
+	}
+
+	// §5: URL Output(url_template があれば Output は無くてもよい)
 	if _, ok := t.Outputs["KagerouUrl"]; !ok {
-		if _, ok := t.Outputs["PreviewUrl"]; !ok {
-			fs = append(fs, Finding{Error, "no URL output: declare KagerouUrl (or PreviewUrl) in Outputs (CONTRACT §5)"})
+		if _, ok := t.Outputs["PreviewUrl"]; !ok && cfg.URLTemplate == "" {
+			fs = append(fs, Finding{Error, "no environment URL: set url_template in kagerou.yaml, or declare KagerouUrl (or PreviewUrl) in Outputs (CONTRACT §5)"})
 		}
 	}
 
