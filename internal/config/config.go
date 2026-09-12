@@ -40,7 +40,15 @@ type Config struct {
 	MaxLifetime string            `yaml:"max_lifetime"`
 	Tags        map[string]string `yaml:"tags"`
 	Env         map[string]string `yaml:"env"`
+	Static      Static            `yaml:"static"`
 	Hooks       Hooks             `yaml:"hooks"`
+}
+
+// Static は driver: static の設定。bucket は preview base スタックの
+// Output(kagerou-preview-base:…:bucket)を写す。
+type Static struct {
+	Dist   string `yaml:"dist"`
+	Bucket string `yaml:"bucket"`
 }
 
 type Hooks struct {
@@ -95,8 +103,20 @@ func LoadOrDefault(path string) (Config, error) {
 func (c Config) validate() error {
 	switch c.Driver {
 	case "stack":
+	case "static":
+		// static は preview base のバケットへ配置するだけなので、URL は
+		// 作成前に確定していなければならない(Output を持つ compute が無い)
+		if c.URLTemplate == "" {
+			return errors.New(`driver "static" requires url_template (there is no compute to emit a URL output)`)
+		}
+		if c.Static.Dist == "" {
+			return errors.New(`driver "static" requires static.dist (the built output directory)`)
+		}
+		if c.Static.Bucket == "" {
+			return errors.New(`driver "static" requires static.bucket (the preview base bucket output)`)
+		}
 	default:
-		return fmt.Errorf("unknown driver %q (only \"stack\" is available in v0.1)", c.Driver)
+		return fmt.Errorf("unknown driver %q (\"stack\" or \"static\")", c.Driver)
 	}
 	if _, _, err := ParseTTL(c.TTL); err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 
 	"github.com/rikukadev/kagerou/internal/config"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
+	staticdrv "github.com/rikukadev/kagerou/internal/driver/static"
 	"github.com/rikukadev/kagerou/internal/hooks"
 	"github.com/rikukadev/kagerou/internal/iampolicy"
 	"github.com/rikukadev/kagerou/internal/readiness"
@@ -100,6 +101,10 @@ func cmdUp(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Driver == staticdrv.DriverName {
+		return upStatic(out, f, cfg)
+	}
+
 	body, err := os.ReadFile(cfg.Template)
 	if err != nil {
 		return fmt.Errorf("template: %w", err)
@@ -187,6 +192,57 @@ func hookEnv(name string, info *stack.Info) map[string]string {
 	return env
 }
 
+// expiryFor は ttl から期限を出す(規則は cmdUp と同じ)。
+func expiryFor(cfg config.Config) (*time.Time, error) {
+	d, hasTTL, err := config.ParseTTL(cfg.TTL)
+	if err != nil {
+		return nil, err
+	}
+	if !hasTTL {
+		return nil, nil
+	}
+	t := time.Now().Add(d)
+	return &t, nil
+}
+
+// upStatic は driver: static の up。compute が無いので template も
+// readiness も使わず、メタスタック + プレフィックス同期で環境を作る。
+func upStatic(out *os.File, f upFlags, cfg config.Config) error {
+	expiresAt, err := expiryFor(cfg)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	drv, err := staticdrv.New(ctx, cfg.Region)
+	if err != nil {
+		return err
+	}
+	if err := hooks.Run(ctx, "pre_up", cfg.Hooks.PreUp, map[string]string{"KAGEROU_NAME": f.name}); err != nil {
+		return err
+	}
+	info, err := drv.Up(ctx, staticdrv.UpInput{
+		UpInput: stack.UpInput{
+			StackName: cfg.StackName(f.name),
+			Name:      f.name,
+			Project:   cfg.Project,
+			ExpiresAt: expiresAt,
+			URL:       cfg.URLTemplate,
+			Source:    f.source,
+			Version:   version,
+			Tags:      cfg.Tags,
+		},
+		Bucket: cfg.Static.Bucket,
+		Dist:   cfg.Static.Dist,
+	})
+	if err != nil {
+		return err
+	}
+	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnv(f.name, info)); err != nil {
+		return err
+	}
+	return printEnvironment(out, f.output, f.name, info)
+}
+
 func cmdDown(args []string, _ *os.File) error {
 	f, err := parseUpFlags("down", args)
 	if err != nil {
@@ -201,10 +257,20 @@ func cmdDown(args []string, _ *os.File) error {
 		return err
 	}
 	stackName := cfg.StackName(f.name)
+	// pre_down は driver に依らず先に走らせる(環境がまだある状態で割り込む)
 	if err := runPreDown(ctx, drv, cfg.Hooks.PreDown, f.name, stackName); err != nil {
 		return err
 	}
-	if err := drv.Down(ctx, stackName); err != nil {
+	if cfg.Driver == staticdrv.DriverName {
+		sdrv, serr := staticdrv.New(ctx, cfg.Region)
+		if serr != nil {
+			return serr
+		}
+		// メタスタックとプレフィックス配下の両方を消す
+		if serr := sdrv.Down(ctx, stackName, cfg.Static.Bucket, f.name); serr != nil {
+			return serr
+		}
+	} else if err := drv.Down(ctx, stackName); err != nil {
 		return err
 	}
 	// post_down 失敗は記録して続行(環境自体は消えている)
