@@ -137,7 +137,7 @@ func NormalizeName(raw string) string {
 		}
 	}
 	// 先頭は小文字英字: それ以外を削る
-	for len(b) > 0 && !(b[0] >= 'a' && b[0] <= 'z') {
+	for len(b) > 0 && (b[0] < 'a' || b[0] > 'z') {
 		b = b[1:]
 	}
 	for len(b) > 0 && b[len(b)-1] == '-' {
