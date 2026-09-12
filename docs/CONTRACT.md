@@ -20,6 +20,7 @@ driver は個別に付ける責務を負う。
 | `kagerou:url` | `url_template` で作成前に確定した環境 URL | 未設定なら省略。§5 参照 |
 | `kagerou:source` | opaque 文字列。URI 形式を推奨(例 `github_pr://rikukadev/todo/42`) | adapter が `--source` で渡す。kagerou は解釈しない。CFN タグ値の文字種制約(英数字と ` +-=._:/@`)により JSON は入らない |
 | `kagerou:version` | 作成した kagerou のバージョン | |
+| `kagerou:owner` | 作成者の IAM プリンシパル(例 `arn:aws:iam::123:role/deploy`) | assumed-role はセッション名を落としてロール ARN に正規化。**`up` の上書き境界**(下記) |
 
 **`kagerou:project` は `reap` / `list` の分離境界**。同じ AWS アカウント/リージョンに
 複数リポジトリ(プロジェクト)が同居しうるため:
@@ -31,6 +32,14 @@ driver は個別に付ける責務を負う。
   各プロジェクトの孤児は、そのプロジェクトの `reap` が hook 付きで回収する。
 - `project` 未設定の kagerou.yaml で `reap` を実行すると、対象を絞れないため**拒否**する
   (明示的に `--all-projects` を付けた場合のみ全件を対象にする)。
+
+**`kagerou:owner` は `up` の上書き境界**。同名の環境がすでにあるとき:
+
+- owner が呼び出し元と同じ(または owner タグの無い旧環境)なら、従来どおり冪等に上書きする。
+- **他人の環境なら名前衝突としてエラー**にする(誰の環境かをエラーに含める)。別の
+  `--name` を選ぶか、所有者に `kagerou down` してもらう(放置しても TTL + `reap` が回収する)。
+- CI は全員が同じデプロイロールを assume する = 同一 owner なので、PR への push で
+  同名環境の更新が続く挙動は変わらない。`reap` は owner に関係なく期限切れを回収する。
 
 ## 2. 環境名の制約
 

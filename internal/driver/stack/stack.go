@@ -20,6 +20,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	cfntypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 // タグスキーマは docs/CONTRACT.md §1 で凍結。list / reap(#5, #6)も走査に使う。
@@ -31,7 +32,8 @@ const (
 	TagExpiresAt = "kagerou:expires-at" // RFC3339 UTC または "none"
 	TagSource    = "kagerou:source"
 	TagVersion   = "kagerou:version"
-	TagURL       = "kagerou:url" // url_template で作成前に確定した URL(CONTRACT §5)
+	TagURL       = "kagerou:url"   // url_template で作成前に確定した URL(CONTRACT §5)
+	TagOwner     = "kagerou:owner" // 作成者の IAM プリンシパル。up の上書きは同一 owner のみ
 )
 
 const DriverName = "stack"
@@ -55,6 +57,7 @@ const MaxLifetime = 30 * 24 * time.Hour
 
 type Driver struct {
 	cfn *cloudformation.Client
+	sts *sts.Client
 }
 
 func New(ctx context.Context, region string) (*Driver, error) {
@@ -66,7 +69,43 @@ func New(ctx context.Context, region string) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Driver{cfn: cloudformation.NewFromConfig(cfg)}, nil
+	return &Driver{cfn: cloudformation.NewFromConfig(cfg), sts: sts.NewFromConfig(cfg)}, nil
+}
+
+// callerOwner は呼び出し元の IAM プリンシパルを kagerou:owner 用に返す。
+// assumed-role はセッション名が呼び出しごとに変わるため、ロール ARN に正規化する
+// (CI は全員同じデプロイロール = 同一 owner になり、PR への push で更新が続く)。
+func (d *Driver) callerOwner(ctx context.Context) (string, error) {
+	out, err := d.sts.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return "", fmt.Errorf("resolving caller identity for the owner check: %w", err)
+	}
+	return normalizeOwner(aws.ToString(out.Arn)), nil
+}
+
+// normalizeOwner は arn:aws:sts::123:assumed-role/Role/session を
+// arn:aws:iam::123:role/Role に畳む。その他の ARN はそのまま。
+func normalizeOwner(arn string) string {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) != 6 || parts[2] != "sts" || !strings.HasPrefix(parts[5], "assumed-role/") {
+		return arn
+	}
+	seg := strings.Split(parts[5], "/") // assumed-role/Role/session
+	if len(seg) < 2 {
+		return arn
+	}
+	return fmt.Sprintf("arn:%s:iam::%s:role/%s", parts[1], parts[4], seg[1])
+}
+
+// checkOwner は既存環境を上書きしてよいか判定する。owner タグが無い(旧環境)か
+// 呼び出し元と同じなら OK。他人の環境なら名前衝突としてエラーにする(#77 議論)。
+func checkOwner(existingTags map[string]string, caller string) error {
+	owner := existingTags[TagOwner]
+	if owner == "" || owner == caller {
+		return nil
+	}
+	return fmt.Errorf("environment %q already exists and is owned by %s (you are %s): pick another --name, or ask the owner to run `kagerou down` (TTL + reap will also collect it eventually)",
+		existingTags[TagName], owner, caller)
 }
 
 type UpInput struct {
@@ -82,6 +121,8 @@ type UpInput struct {
 	Version      string            // kagerou 自身のバージョン
 	Tags         map[string]string // kagerou.yaml の追加タグ
 	MaxLifetime  time.Duration     // touch の上限。0 なら既定の MaxLifetime 定数(#51)
+
+	owner string // Up が STS から解決して埋める(kagerou:owner タグ)
 }
 
 // Info は環境の観測結果。Environment JSON(CONTRACT §3)の材料になる。
@@ -123,6 +164,25 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 		return nil, err
 	}
 
+	owner, err := d.callerOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	in.owner = owner
+
+	// 既存環境がある場合は所有者チェック: 他人の環境なら名前衝突としてエラー、
+	// 自分の(または owner タグの無い旧)環境なら従来どおり冪等に上書きする。
+	// rollback 残骸の削除より前に見る — 他人の失敗スタックを消さないため。
+	var existing *Info
+	if status != "" {
+		if info, err := d.Info(ctx, in.StackName); err == nil {
+			existing = info
+			if err := checkOwner(info.Tags, owner); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// 初回 create の失敗残骸は update できないため、削除してから作り直す
 	if status == string(cfntypes.StackStatusRollbackComplete) || status == string(cfntypes.StackStatusRollbackFailed) {
 		if err := d.Down(ctx, in.StackName); err != nil {
@@ -139,10 +199,8 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 	}
 	if in.ExpiresAt != nil {
 		base := time.Now()
-		if status != "" {
-			if info, err := d.Info(ctx, in.StackName); err == nil {
-				base = info.CreationTime
-			}
+		if status != "" && existing != nil {
+			base = existing.CreationTime
 		}
 		if limit := base.Add(maxLife); in.ExpiresAt.After(limit) {
 			in.ExpiresAt = &limit
@@ -532,6 +590,9 @@ func buildTags(in UpInput) []cfntypes.Tag {
 	}
 	if in.Version != "" {
 		kv[TagVersion] = in.Version
+	}
+	if in.owner != "" {
+		kv[TagOwner] = in.owner
 	}
 	for k, v := range in.Tags {
 		kv[k] = v
