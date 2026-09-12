@@ -452,6 +452,28 @@ func cmdReap(args []string, out *os.File) error {
 	return nil
 }
 
+// loadTemplateFacts はテンプレートを読んで TemplateFacts を返す(#71)。
+// kagerou.yaml の template(既定 packaged.yaml は CI 生成物なので無いことがある)
+// が読めなければ素の template.yaml に落ち、どちらも無ければ nil(フラグ挙動)。
+func loadTemplateFacts(templatePath string) *iampolicy.TemplateFacts {
+	for _, p := range []string{templatePath, "template.yaml"} {
+		if p == "" {
+			continue
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		facts, err := iampolicy.ScanTemplate(body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kagerou iam-policy: could not parse %s (%v) — falling back to flags\n", p, err)
+			return nil
+		}
+		return &facts
+	}
+	return nil
+}
+
 // allowFlag は繰り返し可能な --allow 'actions=resources' を集める(--doc execution)。
 type allowFlag []iampolicy.AllowRule
 
@@ -486,8 +508,9 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
 	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
 	ecrRepo := fs.String("ecr-repo", "", "ECR repository name (default: project in kagerou.yaml)")
-	s3 := fs.Bool("with-s3", false, "static website bucket (3-tier etc.)")
-	vpc := fs.Bool("with-vpc", false, "Lambda inside a VPC (ENI management; also for --doc execution)")
+	s3 := fs.Bool("with-s3", false, "static website bucket (only without a readable template; the template is the source of truth)")
+	vpc := fs.Bool("with-vpc", false, "Lambda inside a VPC (only without a readable template; also for --doc execution)")
+	baseBucket := fs.String("base-bucket", "", "shared preview base bucket to sync artifacts into (post_up aws s3 sync)")
 	ssm := fs.Bool("with-sashiki-ssm", false, "sashiki action transport=ssm")
 	instance := fs.String("instance-id", "", "target instance for --with-sashiki-ssm")
 	cf := fs.Bool("with-cloudfront", false, "CloudFront cache invalidation")
@@ -531,12 +554,31 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		if ecrRepoName == "" {
 			ecrRepoName = cfg.Project
 		}
+		// テンプレートが読めれば「テンプレートが作るもの」はそこから導出する(#71)。
+		// packaged.yaml(CI 生成物)が無ければ素の template.yaml に落ちる。
+		facts := loadTemplateFacts(cfg.Template)
+		if facts != nil {
+			for _, u := range facts.Unknown {
+				fmt.Fprintf(os.Stderr, "kagerou iam-policy: no permission mapping for %s — the generated policy does NOT cover it; add statements by hand\n", u)
+			}
+			// テンプレートが真実の源: 導出と食い違うフラグは無視して、その旨を言う
+			if *s3 && facts.Counts["AWS::S3::Bucket"] == 0 {
+				fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-s3 ignored — the template declares no AWS::S3::Bucket (syncing to the shared preview base? use --base-bucket)")
+			}
+			if *vpc && !facts.HasVPC {
+				fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-vpc ignored — no function in the template has VpcConfig")
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "kagerou iam-policy: template not found — falling back to --with-* flags only (the template is normally the source of truth)")
+		}
 		pol, err = iampolicy.Build(iampolicy.Options{
-			Prefix: prefixOrCfg(),
-			ECR:    *ecr, EcrRepo: ecrRepoName,
+			Prefix:   prefixOrCfg(),
+			Template: facts,
+			ECR:      *ecr, EcrRepo: ecrRepoName,
 			S3: *s3, VPC: *vpc,
 			SashikiSSM: *ssm, InstanceID: *instance,
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
+			BaseBucket: *baseBucket,
 		})
 		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
 	case "boundary":

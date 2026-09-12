@@ -185,7 +185,7 @@ hooks:
 
 | `--doc` | 何 | 何にアタッチするか |
 |---|---|---|
-| `policy`(既定) | 構成別の最小権限ポリシー(`--with-*` で ECR/S3/VPC/sashiki-ssm/CloudFront/Route53 を足す) | デプロイロールの権限ポリシー |
+| `policy`(既定) | 最小権限ポリシー。**テンプレートの `Resources[].Type` から導出**(Lambda/API/VPC/S3/DynamoDB/SQS。対応を知らない型には警告して黙らない)。CI 自身がやることは `--with-*`(ECR/sashiki-ssm/CloudFront/Route53)と `--base-bucket`(共有 base への sync)で足す | デプロイロールの権限ポリシー |
 | `trust` | GitHub Actions OIDC の信頼ポリシー(`--repo owner/name`) | デプロイロールの信頼ポリシー |
 | `boundary` | 自己サーブ用の permissions boundary(`--regions`) | デプロイロール **と** それが作るロールの両方 |
 | `execution` | preview の Lambda がランタイムで使う最小ポリシー(`--allow 'actions=resources'` で宣言、`--with-vpc` で ENI) | Lambda の実行(ランタイム)ロール |
