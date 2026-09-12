@@ -42,7 +42,7 @@ func Run(dir string, p Params, force bool) (Result, error) {
 	for _, f := range files {
 		dst := filepath.Join(dir, f.path)
 		if _, err := os.Stat(dst); err == nil {
-			if !(force && f.overwrite) {
+			if !force || !f.overwrite {
 				res.Skipped = append(res.Skipped, f.path)
 				continue
 			}
@@ -67,8 +67,8 @@ func renderTo(dst, name string, p Params) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	if err := t.Execute(f, p); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return f.Close()
