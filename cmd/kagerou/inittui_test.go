@@ -20,6 +20,25 @@ func step(t *testing.T, m initModel, msg tea.Msg) initModel {
 	return next.(initModel)
 }
 
+// chooseSetup は setup 質問の selected を直接固定する(テストで aws/gh を叩かないため)。
+func chooseSetup(m initModel, v int) initModel {
+	for i := range m.questions {
+		if m.questions[i].key == "setup" {
+			m.questions[i].selected = v
+		}
+	}
+	return m
+}
+
+// answerAll は phaseAsk を既定選択のまま enter で進めて summary まで運ぶ。
+func answerAll(t *testing.T, m initModel) initModel {
+	t.Helper()
+	for m.phase == phaseAsk {
+		m = step(t, m, enter)
+	}
+	return m
+}
+
 func TestWizardDetectionSetsDefaults(t *testing.T) {
 	det := scaffold.Detection{DBDriver: "mysql2", VarsSet: map[string]bool{}}
 	m := newInitModel(t.TempDir(), scaffold.Params{Project: "myapp", Region: "r"}, det, false)
@@ -29,10 +48,19 @@ func TestWizardDetectionSetsDefaults(t *testing.T) {
 	if !strings.Contains(m.View(), "detected mysql2") {
 		t.Fatal("detection not shown in option")
 	}
-	// 検出なしなら「使わない」が既定
+	// 検出なしなら「使わない」+ setup はスクリプトが既定
 	m2 := newInitModel(t.TempDir(), scaffold.Params{Project: "myapp", Region: "r"}, scaffold.Detection{VarsSet: map[string]bool{}}, false)
 	if m2.questions[0].selected != 1 {
 		t.Fatal("DB 検出なしでは sashiki は既定にならないはず")
+	}
+	if m2.answer("setup") != setupScript {
+		t.Fatal("creds 検出なしでは setup の既定は script のはず")
+	}
+	// creds + repo が見えていれば run now が既定
+	m3 := newInitModel(t.TempDir(), scaffold.Params{Project: "myapp", Region: "r"},
+		scaffold.Detection{AccountID: "1", Owner: "o", Repo: "r", VarsSet: map[string]bool{}}, false)
+	if m3.answer("setup") != setupRun {
+		t.Fatal("creds 検出ありでは setup の既定は run now のはず")
 	}
 }
 
@@ -40,11 +68,13 @@ func TestWizardChoicesDriveGeneration(t *testing.T) {
 	dir := t.TempDir()
 	det := scaffold.Detection{DBDriver: "mysql2", VarsSet: map[string]bool{}}
 	m := newInitModel(dir, scaffold.Params{Project: "myapp", Region: "r"}, det, false)
+	m = chooseSetup(m, setupSkip)
 
-	m = step(t, m, enter)     // Q1 DB: 既定(sashiki)で確定
-	m = step(t, m, enter)     // Q2 template: 既定(雛形生成)
-	m = step(t, m, key('j'))  // Q3 workflows: preview のみへ
-	m = step(t, m, enter)     // 確定 → サマリ
+	m = step(t, m, enter)    // Q1 DB: 既定(sashiki)
+	m = step(t, m, enter)    // Q2 template: 既定(雛形生成)
+	m = step(t, m, key('j')) // Q3 workflows: preview のみへ
+	m = step(t, m, enter)
+	m = step(t, m, enter) // Q4 setup(skip 固定)→ summary
 	if m.phase != phaseSummary {
 		t.Fatalf("phase = %d, want summary", m.phase)
 	}
@@ -65,6 +95,34 @@ func TestWizardChoicesDriveGeneration(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "kagerou.yaml"))
 	if !strings.Contains(string(b), "sashiki create {name}") {
 		t.Fatal("sashiki 選択が kagerou.yaml に反映されていない")
+	}
+}
+
+func TestWizardSetupScriptChoice(t *testing.T) {
+	dir := t.TempDir()
+	m := newInitModel(dir, scaffold.Params{Project: "myapp", Region: "r"},
+		scaffold.Detection{Owner: "o", Repo: "myapp", VarsSet: map[string]bool{}}, false)
+	m = chooseSetup(m, setupScript)
+	m = answerAll(t, m)
+	m = step(t, m, enter) // summary → 生成
+	if m.runErr != nil {
+		t.Fatal(m.runErr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, scaffold.SetupScriptName)); err != nil {
+		t.Fatal("setup script が書き出されていない")
+	}
+	// 手順は 1 行(スクリプト実行)に畳まれている
+	found := false
+	for _, s := range m.steps {
+		if strings.Contains(s.Title, scaffold.SetupScriptName) {
+			found = true
+		}
+		if strings.Contains(s.Title, "GitHub Variables") {
+			t.Fatal("script モードでは 3 手順は列挙されないはず")
+		}
+	}
+	if !found {
+		t.Fatal("script 実行の手順が出ていない")
 	}
 }
 
@@ -97,10 +155,9 @@ func TestWizardResultShowsPrefilledSteps(t *testing.T) {
 		VarsSet: map[string]bool{"AWS_ROLE_ARN": true, "AWS_REGION": true, "ECR_REPOSITORY": true},
 	}
 	m := newInitModel(t.TempDir(), scaffold.Params{Project: "myapp", Region: "r"}, det, false)
-	for m.phase == phaseAsk {
-		m = step(t, m, enter)
-	}
-	m = step(t, m, enter) // サマリ → 生成
+	m = chooseSetup(m, setupSkip) // aws/gh を実行しない
+	m = answerAll(t, m)
+	m = step(t, m, enter)
 	if m.runErr != nil {
 		t.Fatal(m.runErr)
 	}
@@ -108,7 +165,6 @@ func TestWizardResultShowsPrefilledSteps(t *testing.T) {
 	if !strings.Contains(v, "✓") {
 		t.Fatalf("検出済み項目に ✓ が付いていない: %s", v)
 	}
-	// Variables 設定済みなので、その 3 手順は Done になっている
 	doneCount := 0
 	for _, s := range m.steps {
 		if s.Done {

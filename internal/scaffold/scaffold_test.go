@@ -92,13 +92,62 @@ func TestRunSkipsExistingAndForce(t *testing.T) {
 
 func TestStepsAndPlain(t *testing.T) {
 	det := Detection{VarsSet: map[string]bool{}}
-	base := Steps(Params{Region: "r"}, det)
-	withSashiki := Steps(Params{Region: "r", Sashiki: true}, det)
+	base := Steps(Params{Region: "r"}, det, SetupSkip)
+	withSashiki := Steps(Params{Region: "r", Sashiki: true}, det, SetupSkip)
 	if len(withSashiki) != len(base)+2 {
 		t.Fatalf("sashiki steps not added: %d vs %d", len(withSashiki), len(base))
 	}
 	plain := PlainSteps(Params{Region: "ap-northeast-1"}, det)
 	if !strings.Contains(plain, "1. ") || !strings.Contains(plain, "ECR") {
 		t.Fatalf("plain steps: %s", plain)
+	}
+}
+
+func TestWriteSetupScript(t *testing.T) {
+	dir := t.TempDir()
+	path, err := WriteSetupScript(dir, Params{Region: "ap-northeast-1"}, Detection{Owner: "rikukadev", Repo: "myapp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		`OWNER="rikukadev"`, `REPO="myapp"`, `REGION="ap-northeast-1"`,
+		"create-open-id-connect-provider", // provider が無ければ作る
+		"repo:${OWNER}/${REPO}:*",         // 旧形式 sub
+		"repo:${OWNER}@${OWNER_ID}/${REPO}@${REPO_ID}:*", // ID 形式 sub(新 org)
+		"create-repository",
+		"gh variable set AWS_ROLE_ARN",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("setup script missing %q", want)
+		}
+	}
+	info, _ := os.Stat(path)
+	if info.Mode()&0o100 == 0 {
+		t.Error("setup script should be executable")
+	}
+}
+
+func TestStepsSetupModes(t *testing.T) {
+	det := Detection{VarsSet: map[string]bool{}}
+	p := Params{Region: "r"}
+	skip := Steps(p, det, SetupSkip)
+	script := Steps(p, det, SetupScript)
+	applied := Steps(p, det, SetupApplied)
+	if len(script) != len(skip)-2 || len(applied) != len(skip)-2 {
+		t.Fatalf("script/applied should fold 3 steps into 1: skip=%d script=%d applied=%d", len(skip), len(script), len(applied))
+	}
+	foundDone := false
+	for _, s := range applied {
+		if s.Done && strings.Contains(s.Title, "AWS setup") {
+			foundDone = true
+		}
+	}
+	if !foundDone {
+		t.Fatal("applied mode should mark AWS setup as done")
 	}
 }

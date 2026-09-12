@@ -2,11 +2,12 @@ package main
 
 // kagerou init のウィザード TUI。質問ごとに選択肢を ↑↓ で選んで enter で進む
 // (sam init スタイル)。検出結果が既定の選択肢になる。最後にサマリを確認して
-// enter で生成、続けて実値入りの「次にやること」を表示する。
-// 非 TTY では呼ばれない(cmdInit がテキストにフォールバックする)。
+// enter で生成し、AWS セットアップは選択に応じてその場で適用 / スクリプト化 /
+// 手動用のコマンド列挙になる。非 TTY では呼ばれない。
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,7 @@ var (
 	tuiCursor = lipgloss.NewStyle().Bold(true)
 	tuiDetail = lipgloss.NewStyle().Faint(true).PaddingLeft(6)
 	tuiAnswer = lipgloss.NewStyle().Bold(true)
+	tuiErr    = lipgloss.NewStyle().Bold(true)
 )
 
 type option struct {
@@ -29,7 +31,7 @@ type option struct {
 }
 
 type question struct {
-	key      string // "db" / "template" / "workflows"
+	key      string // "db" / "template" / "workflows" / "setup"
 	title    string
 	options  []option
 	selected int
@@ -38,9 +40,21 @@ type question struct {
 const (
 	phaseAsk = iota
 	phaseSummary
+	phaseApplying
 	phaseResult
 	phaseCanceled
 )
+
+const (
+	setupRun = iota
+	setupScript
+	setupSkip
+)
+
+type setupDoneMsg struct {
+	output string
+	err    error
+}
 
 type initModel struct {
 	phase int
@@ -51,31 +65,33 @@ type initModel struct {
 	params scaffold.Params
 
 	questions []question
-	qi        int // いま答えている質問
+	qi        int
 
-	result scaffold.Result
-	runErr error
-	steps  []scaffold.Step
+	result      scaffold.Result
+	runErr      error
+	setupMode   scaffold.SetupMode
+	setupOutput string
+	setupErr    error
+	steps       []scaffold.Step
 }
 
 func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force bool) initModel {
 	var qs []question
 
 	dbDefault := 1
-	dbDetail := "adds hooks (sashiki create/delete) and DB_USER: dev@{name} to kagerou.yaml"
 	if p.Sashiki || det.SuggestSashiki() {
 		dbDefault = 0
 	}
-	dbLabel := "use sashiki (grow a DB branch per PR)"
+	dbLabel := "sashiki — a DB branch per PR"
 	if det.DBDriver != "" {
-		dbLabel += " — detected " + det.DBDriver
+		dbLabel += " (detected " + det.DBDriver + ")"
 	}
 	qs = append(qs, question{
 		key:   "db",
-		title: "How should the database be handled?",
+		title: "Which database?",
 		options: []option{
-			{dbLabel, dbDetail},
-			{"none / wire it later via --env", "shared RDS, bundled SQLite etc. only need env injection"},
+			{dbLabel, "adds hooks (sashiki create/delete) and DB_USER: dev@{name}"},
+			{"none — wire it later with --env", "shared RDS, bundled SQLite etc."},
 		},
 		selected: dbDefault,
 	})
@@ -83,22 +99,37 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 	if !det.HasTemplate {
 		qs = append(qs, question{
 			key:   "template",
-			title: "What about the SAM template?",
+			title: "SAM template?",
 			options: []option{
-				{"generate a starter (LWA + Env<Key> + KagerouUrl)", "you still write the Dockerfile yourself (see next steps)"},
-				{"write my own", "follow CONTRACT §4/§5 (Env<Key> parameters and the KagerouUrl output)"},
+				{"generate a starter", "LWA + Env<Key> + KagerouUrl; you write the Dockerfile"},
+				{"write my own", "follow CONTRACT §4/§5"},
 			},
 		})
 	}
 
 	qs = append(qs, question{
 		key:   "workflows",
-		title: "Which GitHub Actions workflows do you want?",
+		title: "Workflows?",
 		options: []option{
-			{"preview + reap (recommended)", "PR-driven environments plus a TTL sweep every 6 hours"},
-			{"preview only", "reap manually with `kagerou reap`, or add reap.yml later"},
-			{"none", "generate kagerou.yaml only and drive everything from the CLI"},
+			{"preview + reap (recommended)", "PR-driven environments + TTL sweep every 6h"},
+			{"preview only", "reap manually or add reap.yml later"},
+			{"none", "drive everything from the CLI"},
 		},
+	})
+
+	setupDefault := setupScript
+	if det.AccountID != "" && det.Owner != "" {
+		setupDefault = setupRun // aws も gh も生きているならその場適用を既定に
+	}
+	qs = append(qs, question{
+		key:   "setup",
+		title: "AWS setup (role / ECR / variables)?",
+		options: []option{
+			{"run it now", "uses your aws + gh credentials; the role gets AdministratorAccess (scope down later)"},
+			{"save a script (" + scaffold.SetupScriptName + ")", "review it, then run it yourself"},
+			{"skip", "the next steps will list the commands instead"},
+		},
+		selected: setupDefault,
 	})
 
 	return initModel{dir: dir, force: force, det: det, params: p, questions: qs}
@@ -129,14 +160,39 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	return sel, p
 }
 
+// applySetup はセットアップスクリプトを実行する tea.Cmd。
+func applySetup(dir string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("sh", "./"+scaffold.SetupScriptName)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		return setupDoneMsg{output: strings.TrimSpace(string(out)), err: err}
+	}
+}
+
 func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if done, ok := msg.(setupDoneMsg); ok {
+		m.setupOutput, m.setupErr = done.output, done.err
+		if done.err != nil {
+			// 失敗してもスクリプトは残っているので、直して再実行できる
+			m.setupMode = scaffold.SetupScript
+		} else {
+			m.setupMode = scaffold.SetupApplied
+		}
+		m.steps = scaffold.Steps(m.params, m.det, m.setupMode)
+		m.phase = phaseResult
+		return m, nil
+	}
 	k, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
 	if s := k.String(); s == "q" || s == "esc" || s == "ctrl+c" {
-		if m.phase == phaseResult { // 生成後の q は普通の終了
+		if m.phase == phaseResult {
 			return m, tea.Quit
+		}
+		if m.phase == phaseApplying {
+			return m, nil // 適用中は完了を待つ
 		}
 		m.phase = phaseCanceled
 		return m, tea.Quit
@@ -167,16 +223,37 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case phaseSummary:
 		switch k.String() {
 		case "left", "h":
-			m.phase = phaseAsk // 戻って選び直す
+			m.phase = phaseAsk
 		case "enter":
 			sel, p := m.buildPlan()
 			m.params = p
 			m.result, m.runErr = scaffold.Run(m.dir, p, sel, m.force)
-			m.steps = scaffold.Steps(p, m.det)
-			m.phase = phaseResult
 			if m.runErr != nil {
+				m.phase = phaseResult
 				return m, tea.Quit
 			}
+			switch m.answer("setup") {
+			case setupRun:
+				if _, err := scaffold.WriteSetupScript(m.dir, p, m.det); err != nil {
+					m.setupErr, m.setupMode = err, scaffold.SetupSkip
+					m.steps = scaffold.Steps(p, m.det, m.setupMode)
+					m.phase = phaseResult
+					return m, nil
+				}
+				m.phase = phaseApplying
+				return m, applySetup(m.dir)
+			case setupScript:
+				if _, err := scaffold.WriteSetupScript(m.dir, p, m.det); err != nil {
+					m.setupErr, m.setupMode = err, scaffold.SetupSkip
+				} else {
+					m.setupMode = scaffold.SetupScript
+					m.result.Created = append(m.result.Created, scaffold.SetupScriptName)
+				}
+			default:
+				m.setupMode = scaffold.SetupSkip
+			}
+			m.steps = scaffold.Steps(p, m.det, m.setupMode)
+			m.phase = phaseResult
 		}
 	case phaseResult:
 		if k.String() == "enter" {
@@ -192,7 +269,6 @@ func (m initModel) View() string {
 	switch m.phase {
 	case phaseAsk:
 		b.WriteString(header)
-		// 回答済みの質問は 1 行サマリで残す(選んできた道が見える)
 		for i := 0; i < m.qi; i++ {
 			q := m.questions[i]
 			b.WriteString(tuiFaint.Render("✓ "+q.title) + " " + tuiAnswer.Render(q.options[q.selected].label) + "\n")
@@ -231,7 +307,17 @@ func (m initModel) View() string {
 		if p.Sashiki {
 			b.WriteString("  + sashiki integration (hooks / DB env)\n")
 		}
+		switch m.answer("setup") {
+		case setupRun:
+			b.WriteString("  + AWS setup: run now (role / ECR / variables)\n")
+		case setupScript:
+			b.WriteString("  + AWS setup: " + scaffold.SetupScriptName + "\n")
+		}
 		b.WriteString("\n" + tuiHint.Render("enter generate · ← back · q cancel"))
+	case phaseApplying:
+		b.WriteString(header)
+		b.WriteString("Applying AWS setup (role / ECR / variables)…\n")
+		b.WriteString(tuiHint.Render("this takes a few seconds"))
 	case phaseResult:
 		if m.runErr != nil {
 			return "kagerou init: " + m.runErr.Error() + "\n"
@@ -244,7 +330,16 @@ func (m initModel) View() string {
 		for _, f := range m.result.Skipped {
 			b.WriteString(tuiFaint.Render("  skipped  "+f+" (already exists)") + "\n")
 		}
-		b.WriteString("\n" + tuiTitle.Render("Next steps (✓ = already detected)") + "\n")
+		if m.setupErr != nil {
+			b.WriteString("\n" + tuiErr.Render("AWS setup failed:") + " " + m.setupErr.Error() + "\n")
+			if m.setupOutput != "" {
+				b.WriteString(tuiDetail.Render(lastLines(m.setupOutput, 5)) + "\n")
+			}
+			b.WriteString(tuiHint.Render("fix it, then rerun ./"+scaffold.SetupScriptName) + "\n")
+		} else if m.setupMode == scaffold.SetupApplied && m.setupOutput != "" {
+			b.WriteString("\n" + tuiDetail.Render(lastLines(m.setupOutput, 4)) + "\n")
+		}
+		b.WriteString("\n" + tuiTitle.Render("Next steps (✓ = done)") + "\n")
 		for _, s := range m.steps {
 			mark := "・"
 			title := s.Title
@@ -264,6 +359,14 @@ func (m initModel) View() string {
 		b.WriteString("Canceled (nothing was generated)\n")
 	}
 	return b.String()
+}
+
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m initModel) detectionSummary() string {
