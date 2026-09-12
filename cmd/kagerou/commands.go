@@ -6,12 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rikukadev/kagerou/internal/config"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
 	"github.com/rikukadev/kagerou/internal/hooks"
+	"github.com/rikukadev/kagerou/internal/scaffold"
+	"golang.org/x/term"
 )
 
 // kvFlag は --env / --param の KEY=VALUE 繰り返し指定を集める。
@@ -183,6 +186,51 @@ func cmdURL(args []string, out *os.File) error {
 		return fmt.Errorf("URL の Output(KagerouUrl / PreviewUrl)がスタックに無い")
 	}
 	_, err = fmt.Fprintln(out, u)
+	return err
+}
+
+func cmdInit(args []string, out *os.File) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	project := fs.String("project", "", "プロジェクト名(既定: カレントディレクトリ名)")
+	region := fs.String("region", "ap-northeast-1", "AWS リージョン")
+	sashiki := fs.Bool("sashiki", false, "sashiki 併用の hooks / DB env を含める")
+	force := fs.Bool("force", false, "kagerou.yaml と workflows を上書きする(template.yaml は対象外)")
+	dir := fs.String("dir", ".", "生成先ディレクトリ")
+	plain := fs.Bool("plain", false, "チェックリストを TUI でなくテキストで出す")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *project == "" {
+		abs, err := filepath.Abs(*dir)
+		if err != nil {
+			return err
+		}
+		*project = strings.ToLower(filepath.Base(abs))
+	}
+	if err := config.ValidateName(*project); err != nil {
+		return fmt.Errorf("プロジェクト名が命名規約に合わない(--project で指定する): %w", err)
+	}
+
+	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki}
+	res, err := scaffold.Run(*dir, p, *force)
+	if err != nil {
+		return err
+	}
+	for _, f := range res.Created {
+		if _, err := fmt.Fprintf(out, "created\t%s\n", f); err != nil {
+			return err
+		}
+	}
+	for _, f := range res.Skipped {
+		if _, err := fmt.Fprintf(out, "skipped\t%s\t(既存。--force でも template.yaml は上書きしない)\n", f); err != nil {
+			return err
+		}
+	}
+	// 残りの手作業チェックリスト: TTY なら TUI、そうでなければテキスト
+	if !*plain && term.IsTerminal(int(out.Fd())) {
+		return runChecklistTUI(p)
+	}
+	_, err = fmt.Fprint(out, scaffold.PlainSteps(p))
 	return err
 }
 

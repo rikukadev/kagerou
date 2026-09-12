@@ -1,0 +1,21 @@
+# kagerou の設定(https://github.com/rikukadev/kagerou)
+project: {{.Project}}
+driver: stack
+template: packaged.yaml # sam build && sam package の出力(ビルドは CI の仕事)
+region: {{.Region}}
+name_prefix: {{.Project}}- # スタック名は {{.Project}}-pr-42 のようになる
+ttl: 72h
+env:
+  # {name} は環境名で展開される。値はテンプレートの Env<Key> パラメータに届く
+  KAGEROU_ENV: "{name}"
+{{- if .Sashiki}}
+  DB_HOST: sashiki.internal # TODO: sashiki プロキシのホストに合わせる
+  DB_PORT: "3306"
+  DB_USER: dev@{name}
+  DB_PASSWORD: dev # TODO: baseline の app パスワードに合わせる
+  DB_NAME: app     # TODO: DB 名に合わせる
+hooks:
+  # || true は sashiki CLI が --exist-ok 未対応のための暫定(sashiki#259)
+  pre_up: sashiki create {name} || true
+  post_down: sashiki delete {name}
+{{- end}}

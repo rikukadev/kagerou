@@ -1,0 +1,53 @@
+# PR ごとのプレビュー環境(kagerou)。
+# 必要な Variables: AWS_ROLE_ARN / AWS_REGION / ECR_REPOSITORY(kagerou init の出力参照)
+name: pr-preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-${{"{{"}} github.event.pull_request.number {{"}}"}}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{"{{"}} vars.AWS_ROLE_ARN {{"}}"}}
+          aws-region: ${{"{{"}} vars.AWS_REGION {{"}}"}}
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - name: Build and package
+        run: |
+          sam build
+          sam package \
+            --image-repository "${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}" \
+            --output-template-file packaged.yaml
+      - uses: rikukadev/kagerou/action@main
+        with:
+          name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
+
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{"{{"}} vars.AWS_ROLE_ARN {{"}}"}}
+          aws-region: ${{"{{"}} vars.AWS_REGION {{"}}"}}
+      - uses: rikukadev/kagerou/action@main
+        with:
+          name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
+          down: "true"
