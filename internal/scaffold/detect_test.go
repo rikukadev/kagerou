@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,5 +100,69 @@ func TestTemplateUsesDetectedPort(t *testing.T) {
 	}
 	if strings.Contains(s, "TODO: match your app's listen port") || strings.Contains(s, "TODO: run your app") {
 		t.Fatal("TODO should disappear when port/Dockerfile are known")
+	}
+}
+
+func TestDetectZonesAndBase(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	execCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "list-hosted-zones"):
+			return []byte(`["rikuka.dev.", "example.org."]`), nil
+		case strings.Contains(joined, "list-exports"):
+			return []byte(`[["kagerou-preview-base:domain","preview.rikuka.dev"],["kagerou-preview-base:bucket","kagerou-preview-base-123"]]`), nil
+		}
+		return nil, errNoCmd
+	}
+	d := Detect(t.TempDir())
+	if len(d.Zones) != 2 || d.Zones[0] != "rikuka.dev" {
+		t.Fatalf("zones = %v", d.Zones)
+	}
+	if d.BaseDomain != "preview.rikuka.dev" || d.BaseBucket != "kagerou-preview-base-123" {
+		t.Fatalf("base detection broken: %+v", d)
+	}
+}
+
+var errNoCmd = os.ErrNotExist
+
+func TestPreviewBaseTemplateAndScript(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "x", Region: "ap-northeast-1", Domain: "preview.rikuka.dev", SetupBase: true}
+	if _, err := Run(dir, p, Targets{KagerouYaml: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	// base テンプレートが書き出され、要点が入っている
+	b, err := os.ReadFile(filepath.Join(dir, "deploy", "preview-base.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"kagerou-preview-base:domain", // Exports(2 回目以降の init が検出する)
+		"OriginAccessControl",
+		"*.${DomainName}",
+		"4135ea2d-6df8-44a3-9df3-4b5a84be39ad", // CachingDisabled = invalidation 不要
+		"Z2FDTNDATAQYW2",                       // CloudFront alias の固定ゾーン
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("preview-base.yaml missing %q", want)
+		}
+	}
+	// kagerou.yaml に url_template
+	ky, _ := os.ReadFile(filepath.Join(dir, "kagerou.yaml"))
+	if !strings.Contains(string(ky), `url_template: "https://{name}.preview.rikuka.dev"`) {
+		t.Fatalf("url_template missing: %s", ky)
+	}
+	// setup script に base デプロイ(us-east-1)
+	if _, err := WriteSetupScript(dir, p, Detection{Owner: "o", Repo: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	sc, _ := os.ReadFile(filepath.Join(dir, SetupScriptName))
+	for _, want := range []string{"kagerou-preview-base", "--region us-east-1", "list-hosted-zones-by-name"} {
+		if !strings.Contains(string(sc), want) {
+			t.Errorf("setup script missing %q", want)
+		}
 	}
 }

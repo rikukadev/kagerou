@@ -175,3 +175,68 @@ func TestWizardResultShowsPrefilledSteps(t *testing.T) {
 		t.Fatalf("prechecked steps = %d, want >= 3", doneCount)
 	}
 }
+
+func TestWizardDomainQuestion(t *testing.T) {
+	// ゾーン 2 つ & base なし → 質問が出る(raw URL の選択肢は無い)
+	det := scaffold.Detection{Zones: []string{"rikuka.dev", "example.org"}, VarsSet: map[string]bool{}}
+	m := newInitModel(t.TempDir(), scaffold.Params{Project: "x", Region: "r"}, det, false)
+	found := false
+	for _, q := range m.questions {
+		if q.key == "domain" {
+			found = true
+			if len(q.options) != 2 {
+				t.Fatalf("options = %d, want 2 (zones only, no raw URL option)", len(q.options))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("domain question should appear with 2 zones")
+	}
+	// 2 番目のゾーンを選ぶと Domain / SetupBase に反映される
+	m = chooseSetup(m, setupSkip)
+	for i := range m.questions {
+		if m.questions[i].key == "domain" {
+			m.questions[i].selected = 1
+		}
+	}
+	_, p := m.buildPlan()
+	if p.Domain != "preview.example.org" || !p.SetupBase {
+		t.Fatalf("plan = %+v", p)
+	}
+
+	// ゾーン 1 つ → 質問は出ず自動選択
+	det1 := scaffold.Detection{Zones: []string{"rikuka.dev"}, VarsSet: map[string]bool{}}
+	m1 := newInitModel(t.TempDir(), scaffold.Params{Project: "x", Region: "r"}, det1, false)
+	for _, q := range m1.questions {
+		if q.key == "domain" {
+			t.Fatal("single zone should not ask")
+		}
+	}
+	_, p1 := m1.buildPlan()
+	if p1.Domain != "preview.rikuka.dev" || !p1.SetupBase {
+		t.Fatalf("auto plan = %+v", p1)
+	}
+
+	// base 既存 → 質問なし・再利用(SetupBase=false)
+	detB := scaffold.Detection{Zones: []string{"rikuka.dev"}, BaseDomain: "preview.rikuka.dev", VarsSet: map[string]bool{}}
+	mB := newInitModel(t.TempDir(), scaffold.Params{Project: "x", Region: "r"}, detB, false)
+	for _, q := range mB.questions {
+		if q.key == "domain" {
+			t.Fatal("existing base should not ask")
+		}
+	}
+	_, pB := mB.buildPlan()
+	if pB.Domain != "preview.rikuka.dev" || pB.SetupBase {
+		t.Fatalf("reuse plan = %+v", pB)
+	}
+	if !strings.Contains(mB.View(), "base:preview.rikuka.dev") {
+		t.Fatal("header should show existing base")
+	}
+
+	// ゾーンなし → 質問なし・Domain 空(生 URL 運用)
+	m0 := newInitModel(t.TempDir(), scaffold.Params{Project: "x", Region: "r"}, scaffold.Detection{VarsSet: map[string]bool{}}, false)
+	_, p0 := m0.buildPlan()
+	if p0.Domain != "" || p0.SetupBase {
+		t.Fatalf("no-zone plan = %+v", p0)
+	}
+}
