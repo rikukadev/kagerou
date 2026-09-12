@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	cfntypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 )
 
 const testTemplate = `
@@ -187,13 +188,13 @@ func TestExpired(t *testing.T) {
 		grace time.Duration
 		want  bool
 	}{
-		{mk("2026-09-12T11:00:00Z"), 0, true},               // 期限切れ
-		{mk("2026-09-12T13:00:00Z"), 0, false},              // まだ生きてる
-		{mk("2026-09-12T11:30:00Z"), time.Hour, false},      // grace 内
-		{mk("2026-09-12T10:00:00Z"), time.Hour, true},       // grace を過ぎた
-		{mk(TTLNoneTagValue), 0, false},                     // 明示無期限
-		{mk("broken"), 0, false},                            // 壊れたタグは消さない
-		{&Info{Tags: map[string]string{}}, 0, false},        // タグ欠落
+		{mk("2026-09-12T11:00:00Z"), 0, true},          // 期限切れ
+		{mk("2026-09-12T13:00:00Z"), 0, false},         // まだ生きてる
+		{mk("2026-09-12T11:30:00Z"), time.Hour, false}, // grace 内
+		{mk("2026-09-12T10:00:00Z"), time.Hour, true},  // grace を過ぎた
+		{mk(TTLNoneTagValue), 0, false},                // 明示無期限
+		{mk("broken"), 0, false},                       // 壊れたタグは消さない
+		{&Info{Tags: map[string]string{}}, 0, false},   // タグ欠落
 	}
 	for i, tc := range cases {
 		if got := tc.info.Expired(now, tc.grace); got != tc.want {
@@ -305,14 +306,14 @@ func TestURLFallback(t *testing.T) {
 
 func TestInfoState(t *testing.T) {
 	cases := map[string]string{
-		"CREATE_COMPLETE":                    "ready",
-		"UPDATE_COMPLETE":                    "ready",
-		"CREATE_IN_PROGRESS":                 "creating",
-		"UPDATE_IN_PROGRESS":                 "updating",
-		"DELETE_IN_PROGRESS":                 "deleting",
-		"ROLLBACK_COMPLETE":                  "failed",
-		"UPDATE_ROLLBACK_COMPLETE":           "failed",
-		"CREATE_FAILED":                      "failed",
+		"CREATE_COMPLETE":                     "ready",
+		"UPDATE_COMPLETE":                     "ready",
+		"CREATE_IN_PROGRESS":                  "creating",
+		"UPDATE_IN_PROGRESS":                  "updating",
+		"DELETE_IN_PROGRESS":                  "deleting",
+		"ROLLBACK_COMPLETE":                   "failed",
+		"UPDATE_ROLLBACK_COMPLETE":            "failed",
+		"CREATE_FAILED":                       "failed",
 		"UPDATE_COMPLETE_CLEANUP_IN_PROGRESS": "updating",
 	}
 	for status, want := range cases {
@@ -366,5 +367,44 @@ func TestEnvironmentURLFallsBackToOutputs(t *testing.T) {
 	i := &Info{Tags: map[string]string{}, Outputs: map[string]string{"KagerouUrl": "https://out"}}
 	if u, ok := i.EnvironmentURL(); !ok || u != "https://out" {
 		t.Fatalf("fallback broken: %q", u)
+	}
+}
+
+func TestUpOwnership(t *testing.T) {
+	d, ctx := testDriver(t)
+
+	// 1) 自分で up → kagerou:owner が付く。同じ呼び出し元の再 up は上書きできる
+	mine := UpInput{StackName: "kagerou-test-own-1", Name: "own-1", TemplateBody: testTemplate, Version: "test"}
+	info, err := d.Up(ctx, mine)
+	if err != nil {
+		t.Fatalf("up (create): %v", err)
+	}
+	if info.Tags[TagOwner] == "" {
+		t.Fatalf("kagerou:owner should be stamped: %v", info.Tags)
+	}
+	if _, err := d.Up(ctx, mine); err != nil {
+		t.Fatalf("same-owner re-up should overwrite: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Down(ctx, mine.StackName) })
+
+	// 2) 他人 owner のスタックを直接作っておく → 同名 up は名前衝突エラー
+	foreign := "kagerou-test-own-2"
+	_, err = d.cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
+		StackName:    aws.String(foreign),
+		TemplateBody: aws.String(testTemplate),
+		Tags: []cfntypes.Tag{
+			{Key: aws.String(TagManaged), Value: aws.String("true")},
+			{Key: aws.String(TagName), Value: aws.String("own-2")},
+			{Key: aws.String(TagOwner), Value: aws.String("arn:aws:iam::999999999999:user/someone-else")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("pre-create foreign stack: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Down(ctx, foreign) })
+
+	_, err = d.Up(ctx, UpInput{StackName: foreign, Name: "own-2", TemplateBody: testTemplate, Version: "test"})
+	if err == nil || !strings.Contains(err.Error(), "someone-else") {
+		t.Fatalf("foreign env must be rejected with the owner named, got: %v", err)
 	}
 }
