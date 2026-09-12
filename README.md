@@ -1,40 +1,69 @@
 # kagerou
 
-Ephemeral environments on AWS.
+Ephemeral preview environments on AWS.
+**Your app runs on ECS. Your previews don't have to.**
+
+すでにコンテナで動いているアプリに、PR ごとのプレビュー環境を足すためのツール。
+同じイメージを Lambda(Web Adapter)で包んで、**開くと生え、閉じるか寿命が来ると消える**
+環境を自分の AWS アカウントに作る。SAM や CloudFormation の知識は要らない
+(プレビューの実装詳細であって、あなたのスタックではない)。
 
 Named after 陽炎 — a heat shimmer — and 蜉蝣, the mayfly that lives for a day.
 Environments that appear, flicker, and are gone.
 
-> Status: alpha. The core works — `up` / `down` / `url` / `list` / `reap` on the
-> `stack` driver (one CloudFormation stack per environment), plus a composite
-> action for CI. Not yet proven on a long-running real deployment.
+> Status: alpha. `init` / `validate` / `up` / `down` / `url` / `list` / `reap` /
+> `iam-policy`、composite action、PR デモ 2 種まで動作。長期運用の実績はまだ。
 > The first adapter is GitHub pull requests; the core is not PR-specific.
 
-Sibling project: [sashiki](https://github.com/rikukadev/sashiki) — disposable database branches.
-
-## 使ってみる
+## 導入は init から
 
 ```bash
-# CI から(composite action)
+kagerou init
+```
+
+リポジトリを読んで(git remote・フレームワーク・DB 依存・Dockerfile・AWS 認証)、
+質問に答えるだけで一式が生成される:
+
+- 既存の **Dockerfile を検出したら Lambda Web Adapter を 1 行注入**
+  (Lambda の外では no-op。ローカルの docker build も ECS もそのまま)
+- listen ポートは `EXPOSE` / compose から検出して、テンプレートは **TODO なしの完成品**
+- AWS 側の準備(OIDC ロール・ECR・Variables)は **その場で適用 / スクリプト保存 / 手動**から選択
+- mysql2 等を検出したら [sashiki](https://github.com/rikukadev/sashiki)
+  (使い捨て DB ブランチ)との連携が既定の選択肢になる
+
+生成後は PR を開くだけ。CI がビルドし、action が環境を上げ、PR に URL コメントが付く。
+閉じれば消える。忘れても TTL(既定 72h)と reap が最後の網。
+
+```bash
+kagerou validate          # 契約(CONTRACT)をデプロイ前に検査
+kagerou iam-policy --with-ecr > ci-policy.json   # CI ロールの最小権限を構成別に生成
+```
+
+## CI から(composite action)
+
+```yaml
 - uses: rikukadev/kagerou/action@v0
   with:
     name: pr-${{ github.event.pull_request.number }}
-    env: |
-      DB_HOST=10.0.1.5
-      DB_USER=dev@pr-42
-
-# 手元から
-kagerou up --name pr-42
-kagerou url --name pr-42
-kagerou down --name pr-42
 ```
 
-必要なのは `kagerou.yaml` と、[CONTRACT](docs/CONTRACT.md) に沿った
-CloudFormation テンプレート(`Env<Key>` パラメータと `KagerouUrl` Output)の 2 つ。
+手元からも同じことができる: `kagerou up --name pr-42` / `url` / `down`。
 
-動く例:
+## しくみ(30 秒版)
+
+- 環境 = CloudFormation スタック 1 個。**専用の状態ストアは持たず**、
+  タグ(`kagerou:name` / `kagerou:expires-at`)が真実の源
+- すべての環境は **TTL 必須**。イベント駆動の削除が失敗しても `reap` が回収する
+- アプリへの値は環境変数で注入(`--env DB_HOST` → テンプレートの `EnvDbHost`)。
+  DB が sashiki でも RDS でも SQLite でも「env の出どころが違うだけ」
+- 詳細な公開契約は [docs/CONTRACT.md](docs/CONTRACT.md)、設計は
+  [docs/DESIGN.md](docs/DESIGN.md)
+
+## 動く例
 
 | リポジトリ | 構成 |
 |---|---|
 | [kagerou-ssr-demo](https://github.com/rikukadev/kagerou-ssr-demo) | React Router(SSR)を 1 Lambda で受ける最小構成 |
 | [kagerou-3tier-demo](https://github.com/rikukadev/kagerou-3tier-demo) | React SPA / Go API / RDB を別オリジンで分離した構成 |
+
+Sibling project: [sashiki](https://github.com/rikukadev/sashiki) — disposable database branches.
