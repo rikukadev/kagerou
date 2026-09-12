@@ -13,6 +13,7 @@ import (
 	"github.com/rikukadev/kagerou/internal/config"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
 	"github.com/rikukadev/kagerou/internal/hooks"
+	"github.com/rikukadev/kagerou/internal/iampolicy"
 	"github.com/rikukadev/kagerou/internal/readiness"
 	"github.com/rikukadev/kagerou/internal/scaffold"
 	"github.com/rikukadev/kagerou/internal/validate"
@@ -397,6 +398,53 @@ func cmdReap(args []string, out *os.File) error {
 		if _, err := fmt.Fprintf(out, "reaped\t%s\t(expired %s)\n", name, info.Tags[stack.TagExpiresAt]); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func cmdIamPolicy(args []string, out *os.File) error {
+	fs := flag.NewFlagSet("iam-policy", flag.ContinueOnError)
+	cfgPath := fs.String("config", config.DefaultFile, "config file")
+	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
+	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
+	ecrRepo := fs.String("ecr-repo", "", "ECR repository name (default: project in kagerou.yaml)")
+	s3 := fs.Bool("with-s3", false, "static website bucket (3-tier etc.)")
+	vpc := fs.Bool("with-vpc", false, "Lambda inside a VPC (ENI management)")
+	ssm := fs.Bool("with-sashiki-ssm", false, "sashiki action transport=ssm")
+	instance := fs.String("instance-id", "", "target instance for --with-sashiki-ssm")
+	cf := fs.Bool("with-cloudfront", false, "CloudFront cache invalidation")
+	r53 := fs.Bool("with-route53", false, "Route53 record changes")
+	zone := fs.String("hosted-zone-id", "", "hosted zone for --with-route53")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		return err
+	}
+	if *prefix == "" {
+		*prefix = cfg.NamePrefix
+	}
+	if *ecrRepo == "" {
+		*ecrRepo = cfg.Project
+	}
+	pol, err := iampolicy.Build(iampolicy.Options{
+		Prefix: *prefix,
+		ECR:    *ecr, EcrRepo: *ecrRepo,
+		S3: *s3, VPC: *vpc,
+		SashikiSSM: *ssm, InstanceID: *instance,
+		CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
+	})
+	if err != nil {
+		return err
+	}
+	b, err := pol.JSON()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "kagerou: note: apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching")
+	if _, err := out.Write(append(b, '\n')); err != nil {
+		return err
 	}
 	return nil
 }
