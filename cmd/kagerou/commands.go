@@ -237,7 +237,7 @@ func upStatic(out *os.File, f upFlags, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnvForUp(f.name, info)); err != nil {
+	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnv(f.name, info)); err != nil {
 		return err
 	}
 	return printEnvironment(out, f.output, f.name, info)
