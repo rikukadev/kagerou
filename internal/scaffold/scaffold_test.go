@@ -286,3 +286,34 @@ func TestScaffoldWithoutWantsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestScaffoldedDockerfilePortMatchesTemplate(t *testing.T) {
+	// fresh 3tier で発覚: 雛形 Dockerfile(go=8080)と template の AWS_LWA_PORT(3000 TODO)が
+	// 食い違い、最初のデプロイから 502 になる。雛形を生成するときは同じポートを両方に使う。
+	dir := t.TempDir()
+	if _, err := Run(dir, Params{Project: "svc", Region: "r", Framework: "go"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	df := read(t, dir, "Dockerfile")
+	tp := read(t, dir, "template.yaml")
+	if !strings.Contains(df, "EXPOSE 8080") {
+		t.Fatalf("go 雛形は 8080 のはず:\n%s", df)
+	}
+	if !strings.Contains(tp, `AWS_LWA_PORT: "8080"`) {
+		t.Fatalf("template は雛形と同じ 8080 を使うはず:\n%s", tp)
+	}
+	if strings.Contains(tp, "TODO: match") {
+		t.Fatal("ポートが確定しているのに TODO が残っている")
+	}
+	// 既存 Dockerfile がある(=雛形を出さない)ときは従来どおり
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(dir2, Params{Project: "svc", Region: "r", Framework: "go", HasDockerfile: true}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if tp2 := read(t, dir2, "template.yaml"); !strings.Contains(tp2, `AWS_LWA_PORT: "3000"`) {
+		t.Fatalf("既存 Dockerfile 時は挙動を変えない:\n%s", tp2)
+	}
+}

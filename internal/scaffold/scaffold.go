@@ -56,6 +56,18 @@ func AllTargets() Targets {
 // のみ上書きを許す。template.yaml はアプリの実体なので force でも上書きしない。
 func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	var res Result
+
+	// これから Dockerfile 雛形を生成する場合、その listen ポートは自分が決める
+	// (variant の既定)。template.yaml の AWS_LWA_PORT にも同じ値を使わないと、
+	// 「雛形は 8080 で listen、LWA は 3000 を見にいく」で最初のデプロイから 502 になる。
+	if sel.Dockerfile && p.Port == "" {
+		if variant, ok := dockerfileVariant(p.Framework); ok {
+			if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+				p.Port = defaultPort(variant)
+			}
+		}
+	}
+
 	files := []struct {
 		enabled   bool
 		path      string

@@ -45,7 +45,7 @@ Resources:
       Environment:
         Variables:
 {{- if .Port}}
-          AWS_LWA_PORT: "{{.Port}}" # detected from your Dockerfile/compose
+          AWS_LWA_PORT: "{{.Port}}" # matches your Dockerfile (detected or scaffolded)
 {{- else}}
           AWS_LWA_PORT: "3000" # TODO: match your app's listen port
 {{- end}}
