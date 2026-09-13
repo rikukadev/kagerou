@@ -6,12 +6,14 @@ package main
 // 手動用のコマンド列挙になる。非 TTY では呼ばれない。
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rikukadev/kagerou/internal/preflight"
 	"github.com/rikukadev/kagerou/internal/scaffold"
 )
 
@@ -74,6 +76,8 @@ type initModel struct {
 	result      scaffold.Result
 	runErr      error
 	plan        scaffold.AWSPlan
+	perm        preflight.Report
+	permDone    bool
 	setupMode   scaffold.SetupMode
 	setupOutput string
 	setupErr    error
@@ -205,6 +209,20 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	return sel, p
 }
 
+type permMsg struct{ rep preflight.Report }
+
+// checkPerms は「この構成で setup が通るか」を確認する tea.Cmd。
+// 判定できない環境もあるので、結果は参考情報として confirm 画面に出す。
+func checkPerms(region string, p preflight.Plan) tea.Cmd {
+	return func() tea.Msg {
+		rep, err := preflight.CheckPermissions(context.Background(), region, p)
+		if err != nil {
+			rep.Note = "identity unavailable: " + err.Error()
+		}
+		return permMsg{rep: rep}
+	}
+}
+
 // applySetup はセットアップスクリプトを実行する tea.Cmd。
 func applySetup(dir string) tea.Cmd {
 	return func() tea.Msg {
@@ -216,6 +234,10 @@ func applySetup(dir string) tea.Cmd {
 }
 
 func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if pm, ok := msg.(permMsg); ok {
+		m.perm, m.permDone = pm.rep, true
+		return m, nil
+	}
 	if done, ok := msg.(setupDoneMsg); ok {
 		m.setupOutput, m.setupErr = done.output, done.err
 		if done.err != nil {
@@ -299,7 +321,9 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// 何が作られて幾らかかるかを見せてから y/n を取る。
 				m.plan = scaffold.BuildAWSPlan(p, m.det)
 				m.phase = phaseConfirmAWS
-				return m, nil
+				return m, checkPerms(p.Region, preflight.Plan{
+					Role: true, ECR: !p.Static(), Base: p.SetupBase, StaticSync: p.Static(),
+				})
 			case setupScript:
 				if _, err := scaffold.WriteSetupScript(m.dir, p, m.det); err != nil {
 					m.setupErr, m.setupMode = err, scaffold.SetupSkip
@@ -397,6 +421,7 @@ func (m initModel) View() string {
 		b.WriteString(header)
 		b.WriteString(tuiTitle.Render("Files are written. Next: AWS") + "\n\n")
 		b.WriteString(m.plan.Render())
+		b.WriteString("\n" + m.renderPermissions())
 		b.WriteString("\n" + tuiTitle.Render("Create these in AWS? [y/N]") + "\n")
 		b.WriteString(tuiHint.Render("y create now · n / enter save " + scaffold.SetupScriptName + " and stop · q cancel"))
 	case phaseApplying:
@@ -486,4 +511,31 @@ func runInitTUI(dir string, p scaffold.Params, det scaffold.Detection, force boo
 		return m.runErr
 	}
 	return nil
+}
+
+// renderPermissions は「誰として・どのアカウントに作るか」と、その資格情報で
+// 足りない権限を出す。判定不能は失敗にしない(注記のみ)。
+func (m initModel) renderPermissions() string {
+	if !m.permDone {
+		return tuiFaint.Render("checking identity and permissions…") + "\n"
+	}
+	var b strings.Builder
+	if id := m.perm.Identity.String(); id != "" {
+		b.WriteString("as " + tuiAnswer.Render(id) + "\n")
+	}
+	switch {
+	case !m.perm.Simulated:
+		if m.perm.Note != "" {
+			b.WriteString(tuiFaint.Render(m.perm.Note) + "\n")
+		}
+	case len(m.perm.Denied()) == 0:
+		b.WriteString(tuiFaint.Render("permissions ok for this plan") + "\n")
+	default:
+		b.WriteString(tuiErr.Render("missing permissions:") + "\n")
+		for _, c := range m.perm.Denied() {
+			b.WriteString(tuiDetail.Render(fmt.Sprintf("%-38s %s", c.Action, c.Why)) + "\n")
+		}
+		b.WriteString(tuiFaint.Render("n で "+scaffold.SetupScriptName+" を残して、権限のある人に渡せます") + "\n")
+	}
+	return b.String()
 }
