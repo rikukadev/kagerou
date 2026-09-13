@@ -1,0 +1,44 @@
+# 実 AWS E2E(複数サービス版)。名前は CI が --name で渡す。
+project: kagerou-e2e
+driver: stack
+template: e2e/aws/multi/template.yaml
+region: ap-northeast-1
+name_prefix: kge2e-
+ttl: 2h
+
+env:
+  KAGEROU_ENV: "{name}"
+  GREETING: "hello from {name}"
+
+hooks:
+  # フロントエンドは A/B/C の 3 本を実行時に知る。スタックを作るまで
+  # 分からない値なので、post_up で config.json に書いて置く。
+  # index.html は fetch で 3 サービスを叩き、結果を data 属性に出す
+  # (E2E は curl でこの HTML と config.json を確かめる)。
+  post_up: |
+    set -eu
+    : "${KAGEROU_OUTPUT_WEBBUCKETNAME:?post_up に WebBucketName が届いていない}"
+    : "${KAGEROU_OUTPUT_AURL:?post_up に AUrl が届いていない}"
+    printf '{"a":"%s","b":"%s","c":"%s","env":"%s"}\n' \
+      "$KAGEROU_OUTPUT_AURL" "$KAGEROU_OUTPUT_BURL" "$KAGEROU_OUTPUT_CURL" "$KAGEROU_NAME" \
+      > /tmp/kge2e-config.json
+    printf '<!doctype html><title>%s</title><h1>%s</h1><script type="module">
+      const cfg = await (await fetch("/config.json")).json();
+      for (const s of ["a","b","c"]) {
+        const r = await fetch(cfg[s]).then(r => r.json()).catch(e => ({error: String(e)}));
+        document.body.dataset[s] = JSON.stringify(r);
+      }
+    </script>' "$KAGEROU_NAME" "$KAGEROU_NAME" > /tmp/kge2e-index.html
+    aws s3 cp /tmp/kge2e-config.json "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/config.json" \
+      --content-type "application/json"
+    aws s3 cp /tmp/kge2e-index.html "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/index.html" \
+      --content-type "text/html; charset=utf-8"
+
+  # 中身の入ったバケットは DeleteStack が消せない(#76 で入れた pre_down)。
+  pre_down: |
+    set -eu
+    : "${KAGEROU_OUTPUT_WEBBUCKETNAME:?pre_down に WebBucketName が届いていない}"
+    aws s3 rm "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME" --recursive
+
+readiness_path: "/"
+readiness_timeout: 120s
