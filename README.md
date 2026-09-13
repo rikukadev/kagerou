@@ -100,4 +100,6 @@ PR を開くと環境が生え、URL コメントが付き、閉じると消え�
 | [kagerou-ssr-demo](https://github.com/rikukadev/kagerou-ssr-demo) | React Router(SSR)を 1 Lambda で受ける最小構成 |
 | [kagerou-3tier-demo](https://github.com/rikukadev/kagerou-3tier-demo) | React SPA / Go API / RDB を別オリジンで分離した構成 |
 
-Sibling project: [sashiki](https://github.com/rikukadev/sashiki) — disposable database branches.
+Sibling projects:
+[sashiki](https://github.com/rikukadev/sashiki) — disposable database branches.
+[mahoroba](https://github.com/rikukadev/mahoroba) — production environments (kagerou is preview-only; see DESIGN §12).
