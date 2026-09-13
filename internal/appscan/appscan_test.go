@@ -167,3 +167,60 @@ func TestScanWantsSNS(t *testing.T) {
 		t.Error("go の SNS クライアントを拾うはず")
 	}
 }
+
+func TestScanServicesAndRealtime(t *testing.T) {
+	dir := t.TempDir()
+	// compose に 3 サービス
+	write(t, dir, "compose.yaml", `services:
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"
+  api:
+    build: .
+  worker:
+    build: .
+volumes:
+  shared:
+`)
+	if got := Scan(dir).Services; got != 3 {
+		t.Fatalf("Services = %d, want 3 (compose services)", got)
+	}
+
+	// Go の cmd/*/main.go も数える
+	dir2 := t.TempDir()
+	for _, name := range []string{"gateway", "api"} {
+		if err := os.MkdirAll(filepath.Join(dir2, "cmd", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir2, filepath.Join("cmd", name, "main.go"), "package main\nfunc main() {}\n")
+	}
+	if got := Scan(dir2).Services; got != 2 {
+		t.Fatalf("Services = %d, want 2 (cmd/*/main.go)", got)
+	}
+
+	// Dockerfile だけなら 1
+	dir3 := t.TempDir()
+	write(t, dir3, "Dockerfile", "FROM alpine\nEXPOSE 8080\n")
+	if got := Scan(dir3).Services; got != 1 {
+		t.Fatalf("Services = %d, want 1", got)
+	}
+
+	// WebSocket 依存の検出(上限のある入口を避ける根拠)
+	dir4 := t.TempDir()
+	write(t, dir4, "go.mod", "module x\n\nrequire github.com/gorilla/websocket v1.5.0\n")
+	if !Scan(dir4).Realtime {
+		t.Fatal("gorilla/websocket を realtime として検出できていない")
+	}
+	dir5 := t.TempDir()
+	write(t, dir5, "package.json", `{"dependencies":{"socket.io":"^4"}}`)
+	if !Scan(dir5).Realtime {
+		t.Fatal("socket.io を realtime として検出できていない")
+	}
+	// 無関係な依存で誤検知しない
+	dir6 := t.TempDir()
+	write(t, dir6, "package.json", `{"dependencies":{"react":"^19"}}`)
+	if Scan(dir6).Realtime {
+		t.Fatal("realtime を誤検知している")
+	}
+}
