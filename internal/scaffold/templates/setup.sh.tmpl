@@ -84,7 +84,8 @@ echo "deploying preview base for *.${DOMAIN} (takes ~15 min: certificate validat
 aws cloudformation deploy --region us-east-1 \
   --stack-name "kagerou-preview-base-${PROJECT}" \
   --template-file deploy/preview-base.yaml \
-  --parameter-overrides Project="$PROJECT" DomainName="$DOMAIN" HostedZoneId="$ZONE_ID"
+  --parameter-overrides Project="$PROJECT" DomainName="$DOMAIN" HostedZoneId="$ZONE_ID" \
+    Routing="{{.Routing}}"
 {{- end}}
 
 echo "done:"
@@ -92,5 +93,5 @@ echo "  role  arn:aws:iam::${ACCOUNT}:role/${ROLE}"
 echo "  ecr   ${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 echo "  vars  AWS_ROLE_ARN / AWS_REGION / ECR_REPOSITORY"
 {{- if .Domain}}
-echo "  base  https://<name>.{{.Domain}}"
+echo "  base  https://<name>.{{.Domain}} (routing: {{.Routing}})"
 {{- end}}

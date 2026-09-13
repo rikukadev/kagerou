@@ -75,13 +75,15 @@ resource "aws_cloudfront_origin_access_control" "base" {
 }
 
 # Host の最初のラベル(pr-42.todo.example.com → pr-42)を S3 プレフィックスに写す。
-# 拡張子の無いパスは index.html に落とす(SPA のルーティング想定)。CFN 版と同一コード。
+# 拡張子の無いパスの扱いは routing で切り替える(CFN 版と同一コード)。
 resource "aws_cloudfront_function" "host_to_prefix" {
   name    = "kagerou-base-${var.project}-host-to-prefix"
   runtime = "cloudfront-js-2.0"
   publish = true
-  comment = "map <name>.<domain>/<uri> to /<name>/<uri>"
+  comment = "map <name>.<domain>/<uri> to /<name>/<uri> (routing: ${var.routing})"
   code    = <<-EOT
+    var ROUTING = '${var.routing}';
+
     function handler(event) {
       var req = event.request;
       var name = req.headers.host.value.split('.')[0];
@@ -89,7 +91,9 @@ resource "aws_cloudfront_function" "host_to_prefix" {
       if (uri.endsWith('/')) {
         uri += 'index.html';
       } else if (!uri.split('/').pop().includes('.')) {
-        uri += '/index.html';
+        // 拡張子の無いパス。SSG は /about/index.html を出すが、SPA では
+        // その実体が無く、OAC 経由の S3 は 404 ではなく 403 を返す。
+        uri = ROUTING === 'spa' ? '/index.html' : uri + '/index.html';
       }
       req.uri = '/' + name + uri;
       return req;
@@ -184,4 +188,12 @@ resource "aws_ssm_parameter" "distribution" {
   name  = "/kagerou/base/${var.project}/distribution"
   type  = "String"
   value = aws_cloudfront_distribution.base.id
+}
+
+# ベースがどちらのモードで配るかは、あとから見て分かる必要がある
+# (ディープリンクが 403 になったとき、まずここを見れば切り分けられる)。
+resource "aws_ssm_parameter" "routing" {
+  name  = "/kagerou/base/${var.project}/routing"
+  type  = "String"
+  value = var.routing
 }

@@ -52,6 +52,26 @@ type Static struct {
 	// Prefix はバケット内の置き場所。空なら "{name}"(per-app base)。
 	// 共有 base では "{project}/{name}" にして project 境界を作る。
 	Prefix string `yaml:"prefix"`
+	// Routing は拡張子の無いパスの解決方法。preview base の CloudFront Function
+	// に渡る値で、**ベースを作るときに決まる**(環境ごとには変えられない)。
+	//   directory(既定) /about → …/about/index.html  静的サイト生成器向け
+	//   spa              /about → …/index.html       クライアントルーター向け
+	// SPA で directory のままだと、実体が無いので 403 になる(#86)。
+	Routing string `yaml:"routing"`
+}
+
+// RoutingDirectory / RoutingSPA は Static.Routing の値。
+const (
+	RoutingDirectory = "directory"
+	RoutingSPA       = "spa"
+)
+
+// StaticRouting は既定を埋めた routing を返す。
+func (c Config) StaticRouting() string {
+	if c.Static.Routing == "" {
+		return RoutingDirectory
+	}
+	return c.Static.Routing
 }
 
 // StaticPrefix は静的成果物の置き場所(末尾スラッシュなし)。
@@ -131,6 +151,13 @@ func (c Config) validate() error {
 		}
 	default:
 		return fmt.Errorf("unknown driver %q (\"stack\" or \"static\")", c.Driver)
+	}
+	// routing は driver: static 専用ではない。stack 構成でも SPA を preview base
+	// から配るので(3 層デモがそれ)、driver の外で検証する。
+	switch c.Static.Routing {
+	case "", RoutingDirectory, RoutingSPA:
+	default:
+		return fmt.Errorf("unknown static.routing %q (%q or %q)", c.Static.Routing, RoutingDirectory, RoutingSPA)
 	}
 	if _, _, err := ParseTTL(c.TTL); err != nil {
 		return err

@@ -251,6 +251,7 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/<project>/domain         # 例 todo.example.com
 /kagerou/base/<project>/bucket         # 成果物バケット名
 /kagerou/base/<project>/distribution   # CloudFront distribution id
+/kagerou/base/<project>/routing        # directory | spa(拡張子の無いパスの解決)
 
 /kagerou/base/_shared/…                # 1 ドメインを複数アプリで共有するベース
 ```
@@ -267,6 +268,27 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
   内容に触れない
 - `_shared` は project 名として使えない文字(`_`)で始まるので、実在の
   project と衝突しない
+
+### routing
+
+拡張子の無いパスをどう解決するか。**ベースを作るときに決まり、環境ごとには
+変えられない**(CloudFront Function に焼き込まれるため)。
+
+| 値 | `/about` の解決先 | 向き |
+|---|---|---|
+| `directory`(既定) | `…/about/index.html` | 静的サイト生成器(`/about/index.html` を出すもの) |
+| `spa` | `…/index.html` | クライアントルーター(`/about` の実体が無いもの) |
+
+`…` はその環境のプレフィックス(per-app は `/<name>`、共有ベースは
+`/<project>/<name>`)。SPA でも**そのプレフィックス配下の** index.html に写す —
+ルートに落とすと共有ベースで別アプリの画面が出る。
+
+SPA を `directory` のまま配ると、実体が無いので **403** になる(OAC 経由の S3 は
+404 ではなく 403 を返す)。CloudFront のカスタムエラーページでは代替できない —
+指せるのは固定パス 1 つで、環境ごとには切り替わらない。
+
+利用者は `kagerou.yaml` の `static.routing` で宣言し、ベースのデプロイ時に渡る。
+**後から変えるにはベースを deploy し直す**(環境の作り直しは不要)。
 
 - **ベースの IaC はツール非依存**。同梱の CFN テンプレート(`deploy/preview-base.yaml`)も
   Terraform リファレンス(`examples/terraform/preview-base/`)も同じキーを書く。

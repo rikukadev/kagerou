@@ -28,6 +28,15 @@ Parameters:
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Description: Hosted zone that owns the parent of DomainName
+  Routing:
+    Type: String
+    Default: directory
+    AllowedValues: [directory, spa]
+    Description: >
+      How to resolve extensionless paths. "directory" appends /index.html
+      (static site generators emit /about/index.html). "spa" maps them all to
+      the environment's index.html and lets the client router take over — the
+      file for /about does not exist, so "directory" would 403.
 
 Conditions:
   IsShared: !Equals [!Ref Mode, shared]
@@ -73,38 +82,39 @@ Resources:
       FunctionConfig:
         Comment: map <name>.<domain>/<uri> to /<name>/<uri>
         Runtime: cloudfront-js-2.0
-      FunctionCode: !If
-        - IsShared
-        - |
-          function handler(event) {
-            var req = event.request;
-            // shared: <project>--<name>.<domain> -> /<project>/<name>/…
-            var label = req.headers.host.value.split('.')[0];
-            var sep = label.indexOf('--');
-            var prefix = sep < 0 ? label : label.slice(0, sep) + '/' + label.slice(sep + 2);
-            var uri = req.uri;
-            if (uri.endsWith('/')) {
-              uri += 'index.html';
-            } else if (!uri.split('/').pop().includes('.')) {
-              uri += '/index.html';
-            }
-            req.uri = '/' + prefix + uri;
-            return req;
-          }
-        - |
-          function handler(event) {
-            var req = event.request;
-            var name = req.headers.host.value.split('.')[0];
-            var uri = req.uri;
-            if (uri.endsWith('/')) {
-              uri += 'index.html';
-            } else if (!uri.split('/').pop().includes('.')) {
-              uri += '/index.html';
-            }
-            req.uri = '/' + name + uri;
-            return req;
-          }
+      # Mode と Routing を定数として焼き込み、**本体は 1 つ**にする。
+      # !If で分けると Mode × Routing で 4 本になり、どれが配信されているのか
+      # テンプレートから読み取れなくなる。
+      FunctionCode: !Sub |
+        var MODE = '${Mode}';
+        var ROUTING = '${Routing}';
 
+        function handler(event) {
+          var req = event.request;
+          var label = req.headers.host.value.split('.')[0];
+          // shared:  <project>--<name>.<domain> -> /<project>/<name>/…
+          // per-app: <name>.<domain>            -> /<name>/…
+          var prefix = label;
+          if (MODE === 'shared') {
+            var sep = label.indexOf('--');
+            if (sep >= 0) {
+              prefix = label.slice(0, sep) + '/' + label.slice(sep + 2);
+            }
+          }
+          var uri = req.uri;
+          if (uri.endsWith('/')) {
+            uri += 'index.html';
+          } else if (!uri.split('/').pop().includes('.')) {
+            // 拡張子の無いパス。SSG は /about/index.html を出すが、SPA では
+            // その実体が無く、OAC 経由の S3 は 404 ではなく 403 を返す。
+            //
+            // CloudFront のカスタムエラーページでは代替できない。指せるのは
+            // 固定パス 1 つで、環境ごと(プレフィックス配下)には切り替わらない。
+            uri = ROUTING === 'spa' ? '/index.html' : uri + '/index.html';
+          }
+          req.uri = '/' + prefix + uri;
+          return req;
+        }
   Distribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -181,6 +191,14 @@ Resources:
       Name: !If [IsShared, "/kagerou/base/_shared/distribution", !Sub "/kagerou/base/${Project}/distribution"]
       Type: String
       Value: !Ref Distribution
+  # ベースがどちらのモードで配るかは、あとから見て分かる必要がある
+  # (ディープリンクが 403 になったとき、まずここを見れば切り分けられる)。
+  RoutingParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If [IsShared, "/kagerou/base/_shared/routing", !Sub "/kagerou/base/${Project}/routing"]
+      Type: String
+      Value: !Ref Routing
 
 Outputs:
   Domain:

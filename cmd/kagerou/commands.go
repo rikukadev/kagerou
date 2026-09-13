@@ -373,7 +373,7 @@ func cmdInit(args []string, out *os.File) error {
 	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
-		Wants: det.Wants}
+		Wants: det.Wants, Routing: scaffold.RoutingFor(det.Framework)}
 
 	// TTY なら「検出結果でプリチェックされた選択 TUI → 生成 → チェックリスト」
 	if !*plain && term.IsTerminal(int(out.Fd())) {

@@ -188,6 +188,9 @@ func (m initModel) answer(key string) int {
 func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p := m.params
 	p.Sashiki = m.answer("db") == 0
+	// routing は preview base に焼き込まれる。後から変えるにはベースの
+	// deploy し直しが要るので、確認画面(phaseConfirmAWS)にも出す。
+	p.Routing = scaffold.RoutingFor(m.det.Framework)
 	p.Port = m.det.AppPort
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
 	switch base, ok := m.det.Base(p.Project); {
