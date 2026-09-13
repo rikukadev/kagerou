@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+# 実 AWS E2E の非同期ワーカー版(#119)。
+#
+#   API ──→ SQS ──→ worker ──→ DynamoDB
+#    └──────────── GET /jobs/{id} ─────┘
+#
+# 既存フィクスチャとの違いは **URL を持たない compute(worker)** がいること。
+# readiness_path は API の 200 しか見ないので、worker が壊れていても環境は
+# ready になる。「HTTP が返る」と「システムが動く」の差がここで初めて開く。
+#
+# キューとテーブルはスタック名でスコープする。環境の分離が「別スタック」で
+# 保たれるのは CFN が名前を分けるからで、名前を固定した瞬間に pr-41 のジョブを
+# pr-42 の worker が食う事故になる。
+Description: kagerou real-AWS E2E, async worker (API -> SQS -> worker -> DynamoDB)
+
+Parameters:
+  EnvKagerouEnv:
+    Type: String
+  EnvGreeting:
+    Type: String
+    Default: ""
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Handler: index.handler
+    Timeout: 10
+    MemorySize: 256
+    Architectures: [arm64]
+    Environment:
+      Variables:
+        KAGEROU_ENV: !Ref EnvKagerouEnv
+
+Resources:
+  JobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-jobs"
+      # worker の Timeout(10s)より長く。短いと処理中に再配信されて二重処理になる
+      VisibilityTimeout: 30
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  # 3 回失敗したジョブの行き先。E2E は「ここが空」まで確かめる —
+  # DLQ に落ちたジョブは処理されたように見えないだけで、黙って消えている。
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-dlq"
+      MessageRetentionPeriod: 1209600
+
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "${AWS::StackName}-jobs"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: id, AttributeType: S }
+      KeySchema:
+        - { AttributeName: id, KeyType: HASH }
+
+  # 同期側: ジョブを受けてキューへ、結果をテーブルから返す。
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref JobsQueue
+          TABLE: !Ref JobsTable
+          GREETING: !Ref EnvGreeting
+      Policies:
+        - SQSSendMessagePolicy: { QueueName: !GetAtt JobsQueue.QueueName }
+        - DynamoDBReadPolicy: { TableName: !Ref JobsTable }
+      InlineCode: |
+        const { SQSClient, SendMessageCommand } = require("@aws-sdk/client-sqs");
+        const { DynamoDBClient, GetItemCommand } = require("@aws-sdk/client-dynamodb");
+        const sqs = new SQSClient({});
+        const ddb = new DynamoDBClient({});
+        const json = (code, body) => ({
+          statusCode: code,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        exports.handler = async (event) => {
+          const method = event.requestContext.http.method;
+          const path = event.rawPath;
+          if (method === "POST" && path === "/jobs") {
+            const { input } = JSON.parse(event.body || "{}");
+            const id = event.requestContext.requestId;
+            await sqs.send(new SendMessageCommand({
+              QueueUrl: process.env.QUEUE_URL,
+              MessageBody: JSON.stringify({ id, input }),
+            }));
+            return json(202, { id, state: "queued" });
+          }
+          const m = path.match(/^\/jobs\/(.+)$/);
+          if (method === "GET" && m) {
+            const out = await ddb.send(new GetItemCommand({
+              TableName: process.env.TABLE,
+              Key: { id: { S: m[1] } },
+            }));
+            if (!out.Item) return json(200, { id: m[1], state: "pending" });
+            return json(200, {
+              id: m[1],
+              state: "done",
+              result: out.Item.result.S,
+              env: out.Item.env.S,
+            });
+          }
+          if (method === "GET" && path === "/") {
+            return json(200, {
+              service: "api",
+              env: process.env.KAGEROU_ENV,
+              greeting: process.env.GREETING || "",
+            });
+          }
+          return json(404, { error: "not found" });
+        };
+      Events:
+        Api:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi }
+
+  # 非同期側: URL を持たない compute。readiness からは見えない。
+  # KAGEROU_ENV が届いているかは、処理結果に env を書き込ませて外から確かめる
+  # (HTTP が無いので、応答から読むという手が使えない)。
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Environment:
+        Variables:
+          TABLE: !Ref JobsTable
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref JobsTable }
+      InlineCode: |
+        const { DynamoDBClient, PutItemCommand } = require("@aws-sdk/client-dynamodb");
+        const ddb = new DynamoDBClient({});
+        exports.handler = async (event) => {
+          for (const record of event.Records) {
+            const { id, input } = JSON.parse(record.body);
+            await ddb.send(new PutItemCommand({
+              TableName: process.env.TABLE,
+              Item: {
+                id: { S: id },
+                // 「処理した」ことが分かる変換なら何でもよい
+                result: { S: String(input).toUpperCase() },
+                env: { S: process.env.KAGEROU_ENV || "" },
+              },
+            }));
+          }
+        };
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt JobsQueue.Arn
+            BatchSize: 1
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties: { StageName: $default }
+
+Outputs:
+  KagerouUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  ApiUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  QueueName:
+    Value: !GetAtt JobsQueue.QueueName
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
+  TableName:
+    Value: !Ref JobsTable
