@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rikukadev/kagerou/internal/preflight"
+	"github.com/rikukadev/kagerou/internal/recommend"
 	"github.com/rikukadev/kagerou/internal/scaffold"
 )
 
@@ -106,15 +107,24 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		selected: dbDefault,
 	})
 
-	// 環境の実行形。Lambda はアイドル $0 の既定、ECS は常駐プロセスや
-	// サイドカーが要る(= LWA で包めない)アプリ向け(#54 の系譜)。
+	// 環境の実行形。既定は推薦(internal/recommend)が決める。判定は Facts だけを
+	// 見る純関数なので、ここは「既定に据えて理由を見せる」だけ(#107)。
+	rec := recommend.Entry(det.Facts, recommend.Options{
+		ExistingALB:    det.HasSharedALB(),
+		AllowFixedCost: det.HasSharedALB(), // 既にあるなら固定費は増えない
+	})
+	computeDefault := 0
+	if rec.Default != recommend.Lambda && rec.Default != recommend.Static {
+		computeDefault = 1
+	}
 	qs = append(qs, question{
 		key:   "compute",
 		title: "Compute?",
 		options: []option{
-			{"lambda (recommended)", "wrap the container with LWA; idle costs $0, TTL 72h"},
-			{"ecs (Fargate + shared ALB)", "real long-running containers; billed while up, TTL 24h"},
+			{"lambda", computeReason(rec, recommend.Lambda, "wrap the container with LWA; idle costs $0, TTL 72h")},
+			{"ecs (Fargate + shared ALB)", computeReason(rec, recommend.ALB, "real long-running containers; billed while up, TTL 24h")},
 		},
+		selected: computeDefault,
 	})
 
 	if det.HasDockerfile && !det.HasLWA {
@@ -568,4 +578,13 @@ func (m initModel) renderPermissions() string {
 		b.WriteString(tuiFaint.Render("n で "+scaffold.SetupScriptName+" を残して、権限のある人に渡せます") + "\n")
 	}
 	return b.String()
+}
+
+// computeReason は推薦の理由を選択肢の説明に載せる。該当する理由が無ければ
+// 元の説明のままにする(推薦は既定を決めるだけで、選択は塞がない)。
+func computeReason(rec recommend.Choice, e recommend.Entrypoint, fallback string) string {
+	if r := rec.Reason(e); r != "" {
+		return r
+	}
+	return fallback
 }

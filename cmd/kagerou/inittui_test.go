@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rikukadev/kagerou/internal/appscan"
 	"github.com/rikukadev/kagerou/internal/scaffold"
 )
 
@@ -312,4 +313,52 @@ func TestConfirmAWSGate(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestComputeDefaultFollowsRecommendation(t *testing.T) {
+	base := scaffold.Params{Project: "x", Region: "r"}
+
+	// 単一サービス → lambda が既定(安くて早い)
+	single := scaffold.Detection{
+		VarsSet: map[string]bool{},
+		Facts:   appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 1},
+	}
+	m := newInitModel(t.TempDir(), base, single, false)
+	if got := answerOf(m, "compute"); got != 0 {
+		t.Fatalf("single service: compute = %d, want 0 (lambda)", got)
+	}
+
+	// 複数サービス → ecs 側が既定
+	multi := scaffold.Detection{
+		VarsSet: map[string]bool{},
+		Facts:   appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 3},
+	}
+	m2 := newInitModel(t.TempDir(), base, multi, false)
+	if got := answerOf(m2, "compute"); got != 1 {
+		t.Fatalf("multi service: compute = %d, want 1 (ecs)", got)
+	}
+
+	// WebSocket → ecs 側が既定になり、理由が表示に出る
+	ws := scaffold.Detection{
+		VarsSet: map[string]bool{},
+		Facts:   appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 1, Realtime: true},
+	}
+	m3 := newInitModel(t.TempDir(), base, ws, false)
+	if got := answerOf(m3, "compute"); got != 1 {
+		t.Fatalf("realtime: compute = %d, want 1 (ecs)", got)
+	}
+	// Q1 を送って compute 質問を表示させ、理由が出ているか見る
+	m3 = step(t, m3, enter)
+	if v := m3.View(); !strings.Contains(v, "WebSocket") {
+		t.Fatalf("realtime の理由が表示されていない:\n%s", v)
+	}
+}
+
+func answerOf(m initModel, key string) int {
+	for _, q := range m.questions {
+		if q.key == key {
+			return q.selected
+		}
+	}
+	return -1
 }
