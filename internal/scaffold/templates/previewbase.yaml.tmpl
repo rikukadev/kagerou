@@ -11,18 +11,34 @@ Parameters:
     Type: String
     AllowedPattern: "[a-z]([a-z0-9-]*[a-z0-9])?"
     Description: kagerou project name; namespaces every resource so each app owns its base
+  Mode:
+    Type: String
+    Default: per-app
+    AllowedValues: [per-app, shared]
+    Description: >
+      per-app: one base per project; URLs are <name>.<DomainName>.
+      shared: one base for every project on this domain; URLs are
+      <project>--<name>.<DomainName> (a wildcard certificate only covers one
+      label, so the project has to live in the same label as the name).
   DomainName:
     Type: String
-    Description: This app's preview domain, e.g. todo.example.com (URLs become pr-42.todo.example.com)
+    Description: >
+      per-app: this app's preview domain (todo.example.com -> pr-42.todo.example.com).
+      shared: the shared domain (example.com -> todo--pr-42.example.com).
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Description: Hosted zone that owns the parent of DomainName
+
+Conditions:
+  IsShared: !Equals [!Ref Mode, shared]
 
 Resources:
   Bucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "kagerou-base-${Project}-${AWS::AccountId}"
+      # shared モードでは Project=shared を渡す(バケットは 1 つ、中は
+      # <project>/<name>/… で分かれる)
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -57,19 +73,37 @@ Resources:
       FunctionConfig:
         Comment: map <name>.<domain>/<uri> to /<name>/<uri>
         Runtime: cloudfront-js-2.0
-      FunctionCode: |
-        function handler(event) {
-          var req = event.request;
-          var name = req.headers.host.value.split('.')[0];
-          var uri = req.uri;
-          if (uri.endsWith('/')) {
-            uri += 'index.html';
-          } else if (!uri.split('/').pop().includes('.')) {
-            uri += '/index.html';
+      FunctionCode: !If
+        - IsShared
+        - |
+          function handler(event) {
+            var req = event.request;
+            // shared: <project>--<name>.<domain> -> /<project>/<name>/…
+            var label = req.headers.host.value.split('.')[0];
+            var sep = label.indexOf('--');
+            var prefix = sep < 0 ? label : label.slice(0, sep) + '/' + label.slice(sep + 2);
+            var uri = req.uri;
+            if (uri.endsWith('/')) {
+              uri += 'index.html';
+            } else if (!uri.split('/').pop().includes('.')) {
+              uri += '/index.html';
+            }
+            req.uri = '/' + prefix + uri;
+            return req;
           }
-          req.uri = '/' + name + uri;
-          return req;
-        }
+        - |
+          function handler(event) {
+            var req = event.request;
+            var name = req.headers.host.value.split('.')[0];
+            var uri = req.uri;
+            if (uri.endsWith('/')) {
+              uri += 'index.html';
+            } else if (!uri.split('/').pop().includes('.')) {
+              uri += '/index.html';
+            }
+            req.uri = '/' + name + uri;
+            return req;
+          }
 
   Distribution:
     Type: AWS::CloudFront::Distribution
@@ -132,19 +166,19 @@ Resources:
   DomainParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/kagerou/base/${Project}/domain"
+      Name: !If [IsShared, "/kagerou/base/_shared/domain", !Sub "/kagerou/base/${Project}/domain"]
       Type: String
       Value: !Ref DomainName
   BucketParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/kagerou/base/${Project}/bucket"
+      Name: !If [IsShared, "/kagerou/base/_shared/bucket", !Sub "/kagerou/base/${Project}/bucket"]
       Type: String
       Value: !Ref Bucket
   DistributionParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/kagerou/base/${Project}/distribution"
+      Name: !If [IsShared, "/kagerou/base/_shared/distribution", !Sub "/kagerou/base/${Project}/distribution"]
       Type: String
       Value: !Ref Distribution
 
