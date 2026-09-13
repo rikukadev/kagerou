@@ -10,7 +10,19 @@ Description: >
 Parameters:
   EnvKagerouEnv:
     Type: String
-    Description: Environment name. Injected via `KAGEROU_ENV: "{name}"` in kagerou.yaml
+    Description: 'Environment name. Injected via `KAGEROU_ENV: "{name}"` in kagerou.yaml'
+{{- if .Wants.Redis}}
+  EnvRedisUrl:
+    Type: String
+    Default: ""
+    Description: Shared redis endpoint (set via env REDIS_URL in kagerou.yaml)
+{{- end}}
+{{- if .Wants.OpenSearch}}
+  EnvOpensearchUrl:
+    Type: String
+    Default: ""
+    Description: Shared opensearch endpoint (set via env OPENSEARCH_URL in kagerou.yaml)
+{{- end}}
 
 Globals:
   Function:
@@ -40,6 +52,36 @@ Resources:
           # Implement /healthz to avoid 502s before the server is ready
           AWS_LWA_READINESS_CHECK_PATH: /healthz
           KAGEROU_ENV: !Ref EnvKagerouEnv
+{{- if .Wants.DynamoDB}}
+          TABLE_NAME: !Ref AppTable
+{{- end}}
+{{- if .Wants.SQS}}
+          QUEUE_URL: !Ref AppQueue
+{{- end}}
+{{- if .Wants.S3}}
+          BUCKET_NAME: !Ref AppBucket
+{{- end}}
+{{- if .Wants.Redis}}
+          REDIS_URL: !Ref EnvRedisUrl
+{{- end}}
+{{- if .Wants.OpenSearch}}
+          OPENSEARCH_URL: !Ref EnvOpensearchUrl
+{{- end}}
+{{- if or .Wants.DynamoDB .Wants.SQS .Wants.S3}}
+      Policies:
+{{- if .Wants.DynamoDB}}
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppTable
+{{- end}}
+{{- if .Wants.SQS}}
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt AppQueue.QueueName
+{{- end}}
+{{- if .Wants.S3}}
+        - S3CrudPolicy:
+            BucketName: !Ref AppBucket
+{{- end}}
+{{- end}}
       Events:
         Http:
           Type: HttpApi
@@ -50,6 +92,32 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+{{- if .Wants.DynamoDB}}
+
+  # 依存に DynamoDB クライアントを検出したので同梱(on-demand = アイドル $0)
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id # TODO: match your real key schema
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+{{- end}}
+{{- if .Wants.SQS}}
+
+  # 依存に SQS クライアントを検出したので同梱(アイドル $0)
+  AppQueue:
+    Type: AWS::SQS::Queue
+{{- end}}
+{{- if .Wants.S3}}
+
+  # 依存に S3 クライアントを検出したので、アプリデータ用バケットを同梱
+  AppBucket:
+    Type: AWS::S3::Bucket
+{{- end}}
 
 Outputs:
   # kagerou picks this output up as the environment URL (CONTRACT §5)
