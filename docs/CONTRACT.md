@@ -261,12 +261,21 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/_shared-alb/listener_arn
 /kagerou/base/_shared-alb/cluster
 /kagerou/base/_shared-alb/vpc_id
-/kagerou/base/_shared-alb/subnets              # カンマ区切り
+/kagerou/base/_shared-alb/subnets              # タスクを置くサブネット(カンマ区切り)
 /kagerou/base/_shared-alb/task_security_group
+/kagerou/base/_shared-alb/assign_public_ip     # ENABLED | DISABLED
 ```
 
 `compute: ecs` の環境テンプレートは `_shared-alb` のキーを CloudFormation の
 動的参照(`{{resolve:ssm:…}}`)で読む — パラメータの手渡しは要らない。
+
+**ネットワークはベース層の設定**。既定はパブリックサブネット + public IP
+(NAT を立てない = 固定費ゼロ)。組織が public IP を禁止している、あるいは
+NAT 経由 egress の本番乖離を縮めたい場合は、alb-base の `TaskSubnetIds` に
+**既存の**プライベートサブネットを渡す — `subnets` がそちらを指し
+`assign_public_ip` が `DISABLED` になる。kagerou が NAT や VPC エンドポイントを
+作ることはない(それはチームのネットワークの持ち物)。per-env でトポロジを
+作る・検証することもしない(preview の責務外)。
 
 **共有ベース(`_shared`)**: 1 つの CloudFront / 証明書 / ドメインを全 project で
 使う運用。**既定は per-app** で、共有はオプトイン(理由は DESIGN §11.3)。
