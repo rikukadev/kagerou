@@ -27,6 +27,18 @@ type AWSResource struct {
 	Note string // 補足(リージョンの制約など)
 }
 
+// Prereq は「init が作らないが、無いとプレビューが成立しない」共有側の住人。
+//
+// preview base(配信)と同じ長生きの層に住むのに、init が作らないというだけで
+// プランから消えると、利用者は最初のプレビューが繋がらない時点で初めて気づく(#123)。
+// **作るものと前提を同じ画面に並べる**のが目的なので、Kind/Name は Shared と揃える。
+type Prereq struct {
+	Kind string
+	Name string
+	How  []string // 用意のしかた(1 行ずつ)
+	Cost string   // 常駐するので固定費になる。額は「作るもの」と分けて出す
+}
+
 // CostLine は費用の内訳 1 行。Price は単価、Est はこの構成での目安。
 type CostLine struct {
 	Item  string
@@ -42,6 +54,7 @@ type AWSPlan struct {
 	Account  string
 	Region   string
 	Shared   []AWSResource // 一度だけ作る。環境より寿命が長い
+	Prereqs  []Prereq      // 作らないが、無いと動かない(共有側)
 	Cost     []CostLine
 	Estimate string   // 全体の目安(1 行)
 	PerEnv   string   // 環境ごとに作られるもの(構成で変わる)
@@ -118,6 +131,27 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		CostLine{"CloudFront", "無料枠内", "毎月 1TB 転送・1000 万リクエストまで"})
 	plan.Estimate = "プレビュー 10 個で 月 $0.1 未満。固定の月額はどれにも無い"
 
+	if p.Sashiki {
+		// sashiki ホストは preview base と同じ共有側の住人。環境ごとに乗るのは
+		// CoW ブランチだけで、ホスト自体は init の対象外(#123)。
+		plan.Prereqs = append(plan.Prereqs, Prereq{
+			Kind: "sashiki host",
+			Name: "EC2 + sashikid + zpool + baseline(共有側に 1 台)",
+			How: []string{
+				"sashiki の Terraform モジュール(deploy/terraform、RDS 互換の出力)",
+				"または手で: deb を入れて sashiki init → sashiki baseline import",
+			},
+			Cost: "EC2 1 台 + EBS の常駐費。小さめの DB で 月 $30 前後、" +
+				"600GB・同時 5 なら 月 $120 前後(sashiki/docs/COSTS.md)",
+		})
+		// 「固定の月額はどれにも無い」は init が作るものの話。前提側に常駐費が
+		// ある構成でこの 1 行だけ読まれると誤解になるので、必ず併記する。
+		plan.Estimate = "プレビュー 10 個で 月 $0.1 未満(kagerou が作るぶん。固定の月額は無い)。" +
+			"別途、前提の sashiki ホストに常駐費がかかる"
+		plan.Cost = append(plan.Cost,
+			CostLine{"sashiki ホスト", "月 $30 前後〜", "前提。kagerou は作らないし消さない"})
+	}
+
 	return plan
 }
 
@@ -145,6 +179,19 @@ func (p AWSPlan) Render() string {
 
 	for _, w := range p.Warnings {
 		fmt.Fprintf(&b, "\n  ! %s\n", w)
+	}
+
+	if len(p.Prereqs) > 0 {
+		b.WriteString("\n前提(作らない。無ければ先に用意)\n\n")
+		for _, r := range p.Prereqs {
+			fmt.Fprintf(&b, "  %s %s\n", pad(r.Kind, 16), r.Name)
+			for _, h := range r.How {
+				fmt.Fprintf(&b, "  %s %s\n", pad("", 16), h)
+			}
+			if r.Cost != "" {
+				fmt.Fprintf(&b, "  %s %s\n", pad("", 16), r.Cost)
+			}
+		}
 	}
 
 	fmt.Fprintf(&b, "\n費用の目安   %s 時点\n\n", PricesAsOf)
