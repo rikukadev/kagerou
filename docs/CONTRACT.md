@@ -251,7 +251,22 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/<project>/domain         # 例 todo.example.com
 /kagerou/base/<project>/bucket         # 成果物バケット名
 /kagerou/base/<project>/distribution   # CloudFront distribution id
+
+/kagerou/base/_shared/…                # 1 ドメインを複数アプリで共有するベース
 ```
+
+**共有ベース(`_shared`)**: 1 つの CloudFront / 証明書 / ドメインを全 project で
+使う運用。解決順は **project 専用 → `_shared` → 旧 Exports**。
+
+- URL は `<project>--<name>.<domain>`(例 `todo--pr-42.example.com`)。
+  ワイルドカード証明書は **1 ラベルしか覆えない**ので、project を name と
+  同じラベルに畳む。こうするとアプリを増やしても共有ベースを更新しなくてよい
+  (`*.example.com` のまま)
+- 成果物は `s3://<bucket>/<project>/<name>/…`(`static.prefix: "{project}/{name}"`)。
+  project 境界がプレフィックスで分かれるので、`down` / `reap` は他 project の
+  内容に触れない
+- `_shared` は project 名として使えない文字(`_`)で始まるので、実在の
+  project と衝突しない
 
 - **ベースの IaC はツール非依存**。同梱の CFN テンプレート(`deploy/preview-base.yaml`)も
   Terraform リファレンス(`examples/terraform/preview-base/`)も同じキーを書く。

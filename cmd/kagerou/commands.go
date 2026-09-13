@@ -233,6 +233,7 @@ func upStatic(out *os.File, f upFlags, cfg config.Config) error {
 			Tags:      cfg.Tags,
 		},
 		Bucket: cfg.Static.Bucket,
+		Prefix: cfg.StaticPrefix(f.name), // 共有 base では <project>/<name>
 		Dist:   cfg.Static.Dist,
 	}
 	// static は「同期 = 公開」なので、post_up(環境固有ファイルの生成)は
@@ -275,7 +276,7 @@ func cmdDown(args []string, _ *os.File) error {
 			return serr
 		}
 		// メタスタックとプレフィックス配下の両方を消す
-		if serr := sdrv.Down(ctx, stackName, cfg.Static.Bucket, f.name); serr != nil {
+		if serr := sdrv.Down(ctx, stackName, cfg.Static.Bucket, cfg.StaticPrefix(f.name)); serr != nil {
 			return serr
 		}
 	} else if err := drv.Down(ctx, stackName); err != nil {

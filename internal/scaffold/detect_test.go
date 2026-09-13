@@ -219,3 +219,29 @@ func TestDetectRegionFromAwsConfig(t *testing.T) {
 		t.Fatalf("Region = %q, want eu-west-1 (samconfig wins)", d2.Region)
 	}
 }
+
+func TestBaseForResolutionOrder(t *testing.T) {
+	own := BaseInfo{Domain: "todo.example.com", Bucket: "b-todo"}
+	shared := BaseInfo{Domain: "example.com", Bucket: "b-shared"}
+	legacy := BaseInfo{Domain: "old.example.com", Bucket: "b-legacy"}
+
+	// project 専用が最優先
+	d := Detection{Bases: map[string]BaseInfo{"todo": own, SharedBaseKey: shared, "": legacy}}
+	if b, isShared, ok := d.BaseFor("todo"); !ok || isShared || b.Bucket != "b-todo" {
+		t.Fatalf("own base should win: %+v shared=%v ok=%v", b, isShared, ok)
+	}
+	// 専用が無ければ共有
+	d2 := Detection{Bases: map[string]BaseInfo{SharedBaseKey: shared, "": legacy}}
+	if b, isShared, ok := d2.BaseFor("todo"); !ok || !isShared || b.Bucket != "b-shared" {
+		t.Fatalf("shared base should be used: %+v shared=%v ok=%v", b, isShared, ok)
+	}
+	// どちらも無ければ旧アカウント単位
+	d3 := Detection{Bases: map[string]BaseInfo{"": legacy}}
+	if b, isShared, ok := d3.BaseFor("todo"); !ok || isShared || b.Bucket != "b-legacy" {
+		t.Fatalf("legacy fallback broken: %+v shared=%v ok=%v", b, isShared, ok)
+	}
+	// 何も無ければ見つからない
+	if _, _, ok := (Detection{Bases: map[string]BaseInfo{}}).BaseFor("todo"); ok {
+		t.Fatal("no base should not resolve")
+	}
+}

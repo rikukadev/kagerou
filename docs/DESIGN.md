@@ -345,3 +345,34 @@ url_template: "https://{name}.preview.example.com"   # static では必須
   自動検出して相乗り(旧アカウント単位の `kagerou-preview-base:*` にも fallback)
 - [ ] iam-policy への base 用モジュール(--with-preview-base)は後続
   (base は通常 CI でなく人間の資格情報で 1 回デプロイするため優先度低)
+
+## 11. 共有 preview base(#94)
+
+per-app ベース(§10.2)はアプリごとに CloudFront・証明書・DNS を作る。
+アプリが増えるほど基盤が増えるので、**1 ドメインを全アプリで共有する**モードを
+用意する(`Mode: shared`)。
+
+### URL 規約を 1 ラベルに畳む理由
+
+ACM / CloudFront のワイルドカードは **1 ラベルしか覆えない**。
+`*.example.com` は `pr-42.example.com` に一致するが、
+`pr-42.todo.example.com` には**一致しない**。したがって共有ベースで
+`{name}.{project}.<zone>` を使うには、アプリを足すたびに証明書へ
+`*.todo.example.com` を SAN 追加し、CloudFront の Aliases も更新する必要がある
+= **アプリ追加のたびに共有基盤を触る**ことになり、共有の利点が薄れる。
+
+そこで共有モードでは **`<project>--<name>.<zone>`** に畳む。
+`*.<zone>` のままアプリを何個でも足せる(基盤の更新は不要)。
+区切りが `--` なのは、project 名も環境名も `-` を含みうるため
+(1 文字区切りでは境界が曖昧になる)。
+
+| | per-app | shared |
+|---|---|---|
+| URL | `pr-42.todo.example.com` | `todo--pr-42.example.com` |
+| 証明書 | `*.todo.example.com` | `*.example.com` |
+| アプリ追加時 | 新しいベースを 1 つ作る | **何もしない** |
+| S3 | `s3://base-todo/pr-42/` | `s3://base-shared/todo/pr-42/` |
+
+分離は CFN スタック名(`name_prefix`)・タグ(`kagerou:project`)・
+S3 プレフィックスの 3 つで担保する。`list` / `reap` の project スコープは #48、
+`down` のプレフィックス削除は `static.prefix` の展開結果に閉じる。

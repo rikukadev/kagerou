@@ -95,6 +95,7 @@ func (d *Driver) clientFor(ctx context.Context, bucket string) (*s3.Client, erro
 type UpInput struct {
 	stack.UpInput        // StackName / Name / Project / ExpiresAt / Source / Version / Tags
 	Bucket        string // preview base のバケット
+	Prefix        string // バケット内の置き場所(共有 base では <project>/<name>)
 	Dist          string // 配置するローカルディレクトリ
 }
 
@@ -124,25 +125,34 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*stack.Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := d.Sync(ctx, in.Bucket, in.Name, in.Dist); err != nil {
+	if err := d.Sync(ctx, in.Bucket, in.prefix(), in.Dist); err != nil {
 		return nil, err
 	}
 	return info, nil
 }
 
+// prefix は置き場所(未指定なら環境名)。
+func (in UpInput) prefix() string {
+	if in.Prefix != "" {
+		return in.Prefix
+	}
+	return in.Name
+}
+
 // Down はメタスタックとプレフィックス配下のオブジェクトを消す。どちらも冪等。
-func (d *Driver) Down(ctx context.Context, stackName, bucket, name string) error {
+// prefix は Up と同じもの(共有 base では <project>/<name>)を渡すこと。
+func (d *Driver) Down(ctx context.Context, stackName, bucket, prefix string) error {
 	if err := d.stack.Down(ctx, stackName); err != nil {
 		return err
 	}
 	if bucket == "" {
 		return nil
 	}
-	return d.deletePrefix(ctx, bucket, name)
+	return d.deletePrefix(ctx, bucket, prefix)
 }
 
 // Sync は dist を s3://bucket/name/ に同期する(ローカルに無いものは消す)。
-func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
+func (d *Driver) Sync(ctx context.Context, bucket, prefix, dist string) error {
 	if fi, err := os.Stat(dist); err != nil || !fi.IsDir() {
 		return fmt.Errorf("static.dist %q is not a directory (build first)", dist)
 	}
@@ -159,7 +169,7 @@ func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
 		if err != nil {
 			return err
 		}
-		local[prefixKey(name, filepath.ToSlash(rel))] = path
+		local[prefixKey(prefix, filepath.ToSlash(rel))] = path
 		return nil
 	})
 	if err != nil {
@@ -187,7 +197,7 @@ func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
 	}
 
 	// ローカルに無い残骸を消す(aws s3 sync --delete 相当)
-	remote, err := d.listPrefixWith(ctx, cli, bucket, name)
+	remote, err := d.listPrefixWith(ctx, cli, bucket, prefix)
 	if err != nil {
 		return err
 	}
@@ -201,16 +211,16 @@ func (d *Driver) Sync(ctx context.Context, bucket, name, dist string) error {
 	return d.deleteObjectsWith(ctx, cli, bucket, stale)
 }
 
-func (d *Driver) listPrefix(ctx context.Context, bucket, name string) ([]string, error) {
+func (d *Driver) listPrefix(ctx context.Context, bucket, prefix string) ([]string, error) {
 	cli, err := d.clientFor(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	return d.listPrefixWith(ctx, cli, bucket, name)
+	return d.listPrefixWith(ctx, cli, bucket, prefix)
 }
 
-func (d *Driver) listPrefixWith(ctx context.Context, cli *s3.Client, bucket, name string) ([]string, error) {
-	prefix := name + "/"
+func (d *Driver) listPrefixWith(ctx context.Context, cli *s3.Client, bucket, prefix string) ([]string, error) {
+	prefix = strings.TrimSuffix(prefix, "/") + "/"
 	var keys []string
 	p := s3.NewListObjectsV2Paginator(cli, &s3.ListObjectsV2Input{Bucket: &bucket, Prefix: &prefix})
 	for p.HasMorePages() {
@@ -227,8 +237,8 @@ func (d *Driver) listPrefixWith(ctx context.Context, cli *s3.Client, bucket, nam
 	return keys, nil
 }
 
-func (d *Driver) deletePrefix(ctx context.Context, bucket, name string) error {
-	keys, err := d.listPrefix(ctx, bucket, name)
+func (d *Driver) deletePrefix(ctx context.Context, bucket, prefix string) error {
+	keys, err := d.listPrefix(ctx, bucket, prefix)
 	if err != nil {
 		return err
 	}
@@ -259,7 +269,7 @@ func (d *Driver) deleteObjectsWith(ctx context.Context, cli *s3.Client, bucket s
 	return nil
 }
 
-func prefixKey(name, rel string) string { return name + "/" + rel }
+func prefixKey(prefix, rel string) string { return strings.TrimSuffix(prefix, "/") + "/" + rel }
 
 // contentType は拡張子から推定する。S3 は既定で binary/octet-stream になり、
 // CloudFront 経由でも直らない(ブラウザが HTML を表示できない)ため必須。
