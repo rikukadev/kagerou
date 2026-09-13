@@ -396,3 +396,49 @@ S3 プレフィックスの 3 つで担保する。`list` / `reap` の project �
 
 共有が効くのは「1 アカウントに数十以上のアプリがあり、ディストリビューション数や
 ドメイン運用を一元管理したい」場合。その時だけ `Mode: shared` を選ぶ。
+
+## 12. スコープ境界: kagerou は preview 専用(本番は姉妹ツール)
+
+kagerou が扱うのは **PR / E2E / デモで使い捨てる環境だけ**。本番環境の管理は
+将来の**姉妹ツール(別物)**の仕事で、kagerou に本番向けの機能を足すことはしない。
+
+同じツールに同居させない理由 — 設計判断がほぼ全行で逆を向く:
+
+| 設計判断 | kagerou(preview) | 本番ツールに要るもの |
+|---|---|---|
+| 寿命 | TTL 必須 + reap が消す | 絶対に勝手に消えない |
+| 更新 | 冪等 up で上書き | canary / blue-green、段階的 rollout |
+| 失敗時 | rollback 残骸は削除して作り直す | 削除は最終手段、ロールバックが本線 |
+| 書込権限 | CI が広め(boundary が天井) | 承認フロー、protected environments |
+| 状態 | タグのみ(ステートレス) | 監査証跡(誰がいつ何を)+ drift 検出 |
+| コスト思想 | アイドル $0 に全振り | 可用性・冗長化に金を払う |
+
+1 ツールに `--production` で同居させると、reap のバグ 1 つが本番を消す世界になる。
+sashiki(開発 DB ブランチ)と本番 DB 運用を分けているのと同じ構図。
+
+### 非目標の明文化
+
+- `ttl: none` は「デモを数日残す」ための明示的な例外であって、**本番運用の入口ではない**。
+  本番をここに載せたくなったら、それは姉妹ツールを作るサイン
+- 承認フロー・段階的 rollout・アラーム連動・drift 検出は kagerou には入れない
+
+### 姉妹ツールと共有するもの(この境界のために切り出してある)
+
+| コンポーネント | 状態 |
+|---|---|
+| `internal/appscan` | リポジトリ走査(ファイルのみ・stdlib のみ・非依存)。Facts はどちらのツールでも起点になる |
+| `internal/recommend` | 入口の推薦。判定は Facts だけ |
+| `internal/iampolicy` | trust / boundary / execution の生成機構。本番側は同じエンジンで厳しめのプロファイルを持てばよい |
+| SSM データ契約の型 | `/kagerou/base/…` の流儀(書く側の IaC はツール非依存、読む側はキーだけ見る) |
+| compute の型知識 | lambda(LWA)/ ecs のテンプレート構造 |
+
+### IDP(Backstage)での並び方
+
+束ねる場所はポータル側。カタログの Component は 1 つで、環境カードが並ぶ:
+
+- **Preview environments** — kagerou serve(CONTRACT §6)を読む
+- **Production** — 姉妹ツールの read API(将来)を読む
+
+カードは preview 決め打ちにせず「環境一覧 + データソース差し替え」の形で作る。
+serve の JSON(name / state / url / owner)は本番側でも同じ骨格で返せる想定。
+書込はどちらも workflow_dispatch 経由(ポータルは状態もクレデンシャルも持たない)。
