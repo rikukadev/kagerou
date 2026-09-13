@@ -177,6 +177,31 @@ jobs:
         run: ./bin/kagerou down --name "$NAME" --config e2e/aws/ssr/kagerou.yaml || true
 
   # 既知の脆弱性チェック。advisory 運用(必須 check にしない)は sashiki と同じ理由
+  # npm パッケージは「手元では動くが tarball に入っていない」が起きやすい。
+  # ルートの .gitignore(bin/)に wrapper ごと巻き込まれて publish 直前に気づいた
+  # ことがあるので、git 管理下のファイルだけの checkout で中身を検査する。
+  npm-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Check packed contents
+        working-directory: npm
+        run: |
+          set -euo pipefail
+          node --check kagerou.js
+          node --check install.js
+          files=$(npm pack --dry-run --json | jq -r '.[0].files[].path' | sort)
+          echo "$files"
+          for want in kagerou.js install.js package.json README.md; do
+            echo "$files" | grep -qx "$want" || { echo "::error::$want が tarball に無い"; exit 1; }
+          done
+          # bin に指定したファイルが実在すること(npm は warn にしかしない)
+          bin=$(node -p "require('./package.json').bin.kagerou")
+          test -f "$bin" || { echo "::error::bin $bin が無い"; exit 1; }
+
   vuln:
     runs-on: ubuntu-latest
     steps:

@@ -20,10 +20,10 @@
   },
   "license": "MIT",
   "bin": {
-    "kagerou": "bin/kagerou.js"
+    "kagerou": "kagerou.js"
   },
   "files": [
-    "bin/kagerou.js",
+    "kagerou.js",
     "install.js",
     "README.md"
   ],

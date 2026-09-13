@@ -21,8 +21,10 @@ const VERSION = require('./package.json').version
 const GOOS = { darwin: 'darwin', linux: 'linux' }
 const GOARCH = { x64: 'amd64', arm64: 'arm64' }
 
-const binDir = path.join(__dirname, 'bin')
-const binPath = path.join(binDir, 'kagerou')
+// bin/ ではなく vendor/。ルートの .gitignore が bin/ を無視しており、
+// wrapper ごとパッケージから消えたことがある(npm pack の中身を CI で検査している)。
+const vendorDir = path.join(__dirname, 'vendor')
+const binPath = path.join(vendorDir, 'kagerou')
 
 function target() {
   const goos = GOOS[process.platform]
@@ -69,7 +71,7 @@ async function install() {
   try {
     const archive = path.join(tmp, name)
     fs.writeFileSync(archive, tarball)
-    fs.mkdirSync(binDir, { recursive: true })
+    fs.mkdirSync(vendorDir, { recursive: true })
     execFileSync('tar', ['-xzf', archive, '-C', tmp, 'kagerou'])
     fs.copyFileSync(path.join(tmp, 'kagerou'), binPath)
     fs.chmodSync(binPath, 0o755)
