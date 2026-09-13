@@ -224,10 +224,13 @@
         "lambda:CreateEventSourceMapping",
         "lambda:DeleteEventSourceMapping",
         "lambda:GetEventSourceMapping",
-        "lambda:UpdateEventSourceMapping",
-        "lambda:ListEventSourceMappings"
+        "lambda:ListEventSourceMappings",
+        "lambda:ListTags",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:UpdateEventSourceMapping"
       ],
-      "Resource": "*"
+      "Resource": "arn:aws:lambda:*:*:event-source-mapping:*"
     }
   ]
 }
