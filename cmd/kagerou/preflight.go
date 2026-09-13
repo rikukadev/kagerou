@@ -12,8 +12,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rikukadev/kagerou/internal/preflight"
 )
 
 type authStatus struct {
@@ -96,4 +99,64 @@ func ensureAuth(interactive bool, in io.Reader, out io.Writer) authStatus {
 		say("continuing without gh — repo detection and variable checks are skipped\n")
 	}
 	return st
+}
+
+// chooseProfile は複数プロファイルがあるとき、どのアカウントで作業するかを選ばせる。
+// 選択は AWS_PROFILE として以後のプロセス全体(検出・setup)に効く。
+func chooseProfile(interactive bool, in io.Reader, out io.Writer) {
+	if os.Getenv("AWS_PROFILE") != "" || os.Getenv("AWS_DEFAULT_PROFILE") != "" {
+		return // 明示済みなら尊重する
+	}
+	profiles := preflight.Profiles()
+	if len(profiles) < 2 || !interactive {
+		return
+	}
+	say := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
+	say("Multiple AWS profiles found. Which one should kagerou use?\n")
+	for i, p := range profiles {
+		region := p.Region
+		if region == "" {
+			region = "-"
+		}
+		say("  [%d] %s (%s)\n", i+1, p.Name, region)
+	}
+	say("choose [1-%d, enter = %s]: ", len(profiles), profiles[0].Name)
+	ans, _ := bufio.NewReader(in).ReadString('\n')
+	idx := 0
+	if n := strings.TrimSpace(ans); n != "" {
+		if v, err := strconv.Atoi(n); err == nil && v >= 1 && v <= len(profiles) {
+			idx = v - 1
+		}
+	}
+	_ = os.Setenv("AWS_PROFILE", profiles[idx].Name)
+	say("using profile %s\n", profiles[idx].Name)
+}
+
+// reportPermissions は「誰として・どのアカウントに作るか」と、その資格情報で
+// setup が通るかを表示する。判定できない環境(SimulatePrincipalPolicy が無い、
+// SSO 等)は失敗にせず注記に留める。返り値は「明確に拒否された権限があるか」。
+func reportPermissions(ctx context.Context, region string, plan preflight.Plan, out io.Writer) bool {
+	say := func(format string, a ...any) { _, _ = fmt.Fprintf(out, format, a...) }
+	rep, err := preflight.CheckPermissions(ctx, region, plan)
+	if err != nil {
+		say("aws identity unavailable: %v\n", err)
+		return false
+	}
+	say("aws  %s\n", rep.Identity)
+	if !rep.Simulated {
+		if rep.Note != "" {
+			say("     %s\n", rep.Note)
+		}
+		return false
+	}
+	denied := rep.Denied()
+	if len(denied) == 0 {
+		say("     permissions ok for the selected setup\n")
+		return false
+	}
+	say("     missing permissions for the selected setup:\n")
+	for _, c := range denied {
+		say("       %-38s %s\n", c.Action, c.Why)
+	}
+	return true
 }

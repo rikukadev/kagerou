@@ -60,9 +60,9 @@ func (r Report) Denied() []Check {
 
 // Plan は選択した構成で setup が必要とするアクション。
 type Plan struct {
-	Role      bool // OIDC ロールを作る
-	ECR       bool // ECR リポジトリを作る
-	Base      bool // preview base(CFN + Route53 + ACM)をデプロイする
+	Role       bool // OIDC ロールを作る
+	ECR        bool // ECR リポジトリを作る
+	Base       bool // preview base(CFN + Route53 + ACM)をデプロイする
 	StaticSync bool // S3 へ同期する(static driver)
 }
 

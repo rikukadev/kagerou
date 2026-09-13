@@ -359,7 +359,11 @@ func cmdInit(args []string, out *os.File) error {
 	}
 
 	// プリフライト: 検出の前に資格情報を確認し、無ければログインに誘導
-	ensureAuth(!*plain && term.IsTerminal(int(out.Fd())), os.Stdin, os.Stderr)
+	interactive := !*plain && term.IsTerminal(int(out.Fd()))
+	ensureAuth(interactive, os.Stdin, os.Stderr)
+	// 複数アカウントを持っている人は、どこに作るかを先に選ぶ(以後の検出と
+	// setup は選んだプロファイルで動く)
+	chooseProfile(interactive, os.Stdin, os.Stderr)
 
 	det := scaffold.Detect(*dir)
 	if *region == "ap-northeast-1" && det.Region != "" { // フラグ未指定なら検出値を使う

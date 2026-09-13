@@ -21,6 +21,7 @@ type Params struct {
 	Port          string // アプリの listen ポート(検出値。空なら framework 既定)
 	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
 	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
+	Driver        string // "stack"(既定)/ "static"
 	Domain        string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
 	SetupBase     bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
 }
@@ -306,6 +307,9 @@ func PlainSteps(p Params, d Detection) string {
 	}
 	return b.String()
 }
+
+// Static は driver: static 構成か(compute を作らない)。
+func (p Params) Static() bool { return p.Driver == "static" }
 
 // LWALine は既存 Dockerfile に注入する Lambda Web Adapter の 1 行。
 // これだけで通常のコンテナが Lambda で動く(Lambda 外では何もしない)。

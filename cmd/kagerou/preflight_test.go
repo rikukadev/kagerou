@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -89,5 +90,50 @@ func TestEnsureAuthNonInteractive(t *testing.T) {
 	ensureAuth(false, strings.NewReader(""), &out)
 	if !strings.Contains(out.String(), "aws  ✗") || !strings.Contains(out.String(), "gh   ✗") {
 		t.Fatalf("status display missing: %s", out.String())
+	}
+}
+
+func TestChooseProfileSelects(t *testing.T) {
+	dir := t.TempDir()
+	cfg := dir + "/config"
+	if err := os.WriteFile(cfg, []byte("[default]\nregion = ap-northeast-1\n\n[profile coco]\nregion = us-east-1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", dir+"/none")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_DEFAULT_PROFILE", "")
+
+	var out strings.Builder
+	chooseProfile(true, strings.NewReader("2\n"), &out)
+	if os.Getenv("AWS_PROFILE") != "coco" {
+		t.Fatalf("AWS_PROFILE = %q, want coco", os.Getenv("AWS_PROFILE"))
+	}
+	if !strings.Contains(out.String(), "Multiple AWS profiles") {
+		t.Fatalf("prompt missing: %s", out.String())
+	}
+}
+
+func TestChooseProfileRespectsExplicitAndSingle(t *testing.T) {
+	dir := t.TempDir()
+	cfg := dir + "/config"
+	_ = os.WriteFile(cfg, []byte("[default]\nregion = ap-northeast-1\n\n[profile coco]\n"), 0o644)
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", dir+"/none")
+
+	// 明示済みなら聞かない
+	t.Setenv("AWS_PROFILE", "coco")
+	var out strings.Builder
+	chooseProfile(true, strings.NewReader("1\n"), &out)
+	if out.Len() != 0 || os.Getenv("AWS_PROFILE") != "coco" {
+		t.Fatalf("explicit profile should be respected: %q %s", os.Getenv("AWS_PROFILE"), out.String())
+	}
+
+	// 非対話では聞かない
+	t.Setenv("AWS_PROFILE", "")
+	var out2 strings.Builder
+	chooseProfile(false, strings.NewReader("1\n"), &out2)
+	if out2.Len() != 0 || os.Getenv("AWS_PROFILE") != "" {
+		t.Fatalf("non-interactive should not prompt: %q %s", os.Getenv("AWS_PROFILE"), out2.String())
 	}
 }
