@@ -219,6 +219,9 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	} else {
 		p.Compute = "lambda"
 	}
+	// 入口は独自ドメイン(共有 ALB)が既定。ドメインが取れないときだけ
+	// 生の execute-api URL に落ちる(Params.ALB が Domain も見て判断する)。
+	p.Entrypoint = "alb"
 	// routing は preview base から配るときにだけ意味がある(#86)。
 	// compute がルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {
