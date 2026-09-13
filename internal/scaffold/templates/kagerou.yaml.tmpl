@@ -79,7 +79,9 @@ env:
   DB_PASSWORD: dev # TODO: app password of your baseline
   DB_NAME: app     # TODO: database name
 hooks:
-  # `|| true` is a temporary workaround until sashiki CLI gets --exist-ok (sashiki#259)
-  pre_up: sashiki create {name} || true
+  # pre_up は up のたびに走るので冪等でなければならない。--exist-ok を付けないと
+  # 2 回目が 409 で落ち、`|| true` で **本物のエラーまで握り潰す** ことになる。
+  # sashiki v0.10.0 以降で使える(それ以前は `|| true` が要る)。
+  pre_up: sashiki create {name} --exist-ok
   post_down: sashiki delete {name}
 {{- end}}

@@ -148,7 +148,7 @@ env:
   DB_PORT: "3306"
   DB_USER: dev@{name}            # {name} は環境名で展開
 hooks:
-  pre_up: sashiki create {name}  # 汎用フック。冪等なので毎回呼んでよい
+  pre_up: sashiki create {name} --exist-ok  # up のたびに走るので冪等にする
 ```
 
 ```bash
@@ -187,7 +187,7 @@ tags:
 env:                           # 全環境共通の env。値の {name} は環境名で展開
   DB_USER: dev@{name}
 hooks:                         # ライフサイクルフック(冪等前提)
-  pre_up: sashiki create {name}
+  pre_up: sashiki create {name} --exist-ok
 ```
 
 ```bash
