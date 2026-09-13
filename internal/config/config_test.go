@@ -173,3 +173,35 @@ func TestStackName(t *testing.T) {
 		t.Fatalf("StackName = %q", got)
 	}
 }
+
+func TestExpandNameProject(t *testing.T) {
+	// {project} は共有 base の URL 規約 <project>--<name>.<domain> で使う
+	c := Config{
+		Project:     "todo",
+		URLTemplate: "https://{project}--{name}.example.com",
+		Env:         map[string]string{"APP": "{project}-{name}"},
+		Hooks:       Hooks{PreUp: "echo {project}/{name}"},
+	}
+	got := c.ExpandName("pr-42")
+	if got.URLTemplate != "https://todo--pr-42.example.com" {
+		t.Fatalf("url = %q", got.URLTemplate)
+	}
+	if got.Env["APP"] != "todo-pr-42" || got.Hooks.PreUp != "echo todo/pr-42" {
+		t.Fatalf("expansion broken: %+v %q", got.Env, got.Hooks.PreUp)
+	}
+}
+
+func TestStaticPrefix(t *testing.T) {
+	perApp := Config{Project: "todo"}
+	if got := perApp.StaticPrefix("pr-42"); got != "pr-42" {
+		t.Fatalf("per-app prefix = %q, want pr-42", got)
+	}
+	shared := Config{Project: "todo", Static: Static{Prefix: "{project}/{name}"}}
+	if got := shared.StaticPrefix("pr-42"); got != "todo/pr-42" {
+		t.Fatalf("shared prefix = %q, want todo/pr-42", got)
+	}
+	trimmed := Config{Project: "todo", Static: Static{Prefix: "/{project}/{name}/"}}
+	if got := trimmed.StaticPrefix("pr-42"); got != "todo/pr-42" {
+		t.Fatalf("prefix should be trimmed: %q", got)
+	}
+}
