@@ -254,7 +254,19 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/<project>/routing        # directory | spa(拡張子の無いパスの解決)
 
 /kagerou/base/_shared/…                # 1 ドメインを複数アプリで共有するベース
+
+# compute: ecs の共有 ALB ベース(deploy/alb-base.yaml。ALB は固定費があるので
+# アカウント/VPC で 1 つを共有)。こちらは ALB と同じリージョンに書く
+/kagerou/base/_shared-alb/domain
+/kagerou/base/_shared-alb/listener_arn
+/kagerou/base/_shared-alb/cluster
+/kagerou/base/_shared-alb/vpc_id
+/kagerou/base/_shared-alb/subnets              # カンマ区切り
+/kagerou/base/_shared-alb/task_security_group
 ```
+
+`compute: ecs` の環境テンプレートは `_shared-alb` のキーを CloudFormation の
+動的参照(`{{resolve:ssm:…}}`)で読む — パラメータの手渡しは要らない。
 
 **共有ベース(`_shared`)**: 1 つの CloudFront / 証明書 / ドメインを全 project で
 使う運用。**既定は per-app** で、共有はオプトイン(理由は DESIGN §11.3)。

@@ -2,6 +2,11 @@
 project: {{.Project}}
 {{- if .Static}}
 driver: static # no compute; the built site is synced under the preview base
+{{- else if .ECS}}
+driver: stack
+# compute: ecs — sam は使わない。CI が docker push したイメージ URI を
+# --env IMAGE_URI で渡す(workflow が生成済み)。テンプレートは素の CFN
+template: template.yaml
 {{- else}}
 driver: stack
 template: packaged.yaml # output of `sam build && sam package` (building is CI's job)
@@ -10,8 +15,22 @@ region: {{.Region}}
 {{- if not .Static}}
 name_prefix: {{.Project}}- # stack name becomes {{.Project}}-pr-42
 {{- end}}
+{{- if .ECS}}
+ttl: 24h # Fargate は動いている間ずっと課金されるので短め(Lambda 形は 72h)
+readiness_path: /healthz # Fargate の起動は 1〜2 分。応答するまで ready にしない
+readiness_timeout: 300s
+{{- else}}
 ttl: 72h
-{{- if .Domain}}
+{{- end}}
+{{- if and .ECS .Domain}}
+# compute: ecs の URL は共有 ALB(deploy/alb-base.yaml)経由。ホスト名は
+# この url_template から導かれる(テンプレートの EnvKagerouUrl 参照)
+url_template: "https://{name}.{{.Domain}}"
+{{- else if .ECS}}
+# compute: ecs は共有 ALB のホスト名ルーティングに url_template が必須。
+# deploy/alb-base.yaml を作ったドメインに合わせること
+url_template: "" # TODO: https://{name}.<your alb-base domain>
+{{- else if .Domain}}
 url_template: "https://{name}.{{.Domain}}" # preview base(共有 CloudFront)経由
 {{- else if .Static}}
 # driver: static は compute が無く URL を出力できないので url_template が必須。
@@ -37,6 +56,11 @@ env:
   # {name} expands to the environment name. Values are delivered to the
   # Env<Key> template parameters (see docs/CONTRACT.md)
   KAGEROU_ENV: "{name}"
+{{- end}}
+{{- if .ECS}}
+  # IMAGE_URI と RULE_PRIORITY は実行ごとに変わるので CI が --env で渡す
+  # (workflow 生成済み)。手元から up するときは自分で渡す:
+  #   kagerou up --name e2e-1 --env IMAGE_URI=<ecr>:e2e-1 --env RULE_PRIORITY=900
 {{- end}}
 {{- if .Wants.Redis}}
   # redis を検出。ElastiCache は preview 向きでない(常時課金・VPC・作成に数分)ため

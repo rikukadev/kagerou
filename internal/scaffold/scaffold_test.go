@@ -344,3 +344,83 @@ func TestScaffoldWithSNSAndSQS(t *testing.T) {
 		t.Error("SQS 無しで Subscription を出してはいけない")
 	}
 }
+
+func TestScaffoldComputeECS(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "relay", Region: "r", Compute: "ecs", Domain: "relay.example.com",
+		Wants: appscan.Wants{DynamoDB: true, SQS: true}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		"resolve:ssm:/kagerou/base/_shared-alb/listener_arn",
+		"resolve:ssm:/kagerou/base/_shared-alb/cluster",
+		"resolve:ssm:/kagerou/base/_shared-alb/vpc_id",
+		"resolve:ssm:/kagerou/base/_shared-alb/subnets",
+		"resolve:ssm:/kagerou/base/_shared-alb/task_security_group",
+		"AWS::ElasticLoadBalancingV2::ListenerRule",
+		"AWS::ECS::Service", "FARGATE",
+		"EnvImageUri:", "EnvRulePriority:",
+		"TABLE_NAME", "QUEUE_URL", "TaskRole", // Wants 配線
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("ecs template missing %q", want)
+		}
+	}
+	// Lambda/SAM の語彙が混ざっていないこと
+	for _, notWant := range []string{"Serverless::Function", "Transform:", "AWS_LWA_PORT", "HttpApi"} {
+		if strings.Contains(tp, notWant) {
+			t.Errorf("ecs template should not contain %q", notWant)
+		}
+	}
+	// 共有 ALB base が同梱される
+	ab := read(t, dir, "deploy/alb-base.yaml")
+	if !strings.Contains(ab, "/kagerou/base/_shared-alb/listener_arn") {
+		t.Error("alb-base missing SSM contract")
+	}
+	// kagerou.yaml: sam 不使用・短い TTL・readiness
+	ky := read(t, dir, "kagerou.yaml")
+	for _, want := range []string{"template: template.yaml", "ttl: 24h", "readiness_path: /healthz",
+		`url_template: "https://{name}.relay.example.com"`} {
+		if !strings.Contains(ky, want) {
+			t.Errorf("ecs kagerou.yaml missing %q", want)
+		}
+	}
+	if strings.Contains(ky, "packaged.yaml") {
+		t.Error("ecs では sam package を前提にしてはいけない")
+	}
+	// preview workflow: docker push + IMAGE_URI/RULE_PRIORITY を kagerou に渡す
+	pv := read(t, dir, ".github/workflows/kagerou-preview.yml")
+	for _, want := range []string{"docker push", "IMAGE_URI=", "RULE_PRIORITY="} {
+		if !strings.Contains(pv, want) {
+			t.Errorf("ecs preview.yml missing %q", want)
+		}
+	}
+	if strings.Contains(pv, "sam build") {
+		t.Error("ecs の workflow に sam が残っている")
+	}
+}
+
+func TestScaffoldComputeLambdaUnchanged(t *testing.T) {
+	// 既定(compute 未指定 / lambda)は従来の生成物のまま。
+	dirA := t.TempDir()
+	if _, err := Run(dirA, Params{Project: "x", Region: "r"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	dirB := t.TempDir()
+	if _, err := Run(dirB, Params{Project: "x", Region: "r", Compute: "lambda"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"kagerou.yaml", "template.yaml", ".github/workflows/kagerou-preview.yml"} {
+		if read(t, dirA, f) != read(t, dirB, f) {
+			t.Errorf("%s: compute 未指定と lambda 明示で差分が出てはいけない", f)
+		}
+	}
+	if strings.Contains(read(t, dirA, "template.yaml"), "resolve:ssm") {
+		t.Error("lambda 既定に ecs の痕跡が混ざっている")
+	}
+	if _, err := os.Stat(filepath.Join(dirA, "deploy", "alb-base.yaml")); err == nil {
+		t.Error("lambda では alb-base を出さないはず")
+	}
+}

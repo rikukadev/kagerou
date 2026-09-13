@@ -76,6 +76,11 @@ func Run(cfg config.Config, templatePath, name string) ([]Finding, error) {
 		if len(p) <= 3 || p[:3] != "Env" || matched[p] {
 			continue
 		}
+		// EnvKagerouUrl は url_template から up 時に自動配送される(CONTRACT §5)。
+		// env に書かなくても「渡されない」ことにはならない
+		if p == "EnvKagerouUrl" && cfg.URLTemplate != "" {
+			continue
+		}
 		if !hasDefault(t.Parameters[p]) {
 			fs = append(fs, Finding{Warn, fmt.Sprintf("parameter %s is declared but not fed by kagerou.yaml env and has no Default — pass it via --env or add a Default", p)})
 		}

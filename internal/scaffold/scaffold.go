@@ -24,6 +24,9 @@ type Params struct {
 	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
 	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
 	Driver        string // "stack"(既定)/ "static"
+	// Compute は stack driver の実行形。"lambda"(既定: LWA で包む、アイドル $0)
+	// または "ecs"(Fargate + 共有 ALB。常駐プロセスやサイドカーが要るアプリ向け)。
+	Compute string
 	// Dist は static のときに同期する成果物ディレクトリ。
 	Dist string
 	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
@@ -96,7 +99,12 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
 		// static には compute が無いので template.yaml も Dockerfile も要らない。
 		// ここで落とさないと「消してから手で workflow を書く」ことになる(#81)。
-		{sel.Template && !p.Static(), "template.yaml", "template.yaml.tmpl", false},
+		{sel.Template && !p.Static() && !p.ECS(), "template.yaml", "template.yaml.tmpl", false},
+		// compute: ecs は Lambda/LWA で包まず、Fargate + 共有 ALB のテンプレートを出す。
+		// ALB は固定費があるので共有ベース(deploy/alb-base.yaml)が持ち、環境は
+		// リスナールールとターゲットグループだけ足す。
+		{sel.Template && p.ECS(), "template.yaml", "template.ecs.yaml.tmpl", false},
+		{p.ECS(), filepath.Join("deploy", "alb-base.yaml"), "albbase.yaml.tmpl", true},
 		{p.SetupBase, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true},
 	}
 	for _, f := range files {
@@ -350,6 +358,9 @@ func PlainSteps(p Params, d Detection) string {
 
 // Static は driver: static 構成か(compute を作らない)。
 func (p Params) Static() bool { return p.Driver == "static" }
+
+// ECS は compute: ecs 構成か(Fargate + 共有 ALB。Lambda/LWA で包まない)。
+func (p Params) ECS() bool { return p.Compute == "ecs" && !p.Static() }
 
 // DriverFor は構成を決める。既存 kagerou.yaml の driver が最優先で、
 // 無ければ「compute があるか」で決める。

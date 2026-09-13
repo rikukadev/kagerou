@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  kagerou ALB base — shared load balancer for container preview environments.
+  Deploy ONCE per account/VPC (in the app's region, unlike the CloudFront base).
+  ALB has a fixed monthly cost, so it must be shared: environments only add a
+  listener rule and a target group (both free).
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: Wildcard domain for previews, e.g. ecs.example.com (URLs become pr-42.ecs.example.com)
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for the ALB (at least two AZs)
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "*.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou shared ALB (public HTTPS)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  # 環境のタスクはこの SG を付ける。ALB からのみ到達でき、環境同士は繋がらない
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou preview tasks (from the shared ALB only)
+      VpcId: !Ref VpcId
+
+  TaskIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroup]
+
+  # 既定は 404。環境ごとのリスナールールが自分のホスト名を横取りする
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref Certificate
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "404"
+            ContentType: text/plain
+            MessageBody: no kagerou environment for this host
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: kagerou-preview
+
+  WildcardRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+
+  # ベース↔環境のデータ契約(CONTRACT §9 の compute 版)
+  SsmDomain:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/domain
+      Type: String
+      Value: !Ref DomainName
+  SsmListener:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/listener_arn
+      Type: String
+      Value: !Ref Listener
+  SsmCluster:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/cluster
+      Type: String
+      Value: !Ref Cluster
+  SsmVpc:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/vpc_id
+      Type: String
+      Value: !Ref VpcId
+  SsmSubnets:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/subnets
+      Type: StringList
+      Value: !Join [",", !Ref SubnetIds]
+  SsmTaskSg:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/task_security_group
+      Type: String
+      Value: !Ref TaskSecurityGroup
+
+Outputs:
+  Domain:
+    Value: !Ref DomainName
+  ListenerArn:
+    Value: !Ref Listener
+  ClusterName:
+    Value: !Ref Cluster
+  TaskSecurityGroup:
+    Value: !Ref TaskSecurityGroup
+  Subnets:
+    Value: !Join [",", !Ref SubnetIds]

@@ -40,6 +40,17 @@ jobs:
         run: |
           npm ci
           npm run build
+{{- else if .ECS}}
+      # compute: ecs — sam は使わない。イメージを push して URI を kagerou に渡す
+      - name: Build and push image
+        run: |
+          aws ecr get-login-password | docker login --username AWS \
+            --password-stdin "${ECR_REPOSITORY%%/*}"
+          docker build -t "$ECR_REPOSITORY:pr-$PR" .
+          docker push "$ECR_REPOSITORY:pr-$PR"
+        env:
+          ECR_REPOSITORY: ${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}
+          PR: ${{"{{"}} github.event.pull_request.number {{"}}"}}
 {{- else}}
       - uses: aws-actions/setup-sam@v2
         with:
@@ -54,6 +65,11 @@ jobs:
       - uses: rikukadev/kagerou/action@v0
         with:
           name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
+{{- if .ECS}}
+          env: |
+            IMAGE_URI=${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}:pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
+            RULE_PRIORITY=${{"{{"}} github.event.pull_request.number {{"}}"}}
+{{- end}}
 
   cleanup:
     if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository

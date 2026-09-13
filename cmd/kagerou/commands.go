@@ -344,6 +344,7 @@ func cmdInit(args []string, out *os.File) error {
 	project := fs.String("project", "", "project name (default: current directory name)")
 	region := fs.String("region", "ap-northeast-1", "AWS region")
 	sashiki := fs.Bool("sashiki", false, "include sashiki hooks / DB env")
+	compute := fs.String("compute", "lambda", "how environments run: lambda (LWA, idle $0) | ecs (Fargate + shared ALB)")
 	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
 	dir := fs.String("dir", ".", "output directory")
 	plain := fs.Bool("plain", false, "print plain text instead of the interactive wizard")
@@ -372,9 +373,12 @@ func cmdInit(args []string, out *os.File) error {
 	if *region == "ap-northeast-1" && det.Region != "" { // フラグ未指定なら検出値を使う
 		*region = det.Region
 	}
+	if *compute != "lambda" && *compute != "ecs" {
+		return fmt.Errorf("--compute %q: want lambda or ecs", *compute)
+	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
-		Wants: det.Wants, Driver: scaffold.DriverFor(det)}
+		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {

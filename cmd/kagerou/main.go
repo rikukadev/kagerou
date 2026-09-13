@@ -53,7 +53,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `kagerou — ephemeral environments on AWS
 
 Usage:
-  kagerou init [--sashiki]           generate the onboarding files (interactive)
+  kagerou init [--sashiki] [--compute ecs]  generate the onboarding files (interactive)
   kagerou validate [--name <name>]   check the template against the contract
   kagerou iam-policy [--with-*]      generate a least-privilege CI role policy
   kagerou iam-policy --doc trust     generate the deploy role's OIDC trust policy
