@@ -230,7 +230,7 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 		err = w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout)
 		stop()
 		if err != nil {
-			return nil, fmt.Errorf("create stack %s: %w", in.StackName, err)
+			return nil, d.explainWaitFailure(ctx, in.StackName, "create", err)
 		}
 	} else { // 存在する → update(差分なしは成功扱い)
 		updateInput := &cloudformation.UpdateStackInput{
@@ -613,8 +613,10 @@ func isInProgressErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "_IN_PROGRESS")
 }
 
-// explainWaitFailure は待機失敗のエラーに状態別の対処案内を足す。特に
-// UPDATE_ROLLBACK_FAILED は continue-update-rollback が要る手詰まり状態(#51)。
+// explainWaitFailure は待機失敗のエラーに「どのリソースがなぜ失敗したか」を足す。
+// waiter は "state transitioned to Failure" しか言わないが、stack events には
+// 失敗理由がある(#99 の実験: Subscription の相手 Topic 不在が 4 分半黙って
+// rollback された)。UPDATE_ROLLBACK_FAILED は手詰まりなので復旧手順も出す(#51)。
 func (d *Driver) explainWaitFailure(ctx context.Context, stackName, op string, cause error) error {
 	if status, _ := d.stackStatus(ctx, stackName); status == string(cfntypes.StackStatusUpdateRollbackFailed) {
 		return fmt.Errorf("%s stack %s: %w\n"+
@@ -623,7 +625,35 @@ func (d *Driver) explainWaitFailure(ctx context.Context, stackName, op string, c
 			"    kagerou down --name <name>   (削除して作り直す)",
 			op, stackName, cause, stackName)
 	}
+	if out, err := d.cfn.DescribeStackEvents(ctx, &cloudformation.DescribeStackEventsInput{StackName: &stackName}); err == nil {
+		if reason := firstFailure(out.StackEvents); reason != "" {
+			return fmt.Errorf("%s stack %s: %w\n  failed resource: %s", op, stackName, cause, reason)
+		}
+	}
 	return fmt.Errorf("%s stack %s: %w", op, stackName, cause)
+}
+
+// firstFailure は新しい順のイベント列から、最初に失敗した非スタックリソースを
+// 「Type LogicalId: 理由」で返す。rollback 中の連鎖(他リソースの
+// "Resource creation cancelled")はノイズなので、根本原因に最も近い
+// = 一番古い *_FAILED を選ぶ。
+func firstFailure(events []cfntypes.StackEvent) string {
+	var last string // events は新しい順なので、走査の最後 = 最初に失敗したもの
+	for _, e := range events {
+		if aws.ToString(e.ResourceType) == "AWS::CloudFormation::Stack" {
+			continue
+		}
+		status := string(e.ResourceStatus)
+		if !strings.HasSuffix(status, "_FAILED") {
+			continue
+		}
+		reason := aws.ToString(e.ResourceStatusReason)
+		if reason == "Resource creation cancelled" || reason == "Resource update cancelled" {
+			continue // 根本原因の巻き添え
+		}
+		last = fmt.Sprintf("%s %s: %s", aws.ToString(e.ResourceType), aws.ToString(e.LogicalResourceId), reason)
+	}
+	return last
 }
 
 func isNotExistErr(err error) bool {

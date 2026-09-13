@@ -62,3 +62,31 @@ func TestFirstInProgressEmpty(t *testing.T) {
 		t.Fatalf("スタック自身は除外するはず: %q", got)
 	}
 }
+
+func TestFirstFailure(t *testing.T) {
+	rr := func(logicalID, resType, status, reason string) cfntypes.StackEvent {
+		e := ev(logicalID, resType, status)
+		e.ResourceStatusReason = aws.String(reason)
+		return e
+	}
+	// 新しい順。根本原因(Subscription の Topic 不在)より後に巻き添えが積まれる
+	events := []cfntypes.StackEvent{
+		rr("Stack", "AWS::CloudFormation::Stack", "ROLLBACK_IN_PROGRESS", "The following resource(s) failed"),
+		rr("AppQueue", "AWS::SQS::Queue", "CREATE_FAILED", "Resource creation cancelled"),
+		rr("PeerSubscription", "AWS::SNS::Subscription", "CREATE_FAILED", "Topic does not exist"),
+		rr("AppQueue", "AWS::SQS::Queue", "CREATE_IN_PROGRESS", ""),
+	}
+	got := firstFailure(events)
+	want := "AWS::SNS::Subscription PeerSubscription: Topic does not exist"
+	if got != want {
+		t.Fatalf("firstFailure = %q, want %q", got, want)
+	}
+	if firstFailure(nil) != "" {
+		t.Fatal("no events should yield empty")
+	}
+	// 巻き添えしか無いときは空(嘘の根本原因を言わない)
+	only := []cfntypes.StackEvent{rr("AppQueue", "AWS::SQS::Queue", "CREATE_FAILED", "Resource creation cancelled")}
+	if firstFailure(only) != "" {
+		t.Fatal("cancelled-only should yield empty")
+	}
+}
