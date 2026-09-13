@@ -154,3 +154,16 @@ func TestScanSkipsNoise(t *testing.T) {
 		t.Fatalf("noise leaked into facts: %+v", f)
 	}
 }
+
+func TestScanWantsSNS(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"dependencies":{"@aws-sdk/client-sns":"3"}}`)
+	if f := Scan(dir); !f.Wants.SNS {
+		t.Error("node の SNS クライアントを拾うはず")
+	}
+	dir2 := t.TempDir()
+	write(t, dir2, "go.mod", "module m\nrequire github.com/aws/aws-sdk-go-v2/service/sns v1.0.0\n")
+	if f := Scan(dir2); !f.Wants.SNS {
+		t.Error("go の SNS クライアントを拾うはず")
+	}
+}

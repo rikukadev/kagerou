@@ -37,11 +37,12 @@ type Facts struct {
 }
 
 // Wants は依存関係(package.json / go.mod / compose)から推定した、アプリが
-// 使う周辺リソース。preview 環境の形の推論に使う: DynamoDB / SQS / S3 は
+// 使う周辺リソース。preview 環境の形の推論に使う: DynamoDB / SNS / SQS / S3 は
 // per-env に置いてもアイドル $0 なのでテンプレートに同梱でき、Redis /
 // OpenSearch は常時課金なので共有ベース側に置く(利用側が判断する材料)。
 type Wants struct {
 	DynamoDB   bool
+	SNS        bool
 	SQS        bool
 	S3         bool
 	Redis      bool
@@ -49,11 +50,14 @@ type Wants struct {
 }
 
 // Any はどれか 1 つでも検出されたか。
-func (w Wants) Any() bool { return w.DynamoDB || w.SQS || w.S3 || w.Redis || w.OpenSearch }
+func (w Wants) Any() bool {
+	return w.DynamoDB || w.SNS || w.SQS || w.S3 || w.Redis || w.OpenSearch
+}
 
 func (w Wants) or(o Wants) Wants {
 	return Wants{
 		DynamoDB:   w.DynamoDB || o.DynamoDB,
+		SNS:        w.SNS || o.SNS,
 		SQS:        w.SQS || o.SQS,
 		S3:         w.S3 || o.S3,
 		Redis:      w.Redis || o.Redis,
@@ -196,6 +200,7 @@ var (
 	nodeWants = map[string]func(*Wants){
 		"@aws-sdk/client-dynamodb":       func(w *Wants) { w.DynamoDB = true },
 		"dynamoose":                      func(w *Wants) { w.DynamoDB = true },
+		"@aws-sdk/client-sns":            func(w *Wants) { w.SNS = true },
 		"@aws-sdk/client-sqs":            func(w *Wants) { w.SQS = true },
 		"sqs-consumer":                   func(w *Wants) { w.SQS = true },
 		"@aws-sdk/client-s3":             func(w *Wants) { w.S3 = true },
@@ -207,6 +212,7 @@ var (
 	}
 	goWants = map[string]func(*Wants){
 		"service/dynamodb": func(w *Wants) { w.DynamoDB = true },
+		"service/sns":      func(w *Wants) { w.SNS = true },
 		"service/sqs":      func(w *Wants) { w.SQS = true },
 		"service/s3":       func(w *Wants) { w.S3 = true },
 		"go-redis":         func(w *Wants) { w.Redis = true },

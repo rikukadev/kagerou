@@ -317,3 +317,30 @@ func TestScaffoldedDockerfilePortMatchesTemplate(t *testing.T) {
 		t.Fatalf("既存 Dockerfile 時は挙動を変えない:\n%s", tp2)
 	}
 }
+
+func TestScaffoldWithSNSAndSQS(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "hub", Region: "r", Wants: appscan.Wants{SNS: true, SQS: true}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		"AppTopic:", "AWS::SNS::Topic", "hub-${EnvKagerouEnv}-events", // 連動用に環境名から導ける Topic 名
+		"TOPIC_ARN: !Ref AppTopic", "SNSPublishMessagePolicy",
+		"AppQueueSubscription:", "AWS::SNS::Subscription", // 両方使うなら fan-out 配線も同梱
+		"AWS::SQS::QueuePolicy", "sns.amazonaws.com",
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("template missing %q", want)
+		}
+	}
+	// SNS だけなら Subscription 配線は出ない
+	dir2 := t.TempDir()
+	if _, err := Run(dir2, Params{Project: "pub", Region: "r", Wants: appscan.Wants{SNS: true}}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if tp2 := read(t, dir2, "template.yaml"); strings.Contains(tp2, "AppQueueSubscription") {
+		t.Error("SQS 無しで Subscription を出してはいけない")
+	}
+}
