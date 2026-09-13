@@ -15,6 +15,7 @@ import (
 	staticdrv "github.com/rikukadev/kagerou/internal/driver/static"
 	"github.com/rikukadev/kagerou/internal/hooks"
 	"github.com/rikukadev/kagerou/internal/iampolicy"
+	"github.com/rikukadev/kagerou/internal/preflight"
 	"github.com/rikukadev/kagerou/internal/readiness"
 	"github.com/rikukadev/kagerou/internal/scaffold"
 	"github.com/rikukadev/kagerou/internal/validate"
@@ -376,6 +377,12 @@ func cmdInit(args []string, out *os.File) error {
 	if !*plain && term.IsTerminal(int(out.Fd())) {
 		return runInitTUI(*dir, p, det, *force)
 	}
+
+	// 非対話でも「誰として・どのアカウントに作るか」と権限の過不足は出す
+	// (TTY では AWS 確認画面に出る。ここはその代替)
+	reportPermissions(context.Background(), p.Region, preflight.Plan{
+		Role: true, ECR: !p.Static(), Base: p.SetupBase, StaticSync: p.Static(),
+	}, os.Stderr)
 
 	// 非対話: 全部入りで生成してテキストのチェックリスト
 	if det.HasDockerfile && !det.HasLWA {
