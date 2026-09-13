@@ -308,6 +308,15 @@ func runPreDown(ctx context.Context, drv *stack.Driver, hook, name, stackName st
 	if err != nil {
 		return nil // 存在しない(= 既に消えている)。冪等なので黙って抜ける
 	}
+	// 作成に失敗して巻き戻ったスタックには Outputs が無く、リソースも既に
+	// 消えている。pre_down は「これをやらないと削除が失敗する」前処理なので、
+	// 対象が無い以上やることも無い。ここで実行すると Outputs 前提の hook が
+	// 失敗し、「失敗したら down 中止」の仕様と噛み合って **kagerou からは
+	// 二度と消せないスタック** になる(実 AWS E2E の CI で踏んだ)。
+	if strings.HasPrefix(info.Status, "ROLLBACK_") {
+		fmt.Fprintf(os.Stderr, "kagerou: %s is %s (resources already rolled back) — skipping pre_down\n", stackName, info.Status)
+		return nil
+	}
 	return hooks.Run(ctx, "pre_down", hook, hookEnv(name, info))
 }
 
