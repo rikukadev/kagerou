@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.9.0](https://github.com/rikukadev/kagerou/compare/v0.8.0...v0.9.0) (2026-09-13)
+
+
+### Features
+
+* **appscan:** detect the URL layout (cross-origin / path-based) — [#109](https://github.com/rikukadev/kagerou/issues/109) v1 ([#110](https://github.com/rikukadev/kagerou/issues/110)) ([fcd0c2b](https://github.com/rikukadev/kagerou/commit/fcd0c2b01ded721878dceccc06a26606c09ee048))
+* detect and scaffold SNS (topic, fan-out wiring, IAM) ([#98](https://github.com/rikukadev/kagerou/issues/98)) ([9fc479a](https://github.com/rikukadev/kagerou/commit/9fc479aebc88ae549f9be8c31092d69a65fa4e02))
+* **dist:** npm から入れられるようにする ([588d05c](https://github.com/rikukadev/kagerou/commit/588d05ce5ba096a5838b889486f5004acdf34273))
+* **ecs:** let tasks run in existing private subnets (base option) ([#108](https://github.com/rikukadev/kagerou/issues/108)) ([2fc2c22](https://github.com/rikukadev/kagerou/commit/2fc2c224d9735de59c53127d6a4b1673dff45ab3))
+* **init:** compute option — lambda (default) | ecs (Fargate + shared ALB) ([#106](https://github.com/rikukadev/kagerou/issues/106)) ([0075f62](https://github.com/rikukadev/kagerou/commit/0075f627fba8cd33d3079b6e92b81d8d74ee589e))
+* **init:** plan に「前提(作らない)」の節を足す ([bb872d1](https://github.com/rikukadev/kagerou/commit/bb872d167a4a1f497a87696b32571a301c7341c8)), closes [#123](https://github.com/rikukadev/kagerou/issues/123)
+* **init:** recommend the entrypoint from repository facts ([eb88463](https://github.com/rikukadev/kagerou/commit/eb88463210865befd5f55ddb9da84c7d26e9ae42))
+* **init:** static 構成を見分けて、compute 用の成果物を出さない ([#104](https://github.com/rikukadev/kagerou/issues/104)) ([119795c](https://github.com/rikukadev/kagerou/commit/119795cb2f6849b0549450484593945c4d90a9b9))
+* kagerou diagnose — read-only recommendation for any repository ([549ddef](https://github.com/rikukadev/kagerou/commit/549ddef2a91c55099108be38f1927a8d8a7e5738))
+* peer linking — resolve the partner environment by name at up ([#99](https://github.com/rikukadev/kagerou/issues/99)/[#109](https://github.com/rikukadev/kagerou/issues/109)) ([#117](https://github.com/rikukadev/kagerou/issues/117)) ([c397982](https://github.com/rikukadev/kagerou/commit/c397982124672f96a639ebf42dabd0718663ce96))
+* **static:** preview base に routing を足して SPA のディープリンクを直す ([#97](https://github.com/rikukadev/kagerou/issues/97)) ([2ab89db](https://github.com/rikukadev/kagerou/commit/2ab89db3dc3c8a2f9a39c70d9adc4e9de93cdb5e))
+
+
+### Bug Fixes
+
+* **dist:** npm パッケージから wrapper が抜けていた ([afd616a](https://github.com/rikukadev/kagerou/commit/afd616a9d409eee9da8fa408df3ebdcadbbad4e1))
+* **scaffold:** sashiki hook の `|| true` 回避策を外す ([#114](https://github.com/rikukadev/kagerou/issues/114)) ([b6adbcd](https://github.com/rikukadev/kagerou/commit/b6adbcd24677e708af7d615b252d009e2c204372))
+* **stack:** name the failed resource and reason on create/update failure ([#116](https://github.com/rikukadev/kagerou/issues/116)) ([53d482e](https://github.com/rikukadev/kagerou/commit/53d482e5f98650765a2ef2ae6b0b2a9416a26280))
+* **static:** pass the configured prefix to Sync ([833fed7](https://github.com/rikukadev/kagerou/commit/833fed73d74c0d5f1946c69080b2a09a617aba4d))
+
+
+### Documentation
+
+* make per-app the default preview base, with reasoning ([593f2b2](https://github.com/rikukadev/kagerou/commit/593f2b20a43f9f5f98a89ebb742f93e5f1b39675))
+
 ## [0.8.0](https://github.com/rikukadev/kagerou/compare/v0.7.0...v0.8.0) (2026-09-13)
 
 
