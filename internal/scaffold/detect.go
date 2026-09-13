@@ -31,6 +31,7 @@ type Detection struct {
 	AppPort       string
 	HasTemplate   bool
 	Wants         appscan.Wants // 依存から推定した周辺リソース(DynamoDB/SQS/S3/Redis/OpenSearch)
+	Facts         appscan.Facts // 走査結果そのもの(入口の推薦 internal/recommend に渡す)
 	// Driver は既存 kagerou.yaml の driver。再実行で構成を取り違えないための
 	// 一番強い手掛かりで、推定より優先する(#81)。空 = まだ設定が無い。
 	Driver string
@@ -64,6 +65,9 @@ func applyBaseKV(bases map[string]BaseInfo, project, field, value string) {
 // project 名には使えない文字(_)を先頭に置いて、実在の project と衝突させない。
 const SharedBaseKey = "_shared"
 
+// SharedALBKey は共有 ALB ベース(compute 版)の名前空間。
+const SharedALBKey = "_shared-alb"
+
 // Base は project の preview base を返す。解決順は
 // project 専用 → 共有(_shared)→ 旧アカウント単位(project セグメントが
 // 無い頃の Export)。共有かどうかは 2 つ目の戻り値で分かる。
@@ -84,6 +88,13 @@ func (d Detection) BaseFor(project string) (info BaseInfo, shared, ok bool) {
 	}
 	b, hit := d.Bases[""]
 	return b, false, hit
+}
+
+// HasSharedALB は共有 ALB ベースが既にあるか(あれば相乗りで固定費が増えない)。
+// キーは CONTRACT §9 の compute 版(/kagerou/base/_shared-alb/…)。
+func (d Detection) HasSharedALB() bool {
+	_, ok := d.Bases[SharedALBKey]
+	return ok
 }
 
 // SuggestSashiki は DB 依存が見えたときに sashiki 構成を提案する。
@@ -120,7 +131,7 @@ func Detect(dir string) Detection {
 		Owner: f.Owner, Repo: f.Repo, Region: f.Region,
 		Framework: f.Framework, DBDriver: f.DBDriver,
 		HasDockerfile: f.HasDockerfile, HasLWA: f.HasLWA, DockerfileDir: f.DockerfileDir,
-		AppPort: f.AppPort, HasTemplate: f.HasTemplate, Wants: f.Wants,
+		AppPort: f.AppPort, HasTemplate: f.HasTemplate, Wants: f.Wants, Facts: f,
 		VarsSet: map[string]bool{},
 		Driver:  existingDriver(dir),
 	}
