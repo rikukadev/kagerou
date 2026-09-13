@@ -256,7 +256,8 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 ```
 
 **共有ベース(`_shared`)**: 1 つの CloudFront / 証明書 / ドメインを全 project で
-使う運用。解決順は **project 専用 → `_shared` → 旧 Exports**。
+使う運用。**既定は per-app** で、共有はオプトイン(理由は DESIGN §11.3)。
+解決順は **project 専用 → `_shared` → 旧 Exports**。
 
 - URL は `<project>--<name>.<domain>`(例 `todo--pr-42.example.com`)。
   ワイルドカード証明書は **1 ラベルしか覆えない**ので、project を name と
