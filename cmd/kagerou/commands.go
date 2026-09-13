@@ -373,6 +373,7 @@ func cmdInit(args []string, out *os.File) error {
 	region := fs.String("region", "ap-northeast-1", "AWS region")
 	sashiki := fs.Bool("sashiki", false, "include sashiki hooks / DB env")
 	compute := fs.String("compute", "lambda", "how environments run: lambda (LWA, idle $0) | ecs (Fargate + shared ALB)")
+	entrypoint := fs.String("entrypoint", "alb", "how environments are exposed: alb (shared ALB, custom domain) | apigateway (raw execute-api URL)")
 	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
 	dir := fs.String("dir", ".", "output directory")
 	plain := fs.Bool("plain", false, "print plain text instead of the interactive wizard")
@@ -404,9 +405,12 @@ func cmdInit(args []string, out *os.File) error {
 	if *compute != "lambda" && *compute != "ecs" {
 		return fmt.Errorf("--compute %q: want lambda or ecs", *compute)
 	}
+	if *entrypoint != "alb" && *entrypoint != "apigateway" {
+		return fmt.Errorf("--entrypoint %q: want alb or apigateway", *entrypoint)
+	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
-		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute,
+		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
 		URLShape: det.Facts.URLShape}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。

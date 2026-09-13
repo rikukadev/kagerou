@@ -266,8 +266,23 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/_shared-alb/assign_public_ip     # ENABLED | DISABLED
 ```
 
-`compute: ecs` の環境テンプレートは `_shared-alb` のキーを CloudFormation の
-動的参照(`{{resolve:ssm:…}}`)で読む — パラメータの手渡しは要らない。
+`compute: ecs` と、独自ドメインで配る `compute: lambda`(入口 = 共有 ALB)の
+環境テンプレートは、`_shared-alb` のキーを CloudFormation の動的参照
+(`{{resolve:ssm:…}}`)で読む — パラメータの手渡しは要らない。
+
+### 入口(entrypoint)
+
+環境の公開経路は 3 つ。**既定は独自ドメイン**で、生の AWS URL はフォールバック:
+
+| 入口 | 使うとき | 環境が作るもの |
+|---|---|---|
+| `alb`(既定) | 独自ドメインで配る。`compute: ecs` は常にこれ、`compute: lambda` もドメインがあればこれ | リスナールール + ターゲットグループ(lambda ターゲットなら invoke 権限も)。どれも無料 |
+| `apigateway` | ドメインが取れないときのフォールバック | HTTP API(生の `execute-api` URL) |
+| CloudFront(preview base) | `driver: static` | S3 プレフィックスのみ |
+
+`alb` では ALB 本体(固定費)は共有ベースの持ち物で、環境が足すのはホストヘッダの
+ルール 1 本とターゲットグループだけ。lambda ターゲットは VPC の外のままなので、
+アイドル $0 は変わらない(TTL も 72h のまま)。
 
 **ネットワークはベース層の設定**。既定はパブリックサブネット + public IP
 (NAT を立てない = 固定費ゼロ)。組織が public IP を禁止している、あるいは

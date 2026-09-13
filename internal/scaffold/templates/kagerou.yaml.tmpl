@@ -22,8 +22,8 @@ readiness_timeout: 300s
 {{- else}}
 ttl: 72h
 {{- end}}
-{{- if and .ECS .Domain}}
-# compute: ecs の URL は共有 ALB(deploy/alb-base.yaml)経由。ホスト名は
+{{- if and .ALB .Domain}}
+# URL は共有 ALB(deploy/alb-base.yaml)経由の独自ドメイン。ホスト名は
 # この url_template から導かれる(テンプレートの EnvKagerouUrl 参照)
 url_template: "https://{name}.{{.Domain}}"
 {{- else if .ECS}}
@@ -71,6 +71,10 @@ env:
   # IMAGE_URI と RULE_PRIORITY は実行ごとに変わるので CI が --env で渡す
   # (workflow 生成済み)。手元から up するときは自分で渡す:
   #   kagerou up --name e2e-1 --env IMAGE_URI=<ecr>:e2e-1 --env RULE_PRIORITY=900
+{{- else if .LambdaALB}}
+  # RULE_PRIORITY は共有リスナー上で一意にする値。CI が PR 番号を --env で渡す
+  # (workflow 生成済み)。手元から up するときは空いている番号を自分で渡す:
+  #   kagerou up --name e2e-1 --env RULE_PRIORITY=900
 {{- end}}
 {{- if .Wants.Redis}}
   # redis を検出。ElastiCache は preview 向きでない(常時課金・VPC・作成に数分)ため

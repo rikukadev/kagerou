@@ -69,6 +69,10 @@ jobs:
           env: |
             IMAGE_URI=${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}:pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
             RULE_PRIORITY=${{"{{"}} github.event.pull_request.number {{"}}"}}
+{{- else if .LambdaALB}}
+          # 共有リスナー上で一意な優先度(PR 番号をそのまま使う)
+          env: |
+            RULE_PRIORITY=${{"{{"}} github.event.pull_request.number {{"}}"}}
 {{- end}}
 
   cleanup:

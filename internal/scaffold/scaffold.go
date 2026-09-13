@@ -27,6 +27,10 @@ type Params struct {
 	// Compute は stack driver の実行形。"lambda"(既定: LWA で包む、アイドル $0)
 	// または "ecs"(Fargate + 共有 ALB。常駐プロセスやサイドカーが要るアプリ向け)。
 	Compute string
+	// Entrypoint は環境を公開する入口。"alb"(既定: 共有 ALB。独自ドメインで
+	// 配る)または "apigateway"(生の execute-api URL。ドメインが無いときの
+	// フォールバック)。compute: ecs は常に ALB。
+	Entrypoint string
 	// Dist は static のときに同期する成果物ディレクトリ。
 	Dist string
 	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
@@ -107,7 +111,8 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		// ALB は固定費があるので共有ベース(deploy/alb-base.yaml)が持ち、環境は
 		// リスナールールとターゲットグループだけ足す。
 		{sel.Template && p.ECS(), "template.yaml", "template.ecs.yaml.tmpl", false},
-		{p.ECS(), filepath.Join("deploy", "alb-base.yaml"), "albbase.yaml.tmpl", true},
+		// 共有 ALB を入口にするなら(ecs / lambda どちらでも)ベースを同梱する
+		{p.ALB(), filepath.Join("deploy", "alb-base.yaml"), "albbase.yaml.tmpl", true},
 		{p.SetupBase, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true},
 	}
 	for _, f := range files {
@@ -364,6 +369,22 @@ func (p Params) Static() bool { return p.Driver == "static" }
 
 // ECS は compute: ecs 構成か(Fargate + 共有 ALB。Lambda/LWA で包まない)。
 func (p Params) ECS() bool { return p.Compute == "ecs" && !p.Static() }
+
+// ALB は共有 ALB を入口にする構成か。独自ドメインで配るための既定で、
+// compute: ecs は常に ALB、compute: lambda はドメインがあるとき ALB
+// (無ければ生の execute-api URL = apigateway にフォールバック)。
+func (p Params) ALB() bool {
+	if p.Static() {
+		return false
+	}
+	if p.ECS() {
+		return true
+	}
+	return p.Entrypoint == "alb" && p.Domain != ""
+}
+
+// LambdaALB は「lambda を共有 ALB に載せる」構成か(API Gateway を作らない)。
+func (p Params) LambdaALB() bool { return p.ALB() && !p.ECS() }
 
 // DriverFor は構成を決める。既存 kagerou.yaml の driver が最優先で、
 // 無ければ「compute があるか」で決める。

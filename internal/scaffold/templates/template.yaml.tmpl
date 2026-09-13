@@ -11,6 +11,17 @@ Parameters:
   EnvKagerouEnv:
     Type: String
     Description: 'Environment name. Injected via `KAGEROU_ENV: "{name}"` in kagerou.yaml'
+{{- if .LambdaALB}}
+  # 共有 ALB 入口(独自ドメイン)。ホスト名は url_template から導かれた URL を使う
+  EnvKagerouUrl:
+    Type: String
+    Description: Environment URL (from url_template). The ALB host header is derived from it
+  EnvRulePriority:
+    Type: Number
+    Description: >
+      Listener-rule priority; must be unique on the shared listener. CI passes
+      the PR number (--env RULE_PRIORITY). For manual up, pick a free number.
+{{- end}}
 {{- if .Wants.Redis}}
   EnvRedisUrl:
     Type: String
@@ -89,6 +100,7 @@ Resources:
             BucketName: !Ref AppBucket
 {{- end}}
 {{- end}}
+{{- if not .LambdaALB}}
       Events:
         Http:
           Type: HttpApi
@@ -99,6 +111,45 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+{{- else}}
+
+  # --- 入口: 共有 ALB(独自ドメイン)---------------------------------------
+  # API Gateway は作らない。ALB のリスナールールが自分のホスト名だけを横取りし、
+  # Lambda ターゲットに転送する。ALB 本体(固定費)は共有ベースの持ち物で、
+  # 環境が足すのはルールとターゲットグループだけ(どちらも無料)。
+  # Lambda は VPC の外のままなので、アイドル $0 は変わらない。
+  AlbInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AppFunction
+      Action: lambda:InvokeFunction
+      Principal: elasticloadbalancing.amazonaws.com
+
+  AlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    # 権限より先に登録すると ALB が invoke できず登録に失敗する
+    DependsOn: AlbInvokePermission
+    Properties:
+      TargetType: lambda
+      Targets:
+        - Id: !GetAtt AppFunction.Arn
+      # Lambda ターゲットのヘルスチェックは任意。プレビューでは無効にして
+      # 起動直後の空振りを避ける(準備できたかは kagerou の readiness_path で見る)
+      HealthCheckEnabled: false
+
+  AlbListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/listener_arn{{"}}"}}"
+      Priority: !Ref EnvRulePriority
+      Conditions:
+        - Field: host-header
+          # https://pr-42.myapp.example.com → pr-42.myapp.example.com
+          Values: [!Select [1, !Split ["//", !Ref EnvKagerouUrl]]]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref AlbTargetGroup
+{{- end}}
 {{- if .Wants.DynamoDB}}
 
   # 依存に DynamoDB クライアントを検出したので同梱(on-demand = アイドル $0)
@@ -161,4 +212,8 @@ Resources:
 Outputs:
   # kagerou picks this output up as the environment URL (CONTRACT §5)
   KagerouUrl:
+{{- if .LambdaALB}}
+    Value: !Ref EnvKagerouUrl
+{{- else}}
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+{{- end}}

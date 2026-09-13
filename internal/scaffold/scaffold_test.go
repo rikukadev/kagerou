@@ -452,3 +452,67 @@ func TestScaffoldPeerBlockOnCross(t *testing.T) {
 		t.Error("cross でないときは peer 雛形を出さない")
 	}
 }
+
+func TestScaffoldLambdaOnALB(t *testing.T) {
+	// ドメインがあれば lambda も共有 ALB 入口(独自ドメインが既定)。
+	dir := t.TempDir()
+	p := Params{Project: "web", Region: "r", Compute: "lambda", Entrypoint: "alb",
+		Domain: "web.example.com", Port: "8080"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		"TargetType: lambda",
+		"AlbInvokePermission", "elasticloadbalancing.amazonaws.com",
+		"AlbListenerRule", "resolve:ssm:/kagerou/base/_shared-alb/listener_arn",
+		"EnvRulePriority", "EnvKagerouUrl",
+		"AWS::Serverless::Function", // LWA で包むのは変わらない
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("lambda+alb template missing %q", want)
+		}
+	}
+	// API Gateway は作らない(入口は ALB 一本)
+	for _, notWant := range []string{"AWS::Serverless::HttpApi", "execute-api"} {
+		if strings.Contains(tp, notWant) {
+			t.Errorf("lambda+alb should not contain %q", notWant)
+		}
+	}
+	// 共有 ALB ベースが同梱され、URL は独自ドメイン
+	if !strings.Contains(read(t, dir, "deploy/alb-base.yaml"), "_shared-alb/listener_arn") {
+		t.Error("alb-base should be scaffolded for lambda+alb")
+	}
+	ky := read(t, dir, "kagerou.yaml")
+	if !strings.Contains(ky, `url_template: "https://{name}.web.example.com"`) {
+		t.Errorf("custom domain url_template missing: %s", ky)
+	}
+	if !strings.Contains(ky, "ttl: 72h") {
+		t.Error("lambda はアイドル $0 なので TTL は 72h のまま")
+	}
+	pv := read(t, dir, ".github/workflows/kagerou-preview.yml")
+	if !strings.Contains(pv, "RULE_PRIORITY=") || strings.Contains(pv, "IMAGE_URI=") {
+		t.Errorf("lambda+alb workflow: RULE_PRIORITY だけ渡すはず:\n%s", pv)
+	}
+}
+
+func TestScaffoldLambdaFallsBackToApiGatewayWithoutDomain(t *testing.T) {
+	// ドメインが取れない人は従来どおり生 URL(挙動不変)。
+	dir := t.TempDir()
+	if _, err := Run(dir, Params{Project: "web", Region: "r", Compute: "lambda", Entrypoint: "alb"},
+		AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	if !strings.Contains(tp, "AWS::Serverless::HttpApi") || !strings.Contains(tp, "execute-api") {
+		t.Error("ドメイン無しでは API Gateway 経路のまま")
+	}
+	for _, notWant := range []string{"TargetType: lambda", "AlbListenerRule"} {
+		if strings.Contains(tp, notWant) {
+			t.Errorf("ドメイン無しで ALB 経路を出してはいけない: %q", notWant)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "deploy", "alb-base.yaml")); err == nil {
+		t.Error("ドメイン無しで alb-base を出さない")
+	}
+}
