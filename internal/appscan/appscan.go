@@ -33,6 +33,8 @@ type Facts struct {
 	DockerfileDir string // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
 	AppPort       string // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
 	HasTemplate   bool   // ルートに template.yaml があるか
+	Services      int    // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
+	Realtime      bool   // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
 	Wants         Wants  // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
 }
 
@@ -154,6 +156,93 @@ func scanDir(dir, rel string, f *Facts) {
 	if f.AppPort == "" {
 		f.AppPort = composePort(dir)
 	}
+	if n := serviceCount(dir); n > f.Services {
+		f.Services = n
+	}
+	if !f.Realtime {
+		f.Realtime = realtimeUsed(dir)
+	}
+}
+
+// serviceCount は「このディレクトリにいくつサービスがあるか」を数える。
+// compose の services、cmd/*/main.go(Go の複数バイナリ)、Dockerfile の数の最大を取る。
+// 正確な数より「1 つか、複数か」が判定に効く。
+func serviceCount(dir string) int {
+	n := composeServiceCount(dir)
+	if m := cmdMainCount(dir); m > n {
+		n = m
+	}
+	if n == 0 && exists(filepath.Join(dir, "Dockerfile")) {
+		n = 1
+	}
+	return n
+}
+
+var composeServiceEntryRe = regexp.MustCompile(`(?m)^  ([a-zA-Z0-9_.-]+):\s*$`)
+
+func composeServiceCount(dir string) int {
+	for _, name := range composeFiles {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		s := string(b)
+		i := strings.Index(s, "\nservices:")
+		if i < 0 && !strings.HasPrefix(s, "services:") {
+			continue
+		}
+		if i < 0 {
+			i = 0
+		}
+		rest := s[i:]
+		// 次のトップレベルキー(volumes: など)まで
+		if j := regexp.MustCompile(`(?m)^[a-zA-Z]`).FindStringIndex(rest[1:]); j != nil {
+			if k := regexp.MustCompile(`(?m)^(volumes|networks|configs|secrets):`).FindStringIndex(rest); k != nil && k[0] > 0 {
+				rest = rest[:k[0]]
+			}
+		}
+		if m := composeServiceEntryRe.FindAllString(rest, -1); len(m) > 0 {
+			return len(m)
+		}
+	}
+	return 0
+}
+
+// cmdMainCount は Go の「cmd/<name>/main.go」の数(複数バイナリ = 複数サービス)。
+func cmdMainCount(dir string) int {
+	entries, err := os.ReadDir(filepath.Join(dir, "cmd"))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() && exists(filepath.Join(dir, "cmd", e.Name(), "main.go")) {
+			n++
+		}
+	}
+	return n
+}
+
+// realtimeUsed は WebSocket / SSE の痕跡を探す。これがあると、オリジン応答に
+// 上限のある入口(API Gateway の 30 秒、CloudFront の ~60 秒)では動かない。
+func realtimeUsed(dir string) bool {
+	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+		s := string(b)
+		for _, dep := range []string{"socket.io", "ws\"", "@fastify/websocket", "sockjs"} {
+			if strings.Contains(s, dep) {
+				return true
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+		s := string(b)
+		for _, dep := range []string{"gorilla/websocket", "nhooyr.io/websocket", "coder/websocket", "olahol/melody"} {
+			if strings.Contains(s, dep) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var remoteURLRe = regexp.MustCompile(`(?:github\.com[:/])([^/\s]+)/([^/\s]+?)(?:\.git)?\s*$`)
