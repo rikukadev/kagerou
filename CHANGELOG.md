@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/rikukadev/kagerou/compare/v0.6.0...v0.7.0) (2026-09-13)
+
+
+### Features
+
+* **init:** choose an AWS profile and check permissions before creating anything ([1bc17a3](https://github.com/rikukadev/kagerou/commit/1bc17a37c7dc210ae72f3771181f01cf2e88dae4))
+
 ## [0.6.0](https://github.com/rikukadev/kagerou/compare/v0.5.0...v0.6.0) (2026-09-12)
 
 
