@@ -42,6 +42,10 @@ type Config struct {
 	Env         map[string]string `yaml:"env"`
 	Static      Static            `yaml:"static"`
 	Hooks       Hooks             `yaml:"hooks"`
+	// Peer は相手アプリ(別 kagerou プロジェクト)との連動(#99/#109)。
+	// up 時に相手の同名 env を探し、居なければ fallback の env に繋ぐ。
+	// 解決結果はテンプレートの EnvPeerEnv / EnvPeerUrl に宣言時のみ届く。
+	Peer Peer `yaml:"peer"`
 }
 
 // Static は driver: static の設定。bucket は preview base スタックの
@@ -83,6 +87,20 @@ func (c Config) StaticPrefix(name string) string {
 	p = strings.ReplaceAll(p, "{name}", name)
 	p = strings.ReplaceAll(p, "{project}", c.Project)
 	return strings.Trim(p, "/")
+}
+
+// Peer は環境名で連動する相手(#99)。project は相手の kagerou:project。
+type Peer struct {
+	Project  string `yaml:"project"`
+	Fallback string `yaml:"fallback"` // 同名 env が居ないとき繋ぐ env 名。空なら "main"
+}
+
+// FallbackName は fallback の実効値。
+func (p Peer) FallbackName() string {
+	if p.Fallback == "" {
+		return "main"
+	}
+	return p.Fallback
 }
 
 type Hooks struct {
@@ -171,6 +189,16 @@ func (c Config) validate() error {
 		if d, err := time.ParseDuration(c.MaxLifetime); err != nil || d <= 0 {
 			return fmt.Errorf("max_lifetime %q: must be a positive duration", c.MaxLifetime)
 		}
+	}
+	if c.Peer.Project != "" {
+		if err := ValidateName(c.Peer.Project); err != nil {
+			return fmt.Errorf("peer.project: %w", err)
+		}
+		if err := ValidateName(c.Peer.FallbackName()); err != nil {
+			return fmt.Errorf("peer.fallback: %w", err)
+		}
+	} else if c.Peer.Fallback != "" {
+		return fmt.Errorf("peer.fallback is set but peer.project is empty")
 	}
 	return nil
 }

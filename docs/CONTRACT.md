@@ -322,3 +322,35 @@ SPA を `directory` のまま配ると、実体が無いので **403** になる
 - ベースは `kagerou:managed` タグを持たない = **`list` / `reap` の対象外**
   (環境と違い TTL で消えない。所有はリポジトリのコラボレータ全員で、
   更新はテンプレート/モジュールの再適用)。
+
+## 10. peer 連動(複数アプリの環境を名前で組む)
+
+複数アプリ(= 複数の kagerou プロジェクト)が連動する系(例: A が SNS に publish、
+B の SQS が受ける)では、**環境名が合成キー**になる。kagerou.yaml で相手を宣言する:
+
+```yaml
+peer:
+  project: pub-demo   # 相手の kagerou:project
+  fallback: main      # 同名 env が居ないとき繋ぐ env 名(省略時 main)
+```
+
+`up --name pr-42` のたびに kagerou が解決する:
+
+1. 相手プロジェクトに **ready な同名 env(pr-42)** が居ればそれ
+2. 居なければ **fallback の env(main)**
+3. どちらも居なければ fallback 名のまま進め、URL 無しで**警告**する
+   (相手が後から立つ運用を止めない)
+
+解決結果はテンプレートが宣言していれば届く(URL と同じ「任意の口」方式):
+
+| パラメータ | 中身 |
+|---|---|
+| `EnvPeerEnv` | 解決した相手の env 名(例 `pr-42` / `main`)。Topic 名等の規約参照に使う |
+| `EnvPeerUrl` | その env の URL(相手の `kagerou:url` タグ / KagerouUrl Output 由来)。無ければ渡らない |
+
+- 相手の実在確認は kagerou 自身のタグ走査(`kagerou:project` / `kagerou:name`)。
+  SNS 等のリソース種別には依存しない — テンプレート側が `EnvPeerEnv` から
+  規約名(例 `pub-demo-${EnvPeerEnv}-events`)を組む。
+- ready でない相手(creating / failed)には繋がない。
+- これにより「相手不在の Subscription が 4 分半 rollback して理由も出ない」
+  (#99 の実測)が、up 前の即決 + 明示の警告に変わる。

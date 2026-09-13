@@ -41,6 +41,9 @@ type Params struct {
 	// per-env でもアイドル $0 なので template.yaml に同梱し、Redis / OpenSearch は
 	// 常時課金なので env の TODO(共有ベース前提)として kagerou.yaml に出す。
 	Wants appscan.Wants
+	// URLShape は appscan の URL 構成推定("" | "path" | "cross")。cross のとき
+	// kagerou.yaml に peer: の雛形コメントを出す(#99/#109)。
+	URLShape string
 }
 
 type Result struct {

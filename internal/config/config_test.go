@@ -246,3 +246,19 @@ func TestStaticRouting(t *testing.T) {
 		}
 	})
 }
+
+func TestPeerConfig(t *testing.T) {
+	cfg, err := Load(writeYAML(t, "peer:\n  project: pub-demo\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peer.Project != "pub-demo" || cfg.Peer.FallbackName() != "main" {
+		t.Fatalf("peer = %+v", cfg.Peer)
+	}
+	if _, err := Load(writeYAML(t, "peer:\n  project: \"Bad_Name\"\n")); err == nil {
+		t.Error("不正な project 名は拒否のはず")
+	}
+	if _, err := Load(writeYAML(t, "peer:\n  fallback: main\n")); err == nil {
+		t.Error("project 無しの fallback は拒否のはず")
+	}
+}

@@ -51,6 +51,16 @@ static:
   routing: spa
 {{- end}}
 {{- end}}
+{{- if and (eq .URLShape "cross") (not .Static)}}
+
+# クロスオリジン構成を検出。相手アプリ(別 kagerou プロジェクト)と環境名で
+# 連動するなら peer を宣言する — up のたびに相手の同名 env を探し、居なければ
+# fallback の env に繋ぐ。解決結果はテンプレートが EnvPeerEnv / EnvPeerUrl を
+# 宣言していれば届く(docs/CONTRACT.md §10)。
+#peer:
+#  project: <相手の project 名>
+#  fallback: main
+{{- end}}
 {{- if not .Static}}
 env:
   # {name} expands to the environment name. Values are delivered to the

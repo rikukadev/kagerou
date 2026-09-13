@@ -408,3 +408,39 @@ func TestUpOwnership(t *testing.T) {
 		t.Fatalf("foreign env must be rejected with the owner named, got: %v", err)
 	}
 }
+
+const peerTemplate = `
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  EnvPeerEnv: { Type: String, Default: "" }
+  EnvPeerUrl: { Type: String, Default: "" }
+Resources:
+  Wait:
+    Type: AWS::CloudFormation::WaitConditionHandle
+Outputs:
+  KagerouUrl: { Value: "https://peer.example" }
+`
+
+func TestUpDeliversPeerParams(t *testing.T) {
+	d, ctx := testDriver(t)
+	name := "kagerou-test-peer-1"
+	_, err := d.Up(ctx, UpInput{
+		StackName: name, Name: "peer-1", TemplateBody: peerTemplate, Version: "test",
+		PeerEnv: "pr-42", PeerURL: "https://pr-42.pub-demo.example.com",
+	})
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Down(ctx, name) })
+	out, err := d.cfn.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: aws.String(name)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range out.Stacks[0].Parameters {
+		got[aws.ToString(p.ParameterKey)] = aws.ToString(p.ParameterValue)
+	}
+	if got["EnvPeerEnv"] != "pr-42" || got["EnvPeerUrl"] != "https://pr-42.pub-demo.example.com" {
+		t.Fatalf("peer params not delivered: %v", got)
+	}
+}
