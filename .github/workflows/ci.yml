@@ -133,6 +133,38 @@ jobs:
           NAME: e2e-mlt-${{ github.run_id }}
         run: ./bin/kagerou down --name "$NAME" --config e2e/aws/multi/kagerou.yaml || true
 
+  # 非同期ワーカー(API → SQS → worker → DynamoDB、#119)。
+  # URL を持たない compute が初登場する構成。readiness は API の 200 しか
+  # 見ないので、worker が動くかは verify がジョブを流して確かめる。
+  e2e-aws-worker:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - run: go build -o bin/kagerou ./cmd/kagerou
+
+      - name: Run E2E
+        env:
+          NAME: e2e-wrk-${{ github.run_id }}
+        run: ./e2e/aws/run.sh bin/kagerou e2e/aws/worker/kagerou.yaml "$NAME"
+
+      - name: Clean up
+        if: always()
+        env:
+          NAME: e2e-wrk-${{ github.run_id }}
+        run: ./bin/kagerou down --name "$NAME" --config e2e/aws/worker/kagerou.yaml || true
+
   e2e-aws-ssr:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     # arm64 イメージ(template の Architectures)をネイティブでビルドする

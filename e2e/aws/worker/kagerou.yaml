@@ -1,0 +1,17 @@
+# 実 AWS E2E(非同期ワーカー版、#119)。名前は CI が --name で渡す。
+project: kagerou-e2e
+driver: stack
+template: e2e/aws/worker/template.yaml
+region: ap-northeast-1
+name_prefix: kge2e-
+ttl: 2h
+
+env:
+  KAGEROU_ENV: "{name}"
+  GREETING: "hello from {name}"
+
+# API の 200 は「同期側が生きている」ことしか言わない。worker が動くかは
+# verify.sh がジョブを流して確かめる — ここが readiness の穴で、この
+# フィクスチャの存在理由(#119)。
+readiness_path: "/"
+readiness_timeout: 120s
