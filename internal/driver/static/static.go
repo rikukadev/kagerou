@@ -153,6 +153,9 @@ func (d *Driver) Down(ctx context.Context, stackName, bucket, prefix string) err
 
 // Sync は dist を s3://bucket/name/ に同期する(ローカルに無いものは消す)。
 func (d *Driver) Sync(ctx context.Context, bucket, prefix, dist string) error {
+	if strings.Trim(prefix, "/") == "" {
+		return errors.New("static sync needs a prefix (environment name, or <project>/<name> on a shared base)")
+	}
 	if fi, err := os.Stat(dist); err != nil || !fi.IsDir() {
 		return fmt.Errorf("static.dist %q is not a directory (build first)", dist)
 	}

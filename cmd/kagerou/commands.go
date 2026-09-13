@@ -246,7 +246,8 @@ func upStatic(out *os.File, f upFlags, cfg config.Config) error {
 	if err := hooks.Run(ctx, "post_up", cfg.Hooks.PostUp, hookEnv(f.name, info)); err != nil {
 		return err
 	}
-	if err := drv.Sync(ctx, in.Bucket, in.Name, in.Dist); err != nil {
+	// prefix は UpMeta と同じもの(共有 base では <project>/<name>)
+	if err := drv.Sync(ctx, in.Bucket, in.Prefix, in.Dist); err != nil {
 		return err
 	}
 	return printEnvironment(out, f.output, f.name, info)

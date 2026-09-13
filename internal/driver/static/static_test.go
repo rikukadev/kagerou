@@ -243,3 +243,43 @@ func TestUpMetaThenSyncOrder(t *testing.T) {
 		t.Fatalf("hook-generated file should be synced: %v", got)
 	}
 }
+
+func TestSyncRequiresPrefix(t *testing.T) {
+	d, ctx := testDriver(t)
+	// prefix 無しでバケット直下に撒くと、共有 base では他 project を壊す
+	if err := d.Sync(ctx, "any-bucket", "", t.TempDir()); err == nil {
+		t.Fatal("empty prefix should be rejected")
+	}
+	if err := d.Sync(ctx, "any-bucket", "/", t.TempDir()); err == nil {
+		t.Fatal("slash-only prefix should be rejected")
+	}
+}
+
+func TestSharedPrefixIsolation(t *testing.T) {
+	d, ctx := testDriver(t)
+	bucket := "kagerou-test-shared-base"
+	makeBucket(t, d, ctx, bucket)
+
+	a := writeDist(t, map[string]string{"index.html": "a"})
+	b := writeDist(t, map[string]string{"index.html": "b"})
+	if err := d.Sync(ctx, bucket, "appa/pr-1", a); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Sync(ctx, bucket, "appb/pr-1", b); err != nil {
+		t.Fatal(err)
+	}
+	// 同じ環境名でも project が違えば別物として並ぶ
+	if got := keysUnder(t, d, ctx, bucket, "appa/pr-1"); len(got) != 1 || got[0] != "appa/pr-1/index.html" {
+		t.Fatalf("appa keys = %v", got)
+	}
+	// 片方を消してももう片方は残る(共有 base の分離)
+	if err := d.Down(ctx, "kagerou-test-shared-none", bucket, "appa/pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := keysUnder(t, d, ctx, bucket, "appa/pr-1"); len(got) != 0 {
+		t.Fatalf("appa should be gone: %v", got)
+	}
+	if got := keysUnder(t, d, ctx, bucket, "appb/pr-1"); len(got) != 1 {
+		t.Fatalf("appb must survive: %v", got)
+	}
+}
