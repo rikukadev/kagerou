@@ -35,6 +35,8 @@ func run(args []string, out *os.File) error {
 		return cmdInit(args[1:], out)
 	case "iam-policy":
 		return cmdIamPolicy(args[1:], out)
+	case "diagnose":
+		return cmdDiagnose(args[1:], out)
 	case "validate":
 		return cmdValidate(args[1:], out)
 	case "list":
@@ -54,6 +56,8 @@ func usage() {
 
 Usage:
   kagerou init [--sashiki] [--compute ecs]  generate the onboarding files (interactive)
+  kagerou diagnose [--dir <path>]    inspect a repository and print what kagerou would do
+                                     (read-only: no files written, no AWS calls)
   kagerou validate [--name <name>]   check the template against the contract
   kagerou iam-policy [--with-*]      generate a least-privilege CI role policy
   kagerou iam-policy --doc trust     generate the deploy role's OIDC trust policy

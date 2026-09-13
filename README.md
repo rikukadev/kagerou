@@ -36,6 +36,28 @@ kagerou init
 - mysql2 等を検出したら [sashiki](https://github.com/rikukadev/sashiki)
   (使い捨て DB ブランチ)との連携が既定の選択肢になる
 
+他のリポジトリで**診断だけ**したいときは:
+
+```bash
+kagerou diagnose --dir ../some-app        # 何も書かず、AWS も呼ばない
+kagerou diagnose --dir ../some-app --auth # 「ログイン必須」を仮定した場合
+kagerou diagnose --json                   # 機械可読
+```
+
+```
+kagerou diagnose  acme/shop
+
+detected
+  framework    go
+  services     3
+  port         8080
+
+recommended
+❯ apigateway  複数サービスを固定費ゼロで動かせる(リクエストは 30 秒まで)
+  alb         上限は無いが、月 18 ドル前後の固定費がかかる
+  lambda      単一コンテナ向け(複数サービスを検出)
+```
+
 ```bash
 kagerou validate          # 契約(CONTRACT)をデプロイ前に検査
 kagerou iam-policy --with-ecr > ci-policy.json   # CI ロールの最小権限を構成別に生成
