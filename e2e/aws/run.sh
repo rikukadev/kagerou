@@ -101,6 +101,14 @@ log "list に出る"
   || fail "list に $NAME が出てこない"
 echo "  OK"
 
+# 構成固有の検証(あれば)。共通の run.sh は「1 個の compute」を前提に
+# 書けることしか見ないので、複数サービスの結線などはフィクスチャ側に置く。
+EXTRA="$(dirname "$CONFIG")/verify.sh"
+if [ -x "$EXTRA" ]; then
+  log "構成固有の検証: $EXTRA"
+  "$EXTRA" "$STACK" "$url" || fail "構成固有の検証が失敗した"
+fi
+
 # ここから先は cleanup(trap)が down を回す。その結果まで確かめたいので、
 # trap を外して自分で down し、残骸ゼロを見る。
 trap - EXIT

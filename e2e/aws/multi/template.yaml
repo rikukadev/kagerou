@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+# 実 AWS E2E の複数サービス版。バックエンド A / B / C があり、**A は B と C を
+# 呼ぶ**。フロントエンド(静的配信)は 3 つ全部を叩く。
+#
+# 3 層版との違いは compute が 1 個ではないこと。ここでしか出ない問題:
+#
+# - **サービス間の依存**。A は B / C の URL を要るが、作るまで分からない。
+#   同一スタック内なら CFN 参照で解決でき、A→B / A→C の一方向なので
+#   循環しない(逆向きの参照を足した瞬間に壊れる)
+# - **オリジンが 4 つ**。SPA + A + B + C がそれぞれ別オリジンなので、
+#   3 サービス全部が SPA のオリジンを CORS で許す必要がある。
+#   **A→B/C に CORS は関与しない** — CORS はブラウザが応答を JS に
+#   読ませるかの判断で、サーバー間の fetch にブラウザはいない。
+#   逆に言うと CORS はアクセス制御ではないので、この B / C は curl でも
+#   誰でも叩ける。サーバー間を守るのは IAM 認可(SigV4)等の仕事で、
+#   E2E フィクスチャなので意図的に公開のままにしている
+# - **ready の意味**。環境 URL 1 本が 200 でも、A だけ起きて C が落ちている
+#   ことがある(kagerou の readiness_path は 1 点しか見ない)
+#
+# 注意: Description は CFN の 1024 文字上限があるので、説明はここ(コメント)に
+# 書く。sam validate はこの上限を検査しない — デプロイして初めて分かる。
+Description: kagerou real-AWS E2E, multi-service (A calls B and C; the SPA calls all three)
+Parameters:
+  EnvKagerouEnv:
+    Type: String
+  # SPA のオリジン。CORS が関与するのはブラウザ発のリクエストだけなので、
+  # ブラウザで動くのが SPA だけなら、3 サービスの許可元はこれ 1 本で足りる
+  # (A→B/C はサーバー間で CORS 無関係)。
+  #
+  # ただし **この値は url_template があるときしか注入されない**(CONTRACT §5)。
+  # この E2E は url_template を使わない(S3 website の URL は事前確定できない)
+  # ので空で来る。その場合は下の !If でスタック内参照に倒す。`*` には
+  # 決して倒さない — 検証がザルになる上、credentials とも併用できない。
+  EnvKagerouUrl:
+    Type: String
+    Default: ""
+  EnvGreeting:
+    Type: String
+    Default: ""
+
+Conditions:
+  # url_template 未使用時はスタック内の S3 website URL を許可元にする。
+  # バケットは関数に依存しないので循環しない(3 層デモの旧構成と同じ手)。
+  HasPredeterminedURL: !Not [!Equals [!Ref EnvKagerouUrl, ""]]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Handler: index.handler
+    Timeout: 10
+    MemorySize: 256
+    Architectures: [arm64]
+
+Resources:
+  # ───────────────────────────────
+  # 葉のサービス(誰も呼ばない)
+  # ───────────────────────────────
+  BFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Environment:
+        Variables:
+          SERVICE: b
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+          ALLOWED_ORIGIN: !If [HasPredeterminedURL, !Ref EnvKagerouUrl, !GetAtt WebBucket.WebsiteURL]
+      InlineCode: !Sub |
+        exports.handler = async () => ({
+          statusCode: 200,
+          headers: {
+            "content-type": "application/json",
+            "access-control-allow-origin": process.env.ALLOWED_ORIGIN || "",
+            "vary": "Origin",
+          },
+          body: JSON.stringify({ service: "b", env: process.env.KAGEROU_ENV }),
+        });
+      Events:
+        Api: { Type: HttpApi, Properties: { ApiId: !Ref BApi } }
+
+  CFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Environment:
+        Variables:
+          SERVICE: c
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+          ALLOWED_ORIGIN: !If [HasPredeterminedURL, !Ref EnvKagerouUrl, !GetAtt WebBucket.WebsiteURL]
+      InlineCode: !Sub |
+        exports.handler = async () => ({
+          statusCode: 200,
+          headers: {
+            "content-type": "application/json",
+            "access-control-allow-origin": process.env.ALLOWED_ORIGIN || "",
+            "vary": "Origin",
+          },
+          body: JSON.stringify({ service: "c", env: process.env.KAGEROU_ENV }),
+        });
+      Events:
+        Api: { Type: HttpApi, Properties: { ApiId: !Ref CApi } }
+
+  # ───────────────────────────────
+  # A は B と C を呼ぶ
+  # ───────────────────────────────
+  # B_URL / C_URL は CFN が解決する。A が B/C に依存し、逆が無いので
+  # 循環しない。ここに「B が A を呼ぶ」を足すと CFN が解けなくなる。
+  AFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Environment:
+        Variables:
+          SERVICE: a
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+          GREETING: !Ref EnvGreeting
+          ALLOWED_ORIGIN: !If [HasPredeterminedURL, !Ref EnvKagerouUrl, !GetAtt WebBucket.WebsiteURL]
+          B_URL: !Sub "https://${BApi}.execute-api.${AWS::Region}.amazonaws.com"
+          C_URL: !Sub "https://${CApi}.execute-api.${AWS::Region}.amazonaws.com"
+      InlineCode: !Sub |
+        // 下流を呼んで、その結果ごと返す。**片方が落ちても A は答える** —
+        // 部分障害を「A が 500」ではなく「downstream の状態」として見せる。
+        async function fetchOne(name, url) {
+          try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+            if (!res.ok) return { name, ok: false, status: res.status };
+            return { name, ok: true, body: await res.json() };
+          } catch (e) {
+            return { name, ok: false, error: String(e && e.name || e) };
+          }
+        }
+        exports.handler = async () => {
+          const downstream = await Promise.all([
+            fetchOne("b", process.env.B_URL),
+            fetchOne("c", process.env.C_URL),
+          ]);
+          return {
+            statusCode: 200,
+            headers: {
+              "content-type": "application/json",
+              "access-control-allow-origin": process.env.ALLOWED_ORIGIN || "",
+              "vary": "Origin",
+            },
+            body: JSON.stringify({
+              service: "a",
+              env: process.env.KAGEROU_ENV,
+              greeting: process.env.GREETING || "",
+              downstream,
+            }),
+          };
+        };
+      Events:
+        Api: { Type: HttpApi, Properties: { ApiId: !Ref AApi } }
+
+  # サービスごとに別オリジンにする(1 つの API にパスで相乗りしない)。
+  # 同一オリジンだと CORS が消えてしまい、確かめたいことが確かめられない。
+  AApi:
+    Type: AWS::Serverless::HttpApi
+    Properties: { StageName: $default }
+  BApi:
+    Type: AWS::Serverless::HttpApi
+    Properties: { StageName: $default }
+  CApi:
+    Type: AWS::Serverless::HttpApi
+    Properties: { StageName: $default }
+
+  # ───────────────────────────────
+  # フロントエンド(3 つ全部を叩く)
+  # ───────────────────────────────
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+
+Outputs:
+  KagerouUrl:
+    Description: 環境の入口(フロントエンド)
+    Value: !GetAtt WebBucket.WebsiteURL
+  WebBucketName:
+    Description: post_up がここへ index.html と config.json を置く
+    Value: !Ref WebBucket
+  # フロントエンドは 3 本を **実行時** に知る。作るまで分からない値なので
+  # ビルドに焼き込めない(3 層デモと同じ理由)。
+  # 共通の run.sh は ApiUrl を「--env が届いたかを見る窓口」に使う。
+  # 代表は A(B/C の結果も downstream で見えるので情報が一番多い)。
+  ApiUrl:
+    Value: !Sub "https://${AApi}.execute-api.${AWS::Region}.amazonaws.com"
+  AUrl:
+    Value: !Sub "https://${AApi}.execute-api.${AWS::Region}.amazonaws.com"
+  BUrl:
+    Value: !Sub "https://${BApi}.execute-api.${AWS::Region}.amazonaws.com"
+  CUrl:
+    Value: !Sub "https://${CApi}.execute-api.${AWS::Region}.amazonaws.com"
