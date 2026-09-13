@@ -45,4 +45,4 @@ $ go install github.com/rikukadev/kagerou/cmd/kagerou@latest
 対応は macOS / Linux の amd64・arm64。詳細は
 [リポジトリの README](https://github.com/rikukadev/kagerou#readme) を参照してください。
 
-MIT License
+Apache-2.0 License
