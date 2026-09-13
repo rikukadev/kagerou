@@ -530,6 +530,9 @@ func (m initModel) detectionSummary() string {
 	if m.det.DBDriver != "" {
 		parts = append(parts, "db:"+m.det.DBDriver)
 	}
+	if m.det.Facts.URLShape != "" {
+		parts = append(parts, "url:"+m.det.Facts.URLShape)
+	}
 	if m.det.AccountID != "" {
 		parts = append(parts, "aws:"+m.det.AccountID)
 	}
