@@ -1,0 +1,44 @@
+{
+  "name": "kagerou",
+  "version": "0.8.0",
+  "description": "Ephemeral preview environments on AWS, built from the container definitions you already have",
+  "keywords": [
+    "preview-environments",
+    "ephemeral-environments",
+    "aws",
+    "cloudformation",
+    "ecs",
+    "lambda",
+    "cli"
+  ],
+  "homepage": "https://github.com/rikukadev/kagerou#readme",
+  "bugs": "https://github.com/rikukadev/kagerou/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rikukadev/kagerou.git",
+    "directory": "npm"
+  },
+  "license": "MIT",
+  "bin": {
+    "kagerou": "bin/kagerou.js"
+  },
+  "files": [
+    "bin/kagerou.js",
+    "install.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node install.js --quiet"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

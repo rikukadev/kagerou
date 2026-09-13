@@ -59,3 +59,30 @@ jobs:
           major="${tag%%.*}"   # v0.4.0 -> v0
           git tag -f "$major" "$tag"
           git push -f origin "$major"
+
+  # npm は `npx kagerou diagnose` のための配布口。goreleaser の後に回すのは、
+  # postinstall が Release の tar.gz を取りに行くため(資産が無いと初回 install が
+  # 失敗する)。
+  #
+  # 認証は Trusted Publishing(OIDC)。長生きする publish トークンを
+  # リポジトリに置かずに済む。npmjs.com 側でこの workflow を信頼する設定を
+  # した後に有効になるので、それまでは変数で止めておく。
+  npm-publish:
+    needs: [release-please, goreleaser]
+    if: needs.release-please.outputs.release_created == 'true' && vars.NPM_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC と provenance の署名に要る
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing は npm 11.5.1 以降。Node 22 同梱は 10.x なので上げる
+      - run: npm install -g npm@latest
+      - run: npm publish --access public
+        working-directory: npm
