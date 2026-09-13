@@ -26,6 +26,7 @@ type Detection struct {
 	DBDriver      string
 	HasDockerfile bool
 	HasLWA        bool
+	DockerfileDir string // Dockerfile のあるディレクトリ(ルート相対。LWA 注入先)
 	AppPort       string
 	HasTemplate   bool
 	Wants         appscan.Wants // 依存から推定した周辺リソース(DynamoDB/SQS/S3/Redis/OpenSearch)
@@ -81,7 +82,7 @@ func Detect(dir string) Detection {
 	d := Detection{
 		Owner: f.Owner, Repo: f.Repo, Region: f.Region,
 		Framework: f.Framework, DBDriver: f.DBDriver,
-		HasDockerfile: f.HasDockerfile, HasLWA: f.HasLWA,
+		HasDockerfile: f.HasDockerfile, HasLWA: f.HasLWA, DockerfileDir: f.DockerfileDir,
 		AppPort: f.AppPort, HasTemplate: f.HasTemplate, Wants: f.Wants,
 		VarsSet: map[string]bool{},
 	}

@@ -6,6 +6,10 @@
 //   - kagerou の他パッケージに依存しない(標準ライブラリのみ)
 //   - ベストエフォート: 読めない/無いものは零値のまま。エラーで止まらない
 //
+// モノレポ対応: マーカー(package.json / go.mod / Dockerfile / compose)は
+// ルートに無いことがある(例: api/ と web/ に分かれた 3 層構成)。走査は
+// 再帰で、見つかった事実を 1 つの Facts にマージする(規則は merge 参照)。
+//
 // 環境側の検出(AWS アカウント・Route53・gh Variables 等)は scaffold.Detect が
 // この Facts に重ねる。
 package appscan
@@ -20,15 +24,16 @@ import (
 
 // Facts はリポジトリから読み取れた事実。
 type Facts struct {
-	Owner, Repo   string // .git/config の remote origin
-	Region        string // samconfig.toml(ファイル由来のみ)
+	Owner, Repo   string // .git/config の remote origin(ルートのみ)
+	Region        string // samconfig.toml(ルートのみ・ファイル由来)
 	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go
 	DBDriver      string // mysql2 / pg / go-sql-driver/mysql など(空 = DB 依存なし)
 	HasDockerfile bool
-	HasLWA        bool   // Dockerfile に Lambda Web Adapter が入っているか
+	HasLWA        bool   // その Dockerfile に Lambda Web Adapter が入っているか
+	DockerfileDir string // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
 	AppPort       string // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
-	HasTemplate   bool   // template.yaml があるか
-	Wants         Wants  // 依存から推定した「アプリが使うもの」
+	HasTemplate   bool   // ルートに template.yaml があるか
+	Wants         Wants  // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
 }
 
 // Wants は依存関係(package.json / go.mod / compose)から推定した、アプリが
@@ -46,14 +51,95 @@ type Wants struct {
 // Any はどれか 1 つでも検出されたか。
 func (w Wants) Any() bool { return w.DynamoDB || w.SQS || w.S3 || w.Redis || w.OpenSearch }
 
-// Scan は dir を走査して Facts を返す。
+func (w Wants) or(o Wants) Wants {
+	return Wants{
+		DynamoDB:   w.DynamoDB || o.DynamoDB,
+		SQS:        w.SQS || o.SQS,
+		S3:         w.S3 || o.S3,
+		Redis:      w.Redis || o.Redis,
+		OpenSearch: w.OpenSearch || o.OpenSearch,
+	}
+}
+
+// 再帰走査の安全弁。preview 対象のアプリで踏み抜くことはまず無い値にしてある。
+const (
+	maxDepth = 4   // ルートを 0 としてこの深さまで
+	maxDirs  = 512 // 訪問ディレクトリ総数の上限
+)
+
+// skipDirs は中を見ないディレクトリ。依存の実体や生成物は「このアプリの事実」ではない。
+var skipDirs = map[string]bool{
+	"node_modules": true, "vendor": true, "dist": true, "build": true, "out": true,
+	"coverage": true, "testdata": true, "tmp": true, "target": true,
+}
+
+// Scan は dir を再帰的に走査して Facts を返す。
 func Scan(dir string) Facts {
 	f := Facts{}
 	f.Owner, f.Repo = gitRemote(filepath.Join(dir, ".git", "config"))
 	f.Region = samconfigRegion(dir)
-	scanDeps(dir, &f)
-	f.HasDockerfile = exists(filepath.Join(dir, "Dockerfile"))
-	if f.HasDockerfile {
+	f.HasTemplate = exists(filepath.Join(dir, "template.yaml"))
+	visited := 0
+	walk(dir, "", 0, &f, &visited)
+	return f
+}
+
+// walk はルート優先の深さ優先でディレクトリを回り、事実をマージしていく。
+func walk(root, rel string, depth int, f *Facts, visited *int) {
+	scanDir(filepath.Join(root, rel), rel, f)
+	if depth >= maxDepth {
+		return
+	}
+	entries, err := os.ReadDir(filepath.Join(root, rel))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || skipDirs[name] || strings.HasPrefix(name, ".") {
+			continue
+		}
+		if *visited >= maxDirs {
+			return
+		}
+		*visited++
+		walk(root, filepath.Join(rel, name), depth+1, f, visited)
+	}
+}
+
+// frameworkRank はマージ時の優先度。具体的なフレームワーク > go > 素の node。
+// モノレポ(web=素の React SPA + api=Go)ではコンテナ化対象の Go が勝つ。
+func frameworkRank(fw string) int {
+	switch fw {
+	case "":
+		return 0
+	case "node":
+		return 1
+	case "go":
+		return 2
+	default: // next / remix-run / react-router / astro / nuxt / sveltejs
+		return 3
+	}
+}
+
+// scanDir は 1 ディレクトリの事実を f にマージする。
+// - Framework: frameworkRank が高い方が勝つ(同点は先着 = ルート優先)
+// - DBDriver / AppPort: 先着(ルート優先)
+// - Wants: OR
+// - Dockerfile: 先着。場所を DockerfileDir に覚える(LWA 注入先になる)
+func scanDir(dir, rel string, f *Facts) {
+	fw, db, wants := depsOf(dir)
+	if frameworkRank(fw) > frameworkRank(f.Framework) {
+		f.Framework = fw
+	}
+	if f.DBDriver == "" {
+		f.DBDriver = db
+	}
+	f.Wants = f.Wants.or(wants)
+
+	if !f.HasDockerfile && exists(filepath.Join(dir, "Dockerfile")) {
+		f.HasDockerfile = true
+		f.DockerfileDir = rel
 		if b, err := os.ReadFile(filepath.Join(dir, "Dockerfile")); err == nil {
 			f.HasLWA = strings.Contains(string(b), "lambda-adapter")
 			if m := exposeRe.FindAllStringSubmatch(string(b), -1); len(m) > 0 {
@@ -64,8 +150,6 @@ func Scan(dir string) Facts {
 	if f.AppPort == "" {
 		f.AppPort = composePort(dir)
 	}
-	f.HasTemplate = exists(filepath.Join(dir, "template.yaml"))
-	return f
 }
 
 var remoteURLRe = regexp.MustCompile(`(?:github\.com[:/])([^/\s]+)/([^/\s]+?)(?:\.git)?\s*$`)
@@ -134,8 +218,9 @@ var (
 
 var composeFiles = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
 
-// scanDeps は package.json / go.mod / compose から Framework / DBDriver / Wants を埋める。
-func scanDeps(dir string, f *Facts) {
+// depsOf は 1 ディレクトリの package.json / go.mod / compose から
+// Framework / DBDriver / Wants を読む。
+func depsOf(dir string) (framework, dbDriver string, wants Wants) {
 	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
 		var pkg struct {
 			Dependencies    map[string]string `json:"dependencies"`
@@ -152,39 +237,41 @@ func scanDeps(dir string, f *Facts) {
 		}
 		for _, fw := range nodeFrameworks {
 			if deps[fw] {
-				f.Framework = strings.TrimPrefix(strings.Split(fw, "/")[0], "@")
+				framework = strings.TrimPrefix(strings.Split(fw, "/")[0], "@")
 				break
 			}
 		}
-		if f.Framework == "" && len(deps) > 0 {
-			f.Framework = "node"
+		if framework == "" && len(deps) > 0 {
+			framework = "node"
 		}
 		for _, db := range nodeDBs {
 			if deps[db] {
-				f.DBDriver = db
+				dbDriver = db
 				break
 			}
 		}
 		for name, mark := range nodeWants {
 			if deps[name] {
-				mark(&f.Wants)
+				mark(&wants)
 			}
 		}
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
-		if f.Framework == "" {
-			f.Framework = "go"
+		if frameworkRank("go") > frameworkRank(framework) {
+			framework = "go"
 		}
 		s := string(b)
 		for _, db := range goDBs {
 			if strings.Contains(s, db) {
-				f.DBDriver = db
+				if dbDriver == "" {
+					dbDriver = db
+				}
 				break
 			}
 		}
 		for frag, mark := range goWants {
 			if strings.Contains(s, frag) {
-				mark(&f.Wants)
+				mark(&wants)
 			}
 		}
 	}
@@ -195,22 +282,23 @@ func scanDeps(dir string, f *Facts) {
 			continue
 		}
 		s := string(b)
-		if f.DBDriver == "" {
+		if dbDriver == "" {
 			if strings.Contains(s, "image: mysql") || strings.Contains(s, "image: mariadb") {
-				f.DBDriver = "mysql (compose)"
+				dbDriver = "mysql (compose)"
 			} else if strings.Contains(s, "image: postgres") {
-				f.DBDriver = "postgres (compose)"
+				dbDriver = "postgres (compose)"
 			}
 		}
 		if strings.Contains(s, "image: redis") || strings.Contains(s, "image: valkey") {
-			f.Wants.Redis = true
+			wants.Redis = true
 		}
 		if strings.Contains(s, "opensearchproject/opensearch") || strings.Contains(s, "image: elasticsearch") ||
 			strings.Contains(s, "docker.elastic.co") {
-			f.Wants.OpenSearch = true
+			wants.OpenSearch = true
 		}
 		break // 最初に見つかった compose だけ見る(ポート検出と同じ流儀)
 	}
+	return framework, dbDriver, wants
 }
 
 func exists(path string) bool {
