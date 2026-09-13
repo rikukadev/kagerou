@@ -24,8 +24,12 @@ type Params struct {
 	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
 	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
 	Driver        string // "stack"(既定)/ "static"
-	Domain        string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
-	SetupBase     bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+	// Dist は static のときに同期する成果物ディレクトリ。
+	Dist string
+	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
+	BaseBucket string
+	Domain     string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
+	SetupBase  bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
 	Routing string
@@ -63,6 +67,16 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	// これから Dockerfile 雛形を生成する場合、その listen ポートは自分が決める
 	// (variant の既定)。template.yaml の AWS_LWA_PORT にも同じ値を使わないと、
 	// 「雛形は 8080 で listen、LWA は 3000 を見にいく」で最初のデプロイから 502 になる。
+	// routing / dist は **preview base から配るとき** にだけ意味がある。
+	// stack 構成(compute がルーティングを持つ)で書くと嘘になるので埋めない。
+	if p.Static() {
+		if p.Dist == "" {
+			p.Dist = DistFor(p.Framework)
+		}
+		if p.Routing == "" {
+			p.Routing = RoutingFor(p.Framework)
+		}
+	}
 	if sel.Dockerfile && p.Port == "" {
 		if variant, ok := dockerfileVariant(p.Framework); ok {
 			if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
@@ -80,7 +94,9 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		{sel.KagerouYaml, "kagerou.yaml", "kagerou.yaml.tmpl", true},
 		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true},
 		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
-		{sel.Template, "template.yaml", "template.yaml.tmpl", false},
+		// static には compute が無いので template.yaml も Dockerfile も要らない。
+		// ここで落とさないと「消してから手で workflow を書く」ことになる(#81)。
+		{sel.Template && !p.Static(), "template.yaml", "template.yaml.tmpl", false},
 		{p.SetupBase, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true},
 	}
 	for _, f := range files {
@@ -102,7 +118,8 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 
 	// Dockerfile 雛形は「無い人向け」。既存は(force でも)絶対に上書きしない。
 	// 既知フレームワークの雛形が無ければ黙ってスキップ(init は失敗させない)。
-	if sel.Dockerfile {
+	// static はコンテナを作らないので、そもそも出さない(#81)。
+	if sel.Dockerfile && !p.Static() {
 		if variant, ok := dockerfileVariant(p.Framework); ok {
 			dst := filepath.Join(dir, "Dockerfile")
 			if _, err := os.Stat(dst); err == nil {
@@ -333,6 +350,39 @@ func PlainSteps(p Params, d Detection) string {
 
 // Static は driver: static 構成か(compute を作らない)。
 func (p Params) Static() bool { return p.Driver == "static" }
+
+// DriverFor は構成を決める。既存 kagerou.yaml の driver が最優先で、
+// 無ければ「compute があるか」で決める。
+//
+// compute があると見なすのは Dockerfile か既存 template.yaml がある場合。
+// どちらも無く、フロントエンドのフレームワークだけが見つかるなら静的配信。
+// **迷ったら stack**(compute 付き)に倒す — static で作って足りないより、
+// 余分な雛形を消すほうが復帰しやすい。
+func DriverFor(d Detection) string {
+	if d.Driver != "" {
+		return d.Driver // 既存の設定が一番強い手掛かり
+	}
+	if d.HasDockerfile || d.HasTemplate {
+		return "stack"
+	}
+	switch d.Framework {
+	case "react-router", "remix-run", "vite", "astro":
+		return "static"
+	default:
+		return "stack"
+	}
+}
+
+// DistFor はフレームワークから成果物ディレクトリを推定する。
+// 外したら kagerou.yaml を直せばよいだけなので、推定は素直に倒す。
+func DistFor(framework string) string {
+	switch framework {
+	case "next":
+		return "out" // next export
+	default:
+		return "dist" // vite / astro / react-router など
+	}
+}
 
 // RoutingOrDefault は Routing の既定(directory)を埋めて返す。
 func (p Params) RoutingOrDefault() string {

@@ -141,8 +141,9 @@ func TestRoutingFor(t *testing.T) {
 // 症状(403)から設定を見ても原因に辿り着けない。
 func TestGeneratedConfigMatchesBaseParameter(t *testing.T) {
 	dir := t.TempDir()
+	// routing は preview base から配る構成(driver: static)にだけ載る。
 	p := Params{Project: "demo", Region: "ap-northeast-1", Domain: "demo.example.com",
-		SetupBase: true, Routing: "spa"}
+		SetupBase: true, Driver: "static", Framework: "vite", Routing: "spa"}
 	if _, err := Run(dir, p, Targets{KagerouYaml: true}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,8 @@ func TestGeneratedConfigMatchesBaseParameter(t *testing.T) {
 // 「変えられる設定」に見えて、ベース再デプロイが要ることが伝わらない。
 func TestGeneratedConfigOmitsDefaultRouting(t *testing.T) {
 	dir := t.TempDir()
-	p := Params{Project: "demo", Region: "ap-northeast-1", Domain: "demo.example.com"}
+	p := Params{Project: "demo", Region: "ap-northeast-1", Domain: "demo.example.com",
+		Driver: "static", Framework: "astro"} // astro は SSG なので directory
 	if _, err := Run(dir, p, Targets{KagerouYaml: true}, true); err != nil {
 		t.Fatal(err)
 	}
