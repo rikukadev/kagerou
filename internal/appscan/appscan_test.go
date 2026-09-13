@@ -98,3 +98,59 @@ EXPOSE 3000
 		t.Fatalf("dockerfile facts: %+v", f)
 	}
 }
+
+func TestScanMonorepo(t *testing.T) {
+	// 3tier 型: ルートは空、api/ に Go+mysql、web/ に素の React。
+	dir := t.TempDir()
+	for _, d := range []string{"api", "web"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, dir, "api/go.mod", "module m\nrequire github.com/go-sql-driver/mysql v1.10.0\nrequire github.com/aws/aws-sdk-go-v2/service/sqs v1.0.0\n")
+	write(t, dir, "api/Dockerfile", "FROM golang:1\nEXPOSE 8080\n")
+	write(t, dir, "web/package.json", `{"dependencies":{"react":"19"}}`)
+
+	f := Scan(dir)
+	if f.Framework != "go" { // 具体度: go > 素の node(コンテナ化対象が勝つ)
+		t.Errorf("framework = %q, want go", f.Framework)
+	}
+	if f.DBDriver != "go-sql-driver/mysql" {
+		t.Errorf("db = %q", f.DBDriver)
+	}
+	if !f.Wants.SQS {
+		t.Error("サブディレクトリの Wants を拾うはず")
+	}
+	if !f.HasDockerfile || f.DockerfileDir != "api" || f.AppPort != "8080" {
+		t.Errorf("dockerfile facts: dir=%q port=%q has=%v", f.DockerfileDir, f.AppPort, f.HasDockerfile)
+	}
+}
+
+func TestScanFrameworkRankPrefersSSR(t *testing.T) {
+	// SSR フレームワーク(next)は go より勝つ。
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "tool"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "package.json", `{"dependencies":{"next":"15"}}`)
+	write(t, dir, "tool/go.mod", "module tool\n")
+	if f := Scan(dir); f.Framework != "next" {
+		t.Errorf("framework = %q, want next", f.Framework)
+	}
+}
+
+func TestScanSkipsNoise(t *testing.T) {
+	// node_modules / 隠しディレクトリの中身は事実に数えない。
+	dir := t.TempDir()
+	for _, d := range []string{"node_modules/ioredis", ".cache"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, dir, "node_modules/ioredis/package.json", `{"dependencies":{"ioredis":"5"}}`)
+	write(t, dir, ".cache/go.mod", "module junk\nrequire github.com/aws/aws-sdk-go-v2/service/s3 v1.0.0\n")
+	f := Scan(dir)
+	if f.Wants.Any() || f.Framework != "" {
+		t.Fatalf("noise leaked into facts: %+v", f)
+	}
+}
