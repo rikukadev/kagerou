@@ -36,6 +36,16 @@ type Facts struct {
 	Services      int    // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
 	Realtime      bool   // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
 	Wants         Wants  // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
+
+	// URLShape は設定ファイルから推定した URL 構成(kagerou#109 v1):
+	//   "cross" = フロントと API が別オリジン(traefik Host ラベル / nginx
+	//             server_name / CORS 依存 / *_API_URL 系 env 名)
+	//   "path"  = 同一オリジンのパス分割(vite server.proxy / next rewrites)
+	//   ""      = 単一オリジン or 不明。コードのリテラルは読まない(ノイズ > 価値)
+	URLShape string
+	Hosts    []string // traefik / nginx に書かれていた実ホスト名(最大 4、参考表示用)
+
+	pathHint, crossHint bool // 走査中の中間信号。URLShape は Scan の最後に確定する
 }
 
 // Wants は依存関係(package.json / go.mod / compose)から推定した、アプリが
@@ -87,6 +97,16 @@ func Scan(dir string) Facts {
 	f.HasTemplate = exists(filepath.Join(dir, "template.yaml"))
 	visited := 0
 	walk(dir, "", 0, &f, &visited)
+
+	// URL 構成の確定。明示のホスト名 > パス分割の意図 > クロスオリジンの傍証。
+	switch {
+	case len(f.Hosts) > 0:
+		f.URLShape = "cross"
+	case f.pathHint:
+		f.URLShape = "path"
+	case f.crossHint:
+		f.URLShape = "cross"
+	}
 	return f
 }
 
@@ -162,6 +182,7 @@ func scanDir(dir, rel string, f *Facts) {
 	if !f.Realtime {
 		f.Realtime = realtimeUsed(dir)
 	}
+	scanURLShape(dir, f)
 }
 
 // serviceCount は「このディレクトリにいくつサービスがあるか」を数える。
@@ -423,4 +444,84 @@ func composePort(dir string) string {
 		}
 	}
 	return ""
+}
+
+// --- URL 構成の検出(kagerou#109 v1)-----------------------------------------
+
+var (
+	traefikHostRe = regexp.MustCompile("Host\\(`([^`]+)`\\)")
+	serverNameRe  = regexp.MustCompile(`(?m)^\s*server_name\s+([^;]+);`)
+	apiURLEnvRe   = regexp.MustCompile(`(?m)[A-Z][A-Z0-9_]*(API|BACKEND)[A-Z0-9_]*URL\s*[:=]`)
+)
+
+// scanURLShape は設定ファイルから URL 構成の信号を拾う(コードは読まない)。
+func scanURLShape(dir string, f *Facts) {
+	// 依存の CORS ミドルウェア = クロスオリジン前提の傍証
+	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+		if strings.Contains(string(b), `"cors"`) {
+			f.crossHint = true
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+		s := string(b)
+		if strings.Contains(s, "rs/cors") || strings.Contains(s, "gin-contrib/cors") {
+			f.crossHint = true
+		}
+	}
+	// vite の dev proxy / next の rewrites = 同一オリジン・パス分割の意図
+	for _, name := range []string{"vite.config.ts", "vite.config.js", "vite.config.mjs"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			if s := string(b); strings.Contains(s, "proxy") && strings.Contains(s, "/api") {
+				f.pathHint = true
+			}
+		}
+	}
+	for _, name := range []string{"next.config.js", "next.config.mjs", "next.config.ts"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			if strings.Contains(string(b), "rewrites") {
+				f.pathHint = true
+			}
+		}
+	}
+	// nginx / Caddy の server 定義 = リバプロで組んだマルチドメイン(実ホスト名つき)
+	for _, name := range []string{"nginx.conf", "default.conf", "Caddyfile"} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		for _, m := range serverNameRe.FindAllStringSubmatch(string(b), -1) {
+			for _, h := range strings.Fields(m[1]) {
+				addHost(f, h)
+			}
+		}
+	}
+	// compose: traefik の Host ラベル(確定信号)と *_API_URL 系 env 名(傍証)
+	for _, name := range composeFiles {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		s := string(b)
+		for _, m := range traefikHostRe.FindAllStringSubmatch(s, -1) {
+			addHost(f, m[1])
+		}
+		if apiURLEnvRe.MatchString(s) {
+			f.crossHint = true
+		}
+		break
+	}
+}
+
+// addHost は参考表示用のホスト名を集める(ノイズ除外・重複排除・最大 4)。
+func addHost(f *Facts, h string) {
+	h = strings.TrimSpace(h)
+	if h == "" || h == "_" || h == "localhost" || strings.HasPrefix(h, "127.") || len(f.Hosts) >= 4 {
+		return
+	}
+	for _, e := range f.Hosts {
+		if e == h {
+			return
+		}
+	}
+	f.Hosts = append(f.Hosts, h)
 }

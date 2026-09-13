@@ -406,6 +406,18 @@ func cmdInit(args []string, out *os.File) error {
 	if det.SuggestSashiki() && !p.Sashiki {
 		fmt.Fprintf(os.Stderr, "kagerou: hint: detected %s — add --sashiki to include DB branch integration\n", det.DBDriver)
 	}
+	// URL 構成の検出(#109 v1)。生成への反映(自動配線 / パスルーティング)は
+	// #99 の実機実験を見てから v2 で行う — いまは事実の提示に留める
+	switch det.Facts.URLShape {
+	case "cross":
+		extra := ""
+		if len(det.Facts.Hosts) > 0 {
+			extra = " (" + strings.Join(det.Facts.Hosts, ", ") + ")"
+		}
+		fmt.Fprintf(os.Stderr, "kagerou: hint: cross-origin layout detected%s — wire the peer URL by environment name for now (PEER_URL pattern, kagerou#99); automatic wiring is planned in kagerou#109\n", extra)
+	case "path":
+		fmt.Fprintln(os.Stderr, "kagerou: hint: same-origin path routing detected (/api behind one host) — base path routing is planned in kagerou#109; until then the scaffold keeps a single origin")
+	}
 	res, err := scaffold.Run(*dir, p, scaffold.AllTargets(), *force)
 	if err != nil {
 		return err

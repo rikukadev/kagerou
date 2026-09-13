@@ -224,3 +224,63 @@ volumes:
 		t.Fatal("realtime を誤検知している")
 	}
 }
+func TestURLShapeCrossFromTraefik(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "compose.yaml", "services:\n  web:\n    labels:\n      - traefik.http.routers.web.rule=Host(`app.example.com`)\n  api:\n    labels:\n      - traefik.http.routers.api.rule=Host(`api.example.com`)\n")
+	f := Scan(dir)
+	if f.URLShape != "cross" {
+		t.Fatalf("shape = %q, want cross", f.URLShape)
+	}
+	if len(f.Hosts) != 2 || f.Hosts[0] != "app.example.com" {
+		t.Fatalf("hosts = %v", f.Hosts)
+	}
+}
+
+func TestURLShapeCrossFromNginxAndCors(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "nginx.conf", "server {\n  server_name app.example.com api.example.com;\n}\n")
+	if f := Scan(dir); f.URLShape != "cross" || len(f.Hosts) != 2 {
+		t.Fatalf("nginx: %+v", f)
+	}
+	dir2 := t.TempDir()
+	write(t, dir2, "package.json", `{"dependencies":{"express":"4","cors":"2"}}`)
+	if f := Scan(dir2); f.URLShape != "cross" {
+		t.Fatalf("cors dep should hint cross: %q", f.URLShape)
+	}
+	// go 側の CORS ミドルウェア
+	dir3 := t.TempDir()
+	write(t, dir3, "go.mod", "module m\nrequire github.com/rs/cors v1.11.0\n")
+	if f := Scan(dir3); f.URLShape != "cross" {
+		t.Fatalf("rs/cors should hint cross: %q", f.URLShape)
+	}
+}
+
+func TestURLShapePathFromViteProxy(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"dependencies":{"react":"19"}}`)
+	write(t, dir, "vite.config.ts", "export default { server: { proxy: { \"/api\": \"http://localhost:8081\" } } }\n")
+	if f := Scan(dir); f.URLShape != "path" {
+		t.Fatalf("vite proxy should be path: %q", f.URLShape)
+	}
+	// 明示ホスト(cross の確定信号)があれば path より勝つ
+	write(t, dir, "compose.yaml", "services:\n  web:\n    labels:\n      - traefik.http.routers.w.rule=Host(`app.example.com`)\n")
+	if f := Scan(dir); f.URLShape != "cross" {
+		t.Fatalf("explicit hosts should win: %q", f.URLShape)
+	}
+}
+
+func TestURLShapeUnknownStaysEmpty(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"dependencies":{"react":"19"}}`)
+	if f := Scan(dir); f.URLShape != "" {
+		t.Fatalf("no signals should stay empty: %q", f.URLShape)
+	}
+}
+
+func TestURLShapeAPIEnvName(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "compose.yaml", "services:\n  web:\n    environment:\n      VITE_API_BASE_URL: https://api.example.com\n")
+	if f := Scan(dir); f.URLShape != "cross" {
+		t.Fatalf("*_API_URL env should hint cross: %q", f.URLShape)
+	}
+}
