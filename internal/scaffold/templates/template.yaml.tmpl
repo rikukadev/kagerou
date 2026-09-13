@@ -55,6 +55,9 @@ Resources:
 {{- if .Wants.DynamoDB}}
           TABLE_NAME: !Ref AppTable
 {{- end}}
+{{- if .Wants.SNS}}
+          TOPIC_ARN: !Ref AppTopic
+{{- end}}
 {{- if .Wants.SQS}}
           QUEUE_URL: !Ref AppQueue
 {{- end}}
@@ -67,11 +70,15 @@ Resources:
 {{- if .Wants.OpenSearch}}
           OPENSEARCH_URL: !Ref EnvOpensearchUrl
 {{- end}}
-{{- if or .Wants.DynamoDB .Wants.SQS .Wants.S3}}
+{{- if or .Wants.DynamoDB .Wants.SNS .Wants.SQS .Wants.S3}}
       Policies:
 {{- if .Wants.DynamoDB}}
         - DynamoDBCrudPolicy:
             TableName: !Ref AppTable
+{{- end}}
+{{- if .Wants.SNS}}
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AppTopic.TopicName
 {{- end}}
 {{- if .Wants.SQS}}
         - SQSSendMessagePolicy:
@@ -106,11 +113,43 @@ Resources:
         - AttributeName: id
           KeyType: HASH
 {{- end}}
+{{- if .Wants.SNS}}
+
+  # 依存に SNS クライアントを検出したので同梱(アイドル $0)。他アプリの環境と
+  # 連動させる場合は、Topic 名を環境名から導ける形にしておくと発見しやすい
+  AppTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "{{.Project}}-${EnvKagerouEnv}-events"
+{{- end}}
 {{- if .Wants.SQS}}
 
   # 依存に SQS クライアントを検出したので同梱(アイドル $0)
   AppQueue:
     Type: AWS::SQS::Queue
+{{- end}}
+{{- if and .Wants.SNS .Wants.SQS}}
+
+  # SNS と SQS の両方を使うので、Topic → Queue の配線も同梱(fan-out の定型)
+  AppQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      TopicArn: !Ref AppTopic
+      Endpoint: !GetAtt AppQueue.Arn
+  AppQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref AppQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: sns.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt AppQueue.Arn
+            Condition:
+              ArnEquals: { "aws:SourceArn": !Ref AppTopic }
 {{- end}}
 {{- if .Wants.S3}}
 

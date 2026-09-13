@@ -188,6 +188,17 @@ func Build(o Options) (Policy, error) {
 			Resource: fmt.Sprintf("arn:aws:dynamodb:*:*:table/%s*", p),
 		})
 	}
+	if o.Template != nil && o.Template.has("AWS::SNS::Topic", "AWS::SNS::Subscription") {
+		sts = append(sts, Statement{
+			// Subscribe/Unsubscribe は AWS::SNS::Subscription のデプロイ用
+			Sid: "SNSTopicLifecycle", Effect: "Allow",
+			Action: []string{
+				"sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes",
+				"sns:Subscribe", "sns:Unsubscribe", "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource",
+			},
+			Resource: fmt.Sprintf("arn:aws:sns:*:*:%s*", p),
+		})
+	}
 	if o.Template != nil && o.Template.has("AWS::SQS::Queue") {
 		sts = append(sts, Statement{
 			Sid: "SQSQueueLifecycle", Effect: "Allow",

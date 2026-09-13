@@ -28,7 +28,10 @@ var knownTypes = map[string]bool{
 	"AWS::ApiGateway::RestApi":       true,
 	"AWS::S3::Bucket":                true,
 	"AWS::DynamoDB::Table":           true,
+	"AWS::SNS::Topic":                true,
+	"AWS::SNS::Subscription":         true, // SNSTopicLifecycle の Subscribe/Unsubscribe でカバー
 	"AWS::SQS::Queue":                true,
+	"AWS::SQS::QueuePolicy":          true, // SQSQueueLifecycle の Get/SetQueueAttributes でカバー
 	"AWS::Logs::LogGroup":            true, // LogGroups statement でカバー
 	"AWS::IAM::Role":                 true, // ExecutionRole statement でカバー
 	"AWS::Lambda::Permission":        true, // lambda:AddPermission でカバー
