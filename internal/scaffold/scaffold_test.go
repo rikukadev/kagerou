@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rikukadev/kagerou/internal/appscan"
 )
 
 func read(t *testing.T, dir, path string) string {
@@ -239,5 +241,48 @@ func TestStepsSetupModes(t *testing.T) {
 	}
 	if !foundDone {
 		t.Fatal("applied mode should mark AWS setup as done")
+	}
+}
+
+func TestScaffoldWithWants(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "shop", Region: "r",
+		Wants: appscan.Wants{DynamoDB: true, SQS: true, Redis: true}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		"AppTable:", "AWS::DynamoDB::Table", "PAY_PER_REQUEST", "TABLE_NAME: !Ref AppTable",
+		"DynamoDBCrudPolicy",
+		"AppQueue:", "AWS::SQS::Queue", "QUEUE_URL: !Ref AppQueue", "SQSSendMessagePolicy",
+		"EnvRedisUrl:", "REDIS_URL: !Ref EnvRedisUrl", // redis はリソースでなく env の口
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("template missing %q", want)
+		}
+	}
+	if strings.Contains(tp, "AppBucket") {
+		t.Error("S3 未検出なのに AppBucket が出ている")
+	}
+	ky := read(t, dir, "kagerou.yaml")
+	if !strings.Contains(ky, "REDIS_URL:") || !strings.Contains(ky, `prefix "{name}:"`) {
+		t.Errorf("kagerou.yaml missing redis env TODO: %s", ky)
+	}
+	if strings.Contains(ky, "OPENSEARCH_URL") {
+		t.Error("opensearch 未検出なのに env が出ている")
+	}
+}
+
+func TestScaffoldWithoutWantsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Run(dir, Params{Project: "plain", Region: "r"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, notWant := range []string{"AppTable", "AppQueue", "AppBucket", "Policies:", "EnvRedisUrl"} {
+		if strings.Contains(tp, notWant) {
+			t.Errorf("wants 無しでは %q を出さないはず", notWant)
+		}
 	}
 }

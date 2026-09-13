@@ -12,6 +12,16 @@ env:
   # {name} expands to the environment name. Values are delivered to the
   # Env<Key> template parameters (see docs/CONTRACT.md)
   KAGEROU_ENV: "{name}"
+{{- if .Wants.Redis}}
+  # redis を検出。ElastiCache は preview 向きでない(常時課金・VPC・作成に数分)ため
+  # per-env には作らない。共有ベースに 1 台置き、キーを "{name}:" で prefix して分離する
+  REDIS_URL: "" # TODO: shared redis endpoint (key prefix "{name}:")
+{{- end}}
+{{- if .Wants.OpenSearch}}
+  # opensearch を検出。ドメインは重いので per-env には作らない。共有ドメインに
+  # インデックス "{name}-*" で分離する
+  OPENSEARCH_URL: "" # TODO: shared opensearch endpoint (index prefix "{name}-")
+{{- end}}
 {{- if .Sashiki}}
   DB_HOST: sashiki.internal # TODO: host of your sashiki proxy
   DB_PORT: "3306"

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/rikukadev/kagerou/internal/appscan"
 )
 
 //go:embed templates/*.tmpl
@@ -24,6 +26,11 @@ type Params struct {
 	Driver        string // "stack"(既定)/ "static"
 	Domain        string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
 	SetupBase     bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+
+	// Wants は appscan が依存から推定した周辺リソース。DynamoDB / SQS / S3 は
+	// per-env でもアイドル $0 なので template.yaml に同梱し、Redis / OpenSearch は
+	// 常時課金なので env の TODO(共有ベース前提)として kagerou.yaml に出す。
+	Wants appscan.Wants
 }
 
 type Result struct {
