@@ -49,6 +49,20 @@ type Config struct {
 type Static struct {
 	Dist   string `yaml:"dist"`
 	Bucket string `yaml:"bucket"`
+	// Prefix はバケット内の置き場所。空なら "{name}"(per-app base)。
+	// 共有 base では "{project}/{name}" にして project 境界を作る。
+	Prefix string `yaml:"prefix"`
+}
+
+// StaticPrefix は静的成果物の置き場所(末尾スラッシュなし)。
+func (c Config) StaticPrefix(name string) string {
+	p := c.Static.Prefix
+	if p == "" {
+		p = "{name}"
+	}
+	p = strings.ReplaceAll(p, "{name}", name)
+	p = strings.ReplaceAll(p, "{project}", c.Project)
+	return strings.Trim(p, "/")
 }
 
 type Hooks struct {
@@ -201,18 +215,24 @@ func NormalizeName(raw string) string {
 // ExpandName は env 値と hooks 内の {name} を展開した複製を返す。
 // 展開対象を値側に限るのは、キーまで動的になると追えなくなるため。
 func (c Config) ExpandName(name string) Config {
+	// {project} は共有 base(1 ドメインを複数アプリで使う)の URL 規約
+	// <project>--<name>.<domain> を書けるようにするため
+	expand := func(s string) string {
+		s = strings.ReplaceAll(s, "{name}", name)
+		return strings.ReplaceAll(s, "{project}", c.Project)
+	}
 	out := c
 	if c.Env != nil {
 		out.Env = make(map[string]string, len(c.Env))
 		for k, v := range c.Env {
-			out.Env[k] = strings.ReplaceAll(v, "{name}", name)
+			out.Env[k] = expand(v)
 		}
 	}
-	out.URLTemplate = strings.ReplaceAll(c.URLTemplate, "{name}", name)
-	out.Hooks.PreUp = strings.ReplaceAll(c.Hooks.PreUp, "{name}", name)
-	out.Hooks.PostUp = strings.ReplaceAll(c.Hooks.PostUp, "{name}", name)
-	out.Hooks.PreDown = strings.ReplaceAll(c.Hooks.PreDown, "{name}", name)
-	out.Hooks.PostDown = strings.ReplaceAll(c.Hooks.PostDown, "{name}", name)
+	out.URLTemplate = expand(c.URLTemplate)
+	out.Hooks.PreUp = expand(c.Hooks.PreUp)
+	out.Hooks.PostUp = expand(c.Hooks.PostUp)
+	out.Hooks.PreDown = expand(c.Hooks.PreDown)
+	out.Hooks.PostDown = expand(c.Hooks.PostDown)
 	return out
 }
 

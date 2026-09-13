@@ -56,14 +56,30 @@ func applyBaseKV(bases map[string]BaseInfo, project, field, value string) {
 	bases[project] = b
 }
 
-// Base は project の preview base を返す。project 用が無ければ、旧アカウント
-// 単位 base(Export に project セグメントが無い頃のもの)に fallback する。
+// SharedBaseKey は 1 ドメインを複数アプリで共有する base の名前空間(#94)。
+// project 名には使えない文字(_)を先頭に置いて、実在の project と衝突させない。
+const SharedBaseKey = "_shared"
+
+// Base は project の preview base を返す。解決順は
+// project 専用 → 共有(_shared)→ 旧アカウント単位(project セグメントが
+// 無い頃の Export)。共有かどうかは 2 つ目の戻り値で分かる。
 func (d Detection) Base(project string) (BaseInfo, bool) {
-	if b, ok := d.Bases[project]; ok {
-		return b, true
-	}
-	b, ok := d.Bases[""]
+	b, shared, ok := d.BaseFor(project)
+	_ = shared
 	return b, ok
+}
+
+// BaseFor は Base に加えて「共有 base か」を返す。URL 規約と
+// static のプレフィックスが共有かどうかで変わるため。
+func (d Detection) BaseFor(project string) (info BaseInfo, shared, ok bool) {
+	if b, hit := d.Bases[project]; hit {
+		return b, false, true
+	}
+	if b, hit := d.Bases[SharedBaseKey]; hit {
+		return b, true, true
+	}
+	b, hit := d.Bases[""]
+	return b, false, hit
 }
 
 // SuggestSashiki は DB 依存が見えたときに sashiki 構成を提案する。
