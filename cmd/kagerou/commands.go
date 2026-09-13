@@ -129,6 +129,23 @@ func cmdUp(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	// peer 連動(#99): 相手プロジェクトの同名 env を探し、居なければ fallback。
+	// CREATE_FAILED(相手不在で 4 分半 rollback)を up 前の即決に変える。
+	var peerEnv, peerURL string
+	if cfg.Peer.Project != "" {
+		infos, err := drv.List(ctx)
+		if err != nil {
+			return err
+		}
+		var found bool
+		peerEnv, peerURL, found = stack.ResolvePeer(infos, cfg.Peer.Project, f.name, cfg.Peer.FallbackName())
+		if found {
+			fmt.Fprintf(os.Stderr, "kagerou: peer: %s/%s (%s)\n", cfg.Peer.Project, peerEnv, peerURL)
+		} else {
+			fmt.Fprintf(os.Stderr, "kagerou: warning: peer %s has neither %q nor %q ready — proceeding with %q and no URL (deploy the peer, or adjust peer.fallback)\n",
+				cfg.Peer.Project, f.name, cfg.Peer.FallbackName(), peerEnv)
+		}
+	}
 	// pre_up 失敗は up を止める(DESIGN §8)
 	if err := hooks.Run(ctx, "pre_up", cfg.Hooks.PreUp, map[string]string{"KAGEROU_NAME": f.name}); err != nil {
 		return err
@@ -146,6 +163,8 @@ func cmdUp(args []string, out *os.File) error {
 		Version:      version,
 		Tags:         cfg.Tags,
 		MaxLifetime:  maxLife,
+		PeerEnv:      peerEnv,
+		PeerURL:      peerURL,
 	})
 	if err != nil {
 		return err
@@ -387,7 +406,8 @@ func cmdInit(args []string, out *os.File) error {
 	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
-		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute}
+		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute,
+		URLShape: det.Facts.URLShape}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {
@@ -423,7 +443,7 @@ func cmdInit(args []string, out *os.File) error {
 		if len(det.Facts.Hosts) > 0 {
 			extra = " (" + strings.Join(det.Facts.Hosts, ", ") + ")"
 		}
-		fmt.Fprintf(os.Stderr, "kagerou: hint: cross-origin layout detected%s — wire the peer URL by environment name for now (PEER_URL pattern, kagerou#99); automatic wiring is planned in kagerou#109\n", extra)
+		fmt.Fprintf(os.Stderr, "kagerou: hint: cross-origin layout detected%s — declare `peer:` in kagerou.yaml to link environments by name (a commented block was generated; resolved values arrive as EnvPeerEnv / EnvPeerUrl)\n", extra)
 	case "path":
 		fmt.Fprintln(os.Stderr, "kagerou: hint: same-origin path routing detected (/api behind one host) — base path routing is planned in kagerou#109; until then the scaffold keeps a single origin")
 	}

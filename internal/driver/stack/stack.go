@@ -121,6 +121,8 @@ type UpInput struct {
 	Version      string            // kagerou 自身のバージョン
 	Tags         map[string]string // kagerou.yaml の追加タグ
 	MaxLifetime  time.Duration     // touch の上限。0 なら既定の MaxLifetime 定数(#51)
+	PeerEnv      string            // peer 連動の解決結果(#99)。EnvPeerEnv に宣言時のみ配送
+	PeerURL      string            // 同・相手 env の URL。EnvPeerUrl に宣言時のみ配送
 
 	owner string // Up が STS から解決して埋める(kagerou:owner タグ)
 }
@@ -484,7 +486,7 @@ func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Par
 	for k, v := range in.Params {
 		merged[k] = v
 	}
-	if len(in.Env) > 0 || in.URL != "" {
+	if len(in.Env) > 0 || in.URL != "" || in.PeerEnv != "" {
 		declared, err := d.templateParams(ctx, in.TemplateBody)
 		if err != nil {
 			return nil, err
@@ -493,6 +495,13 @@ func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Par
 		// env と違い、宣言が無くてもエラーにしない(タグと表示には常に使われる)
 		if in.URL != "" && declared["EnvKagerouUrl"] {
 			merged["EnvKagerouUrl"] = in.URL
+		}
+		// peer 連動の解決結果も同じ流儀: 宣言していれば受け取れる任意の口(#99)
+		if in.PeerEnv != "" && declared["EnvPeerEnv"] {
+			merged["EnvPeerEnv"] = in.PeerEnv
+		}
+		if in.PeerURL != "" && declared["EnvPeerUrl"] {
+			merged["EnvPeerUrl"] = in.PeerURL
 		}
 		var missing []string
 		for k, v := range in.Env {

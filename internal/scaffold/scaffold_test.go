@@ -432,3 +432,23 @@ func TestScaffoldComputeLambdaUnchanged(t *testing.T) {
 		t.Error("lambda では alb-base を出さないはず")
 	}
 }
+
+func TestScaffoldPeerBlockOnCross(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Run(dir, Params{Project: "web", Region: "r", URLShape: "cross"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	ky := read(t, dir, "kagerou.yaml")
+	for _, want := range []string{"#peer:", "#  project:", "#  fallback: main", "EnvPeerEnv / EnvPeerUrl"} {
+		if !strings.Contains(ky, want) {
+			t.Errorf("cross では peer 雛形コメントを出すはず: missing %q", want)
+		}
+	}
+	dir2 := t.TempDir()
+	if _, err := Run(dir2, Params{Project: "web", Region: "r"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(read(t, dir2, "kagerou.yaml"), "#peer:") {
+		t.Error("cross でないときは peer 雛形を出さない")
+	}
+}
