@@ -17,6 +17,10 @@ Environments that appear, flicker, and are gone.
 
 前提は 2 つだけ: **`aws` CLI(ログイン済み)と `gh` CLI(`gh auth login` 済み)**。
 無ければ init の最初に確認して、その場でログインに誘導します。
+AWS プロファイルが複数あれば**どれで作業するかを最初に選べます**し、
+AWS に何かを作る直前には「**誰として・どのアカウントに作るか**」と、
+その資格情報で足りない権限を表示してから y/n を取ります
+(権限が足りなければ `kagerou-setup.sh` を残せるので、権限のある人に渡せます)。
 
 ```bash
 kagerou init
