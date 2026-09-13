@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/rikukadev/kagerou/compare/v0.7.0...v0.8.0) (2026-09-13)
+
+
+### Features
+
+* appscan — repo scanning as a standalone component + deeper inference ([#90](https://github.com/rikukadev/kagerou/issues/90)) ([527b64b](https://github.com/rikukadev/kagerou/commit/527b64b4a42251a14967ce0c9bfaa046bed0b6dd))
+* **appscan:** scan recursively for monorepos ([#92](https://github.com/rikukadev/kagerou/issues/92)) ([30c3cef](https://github.com/rikukadev/kagerou/commit/30c3cefb01848217a32423a360a9a3227b0dbb7f))
+
+
+### Bug Fixes
+
+* **init:** use the scaffolded Dockerfile port in template.yaml too ([#93](https://github.com/rikukadev/kagerou/issues/93)) ([13f0d62](https://github.com/rikukadev/kagerou/commit/13f0d6263457e53713ba20bb51386000421b223c))
+
 ## [0.7.0](https://github.com/rikukadev/kagerou/compare/v0.6.0...v0.7.0) (2026-09-13)
 
 
