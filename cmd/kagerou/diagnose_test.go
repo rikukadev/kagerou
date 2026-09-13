@@ -15,7 +15,7 @@ func runDiagnose(t *testing.T, args ...string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := cmdDiagnose(args, f); err != nil {
 		t.Fatalf("diagnose(%v): %v", args, err)
 	}
