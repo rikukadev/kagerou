@@ -8,6 +8,16 @@ ttl: 72h
 {{- if .Domain}}
 url_template: "https://{name}.{{.Domain}}" # preview base(共有 CloudFront)経由
 {{- end}}
+{{- if eq .Routing "spa"}}
+
+static:
+  # クライアントルーターを検出。拡張子の無いパスは全て index.html に写す。
+  # directory のままだと /about の実体が無く 403 になる(kagerou#86)。
+  #
+  # **この値は preview base を作るときに焼き込まれる。** 後から変えるなら
+  # ベースを deploy し直すこと(deploy/preview-base.yaml)。
+  routing: spa
+{{- end}}
 env:
   # {name} expands to the environment name. Values are delivered to the
   # Env<Key> template parameters (see docs/CONTRACT.md)

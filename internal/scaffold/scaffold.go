@@ -26,6 +26,9 @@ type Params struct {
 	Driver        string // "stack"(既定)/ "static"
 	Domain        string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
 	SetupBase     bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
+	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
+	Routing string
 
 	// Wants は appscan が依存から推定した周辺リソース。DynamoDB / SQS / S3 は
 	// per-env でもアイドル $0 なので template.yaml に同梱し、Redis / OpenSearch は
@@ -194,7 +197,8 @@ func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 	data := struct {
 		Owner, Repo, Region, Domain, Project string
 		SetupBase                            bool
-	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase}
+		Routing                              string
+	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase, p.RoutingOrDefault()}
 	t, err := template.ParseFS(tmplFS, "templates/setup.sh.tmpl")
 	if err != nil {
 		return "", err
@@ -329,6 +333,29 @@ func PlainSteps(p Params, d Detection) string {
 
 // Static は driver: static 構成か(compute を作らない)。
 func (p Params) Static() bool { return p.Driver == "static" }
+
+// RoutingOrDefault は Routing の既定(directory)を埋めて返す。
+func (p Params) RoutingOrDefault() string {
+	if p.Routing == "" {
+		return "directory"
+	}
+	return p.Routing
+}
+
+// RoutingFor はフレームワークから既定の routing を決める。
+//
+// **クライアントルーターを持つものだけ spa** にする。静的サイト生成器
+// (next export / astro / nuxt generate)は /about/index.html を出すので
+// directory が正しく、そちらを spa にすると今度は個別ページが出せなくなる。
+// 判別できないものは directory(現状維持。壊れ方が小さいほうへ倒す)。
+func RoutingFor(framework string) string {
+	switch framework {
+	case "react-router", "remix-run", "vite":
+		return "spa"
+	default:
+		return "directory"
+	}
+}
 
 // LWALine は既存 Dockerfile に注入する Lambda Web Adapter の 1 行。
 // これだけで通常のコンテナが Lambda で動く(Lambda 外では何もしない)。

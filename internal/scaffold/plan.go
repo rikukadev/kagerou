@@ -74,13 +74,15 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		// preview base。CloudFront の証明書が us-east-1 必須なので、
 		// スタックごと us-east-1 に置く。
 		plan.Shared = append(plan.Shared,
-			AWSResource{"CloudFront", "*." + p.Domain, "全環境で共有。環境ごとには作らない"},
+			AWSResource{"CloudFront", "*." + p.Domain,
+				"全環境で共有。routing=" + p.RoutingOrDefault() + "(" + routingNote(p.RoutingOrDefault()) + ")"},
 			AWSResource{"ACM certificate", "*." + p.Domain, "us-east-1(CloudFront の制約)。DNS 検証は自動"},
 			AWSResource{"S3 bucket", "kagerou-base-" + p.Project + "-" + account, "環境ごとに <name>/ プレフィックス"},
 			AWSResource{"Route53 record", "*." + p.Domain, "ワイルドカード 1 本。環境ごとには作らない"},
 		)
 		plan.Warnings = append(plan.Warnings,
-			"証明書の検証と CloudFront の配信開始で 15 分ほどかかる(以降は環境ごとの待ちに乗らない)")
+			"証明書の検証と CloudFront の配信開始で 15 分ほどかかる(以降は環境ごとの待ちに乗らない)",
+			"routing はここで焼き込まれる。後から変えるには deploy/preview-base.yaml を deploy し直す")
 		plan.Teardown = append(plan.Teardown,
 			"aws s3 rm s3://kagerou-base-"+p.Project+"-"+account+" --recursive",
 			"aws cloudformation delete-stack --region us-east-1 --stack-name kagerou-preview-base-"+p.Project)
@@ -101,6 +103,15 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 	plan.Estimate = "プレビュー 10 個で 月 $0.1 未満。固定の月額はどれにも無い"
 
 	return plan
+}
+
+// routingNote は routing の意味を 1 行で説明する。作る前に見せる値なので、
+// 用語ではなく「何が起きるか」で書く。
+func routingNote(r string) string {
+	if r == "spa" {
+		return "/about は index.html に写す。クライアントルーター向け"
+	}
+	return "/about は /about/index.html を探す。静的サイト生成器向け"
 }
 
 // Render はプランを人が読む形にする。TUI と --plain の両方から使う。

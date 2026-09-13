@@ -17,3 +17,19 @@ variable "hosted_zone_id" {
   description = "Route53 public hosted zone that owns the parent of domain_name"
   type        = string
 }
+
+variable "routing" {
+  description = <<-EOT
+    How to resolve extensionless paths (kagerou docs/CONTRACT.md §9).
+    "directory" appends /index.html (static site generators emit /about/index.html).
+    "spa" maps them all to the environment's /index.html; the file for /about does
+    not exist, so "directory" would 403.
+  EOT
+  type        = string
+  default     = "directory"
+
+  validation {
+    condition     = contains(["directory", "spa"], var.routing)
+    error_message = "routing must be \"directory\" or \"spa\"."
+  }
+}

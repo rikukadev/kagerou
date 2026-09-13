@@ -205,3 +205,44 @@ func TestStaticPrefix(t *testing.T) {
 		t.Fatalf("prefix should be trimmed: %q", got)
 	}
 }
+
+func TestStaticRouting(t *testing.T) {
+	base := "project: p\ndriver: stack\nregion: ap-northeast-1\n"
+
+	mustLoad := func(t *testing.T, body string) Config {
+		t.Helper()
+		cfg, err := Load(writeYAML(t, body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	t.Run("未指定は directory", func(t *testing.T) {
+		if got := mustLoad(t, base).StaticRouting(); got != RoutingDirectory {
+			t.Errorf("StaticRouting() = %q, want %q", got, RoutingDirectory)
+		}
+	})
+
+	t.Run("spa を受け付ける", func(t *testing.T) {
+		if got := mustLoad(t, base+"static:\n  routing: spa\n").StaticRouting(); got != RoutingSPA {
+			t.Errorf("StaticRouting() = %q, want spa", got)
+		}
+	})
+
+	// 綴り違いを黙って directory に倒すと、症状は「デプロイ後にディープリンクが
+	// 403」になり、設定を見ても原因が分からない(#86)。読み込みで止める。
+	t.Run("知らない値は拒否する", func(t *testing.T) {
+		if _, err := Load(writeYAML(t, base+"static:\n  routing: SPA\n")); err == nil {
+			t.Error("routing: SPA は拒否されるべき")
+		}
+	})
+
+	// stack driver でも SPA を preview base から配る構成がある(3 層デモ)。
+	// static 専用の検証にすると、そこで綴り違いを拾えなくなる。
+	t.Run("driver: stack でも検証する", func(t *testing.T) {
+		if _, err := Load(writeYAML(t, base+"static:\n  routing: nope\n")); err == nil {
+			t.Error("driver: stack でも不正な routing は拒否されるべき")
+		}
+	})
+}

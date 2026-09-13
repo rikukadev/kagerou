@@ -6,3 +6,7 @@ dist/
 # 実 AWS E2E のビルド成果物
 .aws-sam/
 packaged-ssr.yaml
+
+# terraform init の作業物
+.terraform/
+.terraform.lock.hcl
