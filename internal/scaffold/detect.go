@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -30,6 +31,9 @@ type Detection struct {
 	AppPort       string
 	HasTemplate   bool
 	Wants         appscan.Wants // 依存から推定した周辺リソース(DynamoDB/SQS/S3/Redis/OpenSearch)
+	// Driver は既存 kagerou.yaml の driver。再実行で構成を取り違えないための
+	// 一番強い手掛かりで、推定より優先する(#81)。空 = まだ設定が無い。
+	Driver string
 
 	// 環境側の事実(aws / gh の exec から)
 	AccountID string              // aws sts get-caller-identity から
@@ -87,6 +91,23 @@ func (d Detection) SuggestSashiki() bool {
 	return d.DBDriver != "" && strings.Contains(d.DBDriver, "mysql")
 }
 
+// existingDriver は既存 kagerou.yaml の driver を読む。
+//
+// 解析には yaml を使わない。ここで欲しいのは 1 行だけで、壊れた設定でも
+// init は動かせるべき(むしろ壊れているときこそ init し直したい)。
+func existingDriver(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "kagerou.yaml"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "driver:"); ok {
+			return strings.TrimSpace(strings.SplitN(v, "#", 2)[0])
+		}
+	}
+	return ""
+}
+
 // execCommand はテストで差し替えるためのフック。
 var execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).Output()
@@ -101,6 +122,7 @@ func Detect(dir string) Detection {
 		HasDockerfile: f.HasDockerfile, HasLWA: f.HasLWA, DockerfileDir: f.DockerfileDir,
 		AppPort: f.AppPort, HasTemplate: f.HasTemplate, Wants: f.Wants,
 		VarsSet: map[string]bool{},
+		Driver:  existingDriver(dir),
 	}
 	// Region の優先順位: samconfig.toml(Facts)> AWS_REGION > ~/.aws/config
 	if d.Region == "" {

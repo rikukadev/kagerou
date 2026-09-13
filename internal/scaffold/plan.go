@@ -44,6 +44,7 @@ type AWSPlan struct {
 	Shared   []AWSResource // 一度だけ作る。環境より寿命が長い
 	Cost     []CostLine
 	Estimate string   // 全体の目安(1 行)
+	PerEnv   string   // 環境ごとに作られるもの(構成で変わる)
 	Teardown []string // 取り壊すためのコマンド
 	Warnings []string // 先に知っておくべきこと(時間がかかる、など)
 }
@@ -62,13 +63,22 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		repo = p.Project
 	}
 
-	plan := AWSPlan{Account: account, Region: p.Region}
+	plan := AWSPlan{Account: account, Region: p.Region,
+		PerEnv: "Lambda / HTTP API / 上のバケットの <name>/ 配下"}
+	if p.Static() {
+		// static は compute を作らない。ここに Lambda と書くと、
+		// 「作られないものが作られる」と読める。
+		plan.PerEnv = "上のバケットの <name>/ 配下(compute は作らない)"
+	}
 
-	// CI が引き受けるロールと、イメージの置き場。どちらも環境より長生きする。
+	// CI が引き受けるロール。環境より長生きする。
 	plan.Shared = append(plan.Shared,
-		AWSResource{"IAM role", repo + "-github-actions", "GitHub Actions が OIDC で引き受ける"},
-		AWSResource{"ECR repository", repo, p.Region},
-	)
+		AWSResource{"IAM role", repo + "-github-actions", "GitHub Actions が OIDC で引き受ける"})
+	// イメージの置き場は compute 構成だけ。static で出すと、作られないものを
+	// 見せることになる(セットアップスクリプトは元から作らない)。
+	if !p.Static() {
+		plan.Shared = append(plan.Shared, AWSResource{"ECR repository", repo, p.Region})
+	}
 
 	if p.SetupBase {
 		// preview base。CloudFront の証明書が us-east-1 必須なので、
@@ -87,9 +97,11 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 			"aws s3 rm s3://kagerou-base-"+p.Project+"-"+account+" --recursive",
 			"aws cloudformation delete-stack --region us-east-1 --stack-name kagerou-preview-base-"+p.Project)
 	}
-	plan.Teardown = append(plan.Teardown,
-		"aws iam delete-role --role-name "+repo+"-github-actions",
-		"aws ecr delete-repository --repository-name "+repo+" --region "+p.Region+" --force")
+	plan.Teardown = append(plan.Teardown, "aws iam delete-role --role-name "+repo+"-github-actions")
+	if !p.Static() {
+		plan.Teardown = append(plan.Teardown,
+			"aws ecr delete-repository --repository-name "+repo+" --region "+p.Region+" --force")
+	}
 
 	// 費用。**固定の月額が無い**ことが要点なので、それが伝わる並びにする。
 	plan.Cost = []CostLine{
@@ -97,9 +109,13 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		{"ACM certificate", "無料", "—"},
 		{"Route53 レコード", "無料", "ホストゾーンは既存のものを使う"},
 		{"S3 保管", "$0.023 /GB・月", "SPA は数 MB なので実質ゼロ"},
-		{"ECR 保管", "$0.10 /GB・月", "イメージ 1 個 200MB で約 $0.02/月"},
-		{"CloudFront", "無料枠内", "毎月 1TB 転送・1000 万リクエストまで"},
 	}
+	if !p.Static() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"ECR 保管", "$0.10 /GB・月", "イメージ 1 個 200MB で約 $0.02/月"})
+	}
+	plan.Cost = append(plan.Cost,
+		CostLine{"CloudFront", "無料枠内", "毎月 1TB 転送・1000 万リクエストまで"})
 	plan.Estimate = "プレビュー 10 個で 月 $0.1 未満。固定の月額はどれにも無い"
 
 	return plan
@@ -125,7 +141,7 @@ func (p AWSPlan) Render() string {
 			fmt.Fprintf(&b, "  %s %s\n", pad("", 16), r.Note)
 		}
 	}
-	b.WriteString("\n  環境ごと(kagerou が PR ごとに作って壊す): Lambda / HTTP API / 上のバケットの <name>/ 配下\n")
+	fmt.Fprintf(&b, "\n  環境ごと(kagerou が PR ごとに作って壊す): %s\n", p.PerEnv)
 
 	for _, w := range p.Warnings {
 		fmt.Fprintf(&b, "\n  ! %s\n", w)

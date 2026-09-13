@@ -374,7 +374,15 @@ func cmdInit(args []string, out *os.File) error {
 	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
-		Wants: det.Wants, Routing: scaffold.RoutingFor(det.Framework)}
+		Wants: det.Wants, Driver: scaffold.DriverFor(det)}
+	// routing は preview base から配るときにだけ意味がある。compute が
+	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
+	if p.Static() {
+		p.Routing = scaffold.RoutingFor(det.Framework)
+	}
+	if b, ok := det.Base(p.Project); ok {
+		p.BaseBucket = b.Bucket
+	}
 
 	// TTY なら「検出結果でプリチェックされた選択 TUI → 生成 → チェックリスト」
 	if !*plain && term.IsTerminal(int(out.Fd())) {

@@ -1,5 +1,11 @@
 # Preview environment per pull request (kagerou).
+{{- if .Static}}
+# Required repository variables: AWS_ROLE_ARN / AWS_REGION
+# driver: static — build the site, kagerou syncs it under the preview base.
+# No container, no ECR, no SAM.
+{{- else}}
 # Required repository variables: AWS_ROLE_ARN / AWS_REGION / ECR_REPOSITORY
+{{- end}}
 name: pr-preview
 
 on:
@@ -25,6 +31,16 @@ jobs:
         with:
           role-to-assume: ${{"{{"}} vars.AWS_ROLE_ARN {{"}}"}}
           aws-region: ${{"{{"}} vars.AWS_REGION {{"}}"}}
+{{- if .Static}}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+{{- else}}
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
@@ -34,6 +50,7 @@ jobs:
           sam package \
             --image-repository "${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}" \
             --output-template-file packaged.yaml
+{{- end}}
       - uses: rikukadev/kagerou/action@v0
         with:
           name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}

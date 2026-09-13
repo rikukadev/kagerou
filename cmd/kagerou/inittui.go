@@ -190,7 +190,17 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p.Sashiki = m.answer("db") == 0
 	// routing は preview base に焼き込まれる。後から変えるにはベースの
 	// deploy し直しが要るので、確認画面(phaseConfirmAWS)にも出す。
-	p.Routing = scaffold.RoutingFor(m.det.Framework)
+	// driver を先に決める。既存 kagerou.yaml があればそれが最優先なので、
+	// init を二度叩いて構成が入れ替わることはない(#81)。
+	p.Driver = scaffold.DriverFor(m.det)
+	// routing は preview base から配るときにだけ意味がある(#86)。
+	// compute がルーティングを持つ構成で渡すと、設定と実際がずれる。
+	if p.Static() {
+		p.Routing = scaffold.RoutingFor(m.det.Framework)
+	}
+	if b, ok := m.det.Base(p.Project); ok {
+		p.BaseBucket = b.Bucket
+	}
 	p.Port = m.det.AppPort
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
 	switch base, ok := m.det.Base(p.Project); {

@@ -1,16 +1,29 @@
 # kagerou configuration (https://github.com/rikukadev/kagerou)
 project: {{.Project}}
+{{- if .Static}}
+driver: static # no compute; the built site is synced under the preview base
+{{- else}}
 driver: stack
 template: packaged.yaml # output of `sam build && sam package` (building is CI's job)
+{{- end}}
 region: {{.Region}}
+{{- if not .Static}}
 name_prefix: {{.Project}}- # stack name becomes {{.Project}}-pr-42
+{{- end}}
 ttl: 72h
 {{- if .Domain}}
 url_template: "https://{name}.{{.Domain}}" # preview base(共有 CloudFront)経由
+{{- else if .Static}}
+# driver: static は compute が無く URL を出力できないので url_template が必須。
+# preview base を作ると <name>.<その domain> になる。
+url_template: "" # TODO: https://{name}.<your preview domain>
 {{- end}}
-{{- if eq .Routing "spa"}}
+{{- if .Static}}
 
 static:
+  dist: {{.Dist}} # built output to sync
+  bucket: {{if .BaseBucket}}{{.BaseBucket}}{{else}}"" # TODO: preview base bucket (kagerou init detects it once the base exists){{end}}
+{{- if eq .Routing "spa"}}
   # クライアントルーターを検出。拡張子の無いパスは全て index.html に写す。
   # directory のままだと /about の実体が無く 403 になる(kagerou#86)。
   #
@@ -18,10 +31,13 @@ static:
   # ベースを deploy し直すこと(deploy/preview-base.yaml)。
   routing: spa
 {{- end}}
+{{- end}}
+{{- if not .Static}}
 env:
   # {name} expands to the environment name. Values are delivered to the
   # Env<Key> template parameters (see docs/CONTRACT.md)
   KAGEROU_ENV: "{name}"
+{{- end}}
 {{- if .Wants.Redis}}
   # redis を検出。ElastiCache は preview 向きでない(常時課金・VPC・作成に数分)ため
   # per-env には作らない。共有ベースに 1 台置き、キーを "{name}:" で prefix して分離する
