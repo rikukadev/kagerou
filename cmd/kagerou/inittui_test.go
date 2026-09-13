@@ -71,10 +71,11 @@ func TestWizardChoicesDriveGeneration(t *testing.T) {
 	m = chooseSetup(m, setupSkip)
 
 	m = step(t, m, enter)    // Q1 DB: 既定(sashiki)
-	m = step(t, m, enter)    // Q2 template: 既定(雛形生成)
-	m = step(t, m, key('j')) // Q3 workflows: preview のみへ
+	m = step(t, m, enter)    // Q2 compute: 既定(lambda)
+	m = step(t, m, enter)    // Q3 template: 既定(雛形生成)
+	m = step(t, m, key('j')) // Q4 workflows: preview のみへ
 	m = step(t, m, enter)
-	m = step(t, m, enter) // Q4 setup(skip 固定)→ summary
+	m = step(t, m, enter) // Q5 setup(skip 固定)→ summary
 	if m.phase != phaseSummary {
 		t.Fatalf("phase = %d, want summary", m.phase)
 	}

@@ -106,6 +106,17 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		selected: dbDefault,
 	})
 
+	// 環境の実行形。Lambda はアイドル $0 の既定、ECS は常駐プロセスや
+	// サイドカーが要る(= LWA で包めない)アプリ向け(#54 の系譜)。
+	qs = append(qs, question{
+		key:   "compute",
+		title: "Compute?",
+		options: []option{
+			{"lambda (recommended)", "wrap the container with LWA; idle costs $0, TTL 72h"},
+			{"ecs (Fargate + shared ALB)", "real long-running containers; billed while up, TTL 24h"},
+		},
+	})
+
 	if det.HasDockerfile && !det.HasLWA {
 		detail := "one line: " + scaffold.LWALine[:60] + "… (no-op outside Lambda, safe to keep)"
 		qs = append(qs, question{
@@ -193,6 +204,11 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	// driver を先に決める。既存 kagerou.yaml があればそれが最優先なので、
 	// init を二度叩いて構成が入れ替わることはない(#81)。
 	p.Driver = scaffold.DriverFor(m.det)
+	if m.answer("compute") == 1 {
+		p.Compute = "ecs"
+	} else {
+		p.Compute = "lambda"
+	}
 	// routing は preview base から配るときにだけ意味がある(#86)。
 	// compute がルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {
