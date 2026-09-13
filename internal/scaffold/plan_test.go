@@ -87,6 +87,60 @@ func TestAWSPlanRender(t *testing.T) {
 	t.Log("\n" + out)
 }
 
+// sashiki ホストは preview base と同じ共有側の住人なのに init が作らないので、
+// 何もしないとプランから消える。利用者が気づくのが「最初のプレビューが DB に
+// 繋がらない時点」になるのを防ぐ(#123)。
+func TestSashikiHostAppearsAsPrereq(t *testing.T) {
+	det := Detection{AccountID: "123456789012", Repo: "todo-app"}
+	base := Params{Project: "todo", Region: "ap-northeast-1"}
+
+	t.Run("sashiki なしでは前提を出さない", func(t *testing.T) {
+		p := BuildAWSPlan(base, det)
+		if len(p.Prereqs) != 0 {
+			t.Errorf("関係ない前提が出ている: %+v", p.Prereqs)
+		}
+		if strings.Contains(p.Render(), "前提") {
+			t.Error("sashiki を使わない構成に前提の節が出ている")
+		}
+	})
+
+	t.Run("sashiki を選ぶとホストが前提に出る", func(t *testing.T) {
+		sp := base
+		sp.Sashiki = true
+		p := BuildAWSPlan(sp, det)
+
+		if len(p.Prereqs) == 0 {
+			t.Fatal("sashiki ホストが前提に出ていない")
+		}
+		// 作るものと混ざってはいけない。作らないのだから取り壊し手順にも出ない
+		for _, r := range p.Shared {
+			if strings.Contains(r.Kind, "sashiki") {
+				t.Errorf("作らないものが「作るもの」に入っている: %+v", r)
+			}
+		}
+		if strings.Contains(strings.Join(p.Teardown, "\n"), "sashiki") {
+			t.Error("作らないものが取り壊し手順に入っている")
+		}
+
+		out := p.Render()
+		for _, want := range []string{
+			"前提(作らない。無ければ先に用意)",
+			"sashiki host",
+			"Terraform", // 立て方が分かること
+			"baseline",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%q が出ていない:\n%s", want, out)
+			}
+		}
+		// 常駐費があるのに「固定の月額はどれにも無い」だけ読まれると誤解になる
+		if !strings.Contains(out, "常駐費") {
+			t.Errorf("常駐費に触れていない:\n%s", out)
+		}
+		t.Log("\n" + out)
+	})
+}
+
 func kindsOf(p AWSPlan) []string {
 	var out []string
 	for _, r := range p.Shared {
