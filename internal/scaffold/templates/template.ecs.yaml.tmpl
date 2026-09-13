@@ -177,7 +177,9 @@ Resources:
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED # NAT を立てない(プレビューにその固定費は重い)
+          # ベースの判断に従う: 既定は公開サブネット + public IP(NAT を立てない)。
+          # alb-base に TaskSubnetIds(プライベート)を渡した運用なら DISABLED になる
+          AssignPublicIp: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/assign_public_ip{{"}}"}}"
           Subnets: !Split [",", "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/subnets{{"}}"}}"]
           SecurityGroups: ["{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/task_security_group{{"}}"}}"]
       LoadBalancers:

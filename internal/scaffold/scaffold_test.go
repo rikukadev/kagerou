@@ -359,6 +359,7 @@ func TestScaffoldComputeECS(t *testing.T) {
 		"resolve:ssm:/kagerou/base/_shared-alb/vpc_id",
 		"resolve:ssm:/kagerou/base/_shared-alb/subnets",
 		"resolve:ssm:/kagerou/base/_shared-alb/task_security_group",
+		"resolve:ssm:/kagerou/base/_shared-alb/assign_public_ip", // ベースの判断に追従
 		"AWS::ElasticLoadBalancingV2::ListenerRule",
 		"AWS::ECS::Service", "FARGATE",
 		"EnvImageUri:", "EnvRulePriority:",
@@ -376,8 +377,15 @@ func TestScaffoldComputeECS(t *testing.T) {
 	}
 	// 共有 ALB base が同梱される
 	ab := read(t, dir, "deploy/alb-base.yaml")
-	if !strings.Contains(ab, "/kagerou/base/_shared-alb/listener_arn") {
-		t.Error("alb-base missing SSM contract")
+	for _, want := range []string{
+		"/kagerou/base/_shared-alb/listener_arn",
+		"TaskSubnetIds",  // 既存プライベートサブネットに乗るノブ
+		"HasTaskSubnets", // 指定時のみ DISABLED に切り替わる
+		"assign_public_ip",
+	} {
+		if !strings.Contains(ab, want) {
+			t.Errorf("alb-base missing %q", want)
+		}
 	}
 	// kagerou.yaml: sam 不使用・短い TTL・readiness
 	ky := read(t, dir, "kagerou.yaml")

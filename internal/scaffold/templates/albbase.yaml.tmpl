@@ -16,6 +16,19 @@ Parameters:
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Public subnets for the ALB (at least two AZs)
+  # タスクを既存のプライベートサブネットに置きたいとき(public IP 禁止ポリシー、
+  # NAT 経由 egress の本番乖離を縮めたい等)に指定する。kagerou が NAT を作る
+  # ことはない — チームが既に持っている構成に「乗る」だけ。
+  # 省略時は従来どおり ALB と同じパブリックサブネット + public IP。
+  TaskSubnetIds:
+    Type: String
+    Default: ""
+    Description: >
+      Optional comma-separated PRIVATE subnet ids for tasks (must have NAT or the
+      needed VPC endpoints for ECR/Logs). Empty = reuse SubnetIds with a public IP.
+
+Conditions:
+  HasTaskSubnets: !Not [!Equals [!Ref TaskSubnetIds, ""]]
 
 Resources:
   Certificate:
@@ -123,7 +136,16 @@ Resources:
     Properties:
       Name: /kagerou/base/_shared-alb/subnets
       Type: StringList
-      Value: !Join [",", !Ref SubnetIds]
+      # タスクが使うサブネット。TaskSubnetIds があればそちら(プライベート運用)
+      Value: !If [HasTaskSubnets, !Ref TaskSubnetIds, !Join [",", !Ref SubnetIds]]
+  SsmAssignPublicIp:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/_shared-alb/assign_public_ip
+      Type: String
+      # プライベートサブネットなら public IP を付けない(付けても意味がなく、
+      # 組織ポリシーで禁止されていることも多い)
+      Value: !If [HasTaskSubnets, "DISABLED", "ENABLED"]
   SsmTaskSg:
     Type: AWS::SSM::Parameter
     Properties:
