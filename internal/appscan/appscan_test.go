@@ -284,3 +284,47 @@ func TestURLShapeAPIEnvName(t *testing.T) {
 		t.Fatalf("*_API_URL env should hint cross: %q", f.URLShape)
 	}
 }
+
+func TestScanPHPComposer(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "composer.json", `{"require":{"php":"~8.3.0","yiisoft/yii":"^1.1","koriym/dii":"~0.5.0"}}`)
+	if f := Scan(dir); f.Framework != "yii" {
+		t.Fatalf("framework = %q, want yii", f.Framework)
+	}
+
+	// 既知のフレームワークが無い composer.json は素の php。
+	// 素の node と同じ優先度なので、ルート優先で先に読んだ方が残る。
+	dir2 := t.TempDir()
+	write(t, dir2, "composer.json", `{"require":{"monolog/monolog":"^3"}}`)
+	if f := Scan(dir2); f.Framework != "php" {
+		t.Fatalf("framework = %q, want php", f.Framework)
+	}
+}
+
+func TestScanPHPComposerInSubdir(t *testing.T) {
+	// PHP アプリは composer.json がルートに無いことがある(authense は service/protected/)。
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "service", "protected"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, filepath.Join("service", "protected", "composer.json"), `{"require":{"yiisoft/yii":"^1.1"}}`)
+	if f := Scan(dir); f.Framework != "yii" {
+		t.Fatalf("framework = %q, want yii", f.Framework)
+	}
+}
+
+func TestScanPHPAppWithJSAssets(t *testing.T) {
+	// authense 型: PHP アプリのリポジトリに、画面用の JS バンドルが同居している。
+	// 走査順では assets/ が先に見つかるが、デプロイされるのは PHP のアプリ。
+	dir := t.TempDir()
+	for _, d := range []string{"assets", filepath.Join("service", "protected")} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, dir, filepath.Join("assets", "package.json"), `{"dependencies":{"react-router":"6","react":"18"}}`)
+	write(t, dir, filepath.Join("service", "protected", "composer.json"), `{"require":{"yiisoft/yii":"^1.1"}}`)
+	if f := Scan(dir); f.Framework != "yii" {
+		t.Fatalf("framework = %q, want yii", f.Framework)
+	}
+}
