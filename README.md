@@ -61,6 +61,7 @@ recommended
 ```bash
 kagerou validate          # 契約(CONTRACT)をデプロイ前に検査
 kagerou iam-policy > ci-policy.json   # CI ロールの最小権限をテンプレートから生成
+kagerou capacity                      # 共有 ALB にあと何面置けるか(読み取りのみ)
 ```
 
 権限は**テンプレートが真実の源**で、コンテナイメージ(`PackageType: Image`)や
