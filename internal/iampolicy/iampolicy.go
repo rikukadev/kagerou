@@ -2,6 +2,18 @@
 // 内容は kagerou-3tier-demo の deploy/iam/ci-policy.json(実デプロイを回して
 // 足りない権限を 1 つずつ足した実証セット)を土台に、name_prefix で機械的に
 // スコープする。ドキュメントで配ると各リポジトリで書き直されるので、コードにする。
+//
+// 足りない権限はローカル(admin)では絶対に再現せず、CI の絞ったロールでだけ
+// 403 として出る。踏むたびに同じ形を繰り返したので、原因を 3 つに整理した:
+//
+//  1. 書く前に読む。CFN のハンドラは更新前に現状を読むものがあり、
+//     Change 系だけ足すと落ちる(route53:GetHostedZone が典型)。
+//  2. 作った直後にタグを打つ。タグは本体と別の ARN で評価されることがあり、
+//     本体の ARN で絞ると通らない(EventSourceMapping が典型)。
+//  3. SAM が展開して初めて現れる型がある。テンプレート本文を型で数えるだけでは
+//     永久に見えないので、元のプロパティから導く(template.go 側で処理)。
+//
+// 新しい型を足すときは、この 3 つを順に当ててから knownTypes に入れること。
 package iampolicy
 
 import (
@@ -52,7 +64,8 @@ type Options struct {
 	ECR          bool   // Lambda コンテナイメージ構成(SSR 単体など)
 	EcrRepo      string // --with-ecr のリポジトリ名
 	SashikiSSM   bool   // sashiki action の transport=ssm
-	InstanceID   string // --with-sashiki-ssm の宛先インスタンス
+	InstanceID   string // --with-sashiki-ssm の宛先インスタンス(id 直指定)
+	InstanceTag  string // 同上を "Key=Value" のタグで絞る(id 固定を避けたいとき)
 	CloudFront   bool   // 共有 CloudFront のキャッシュ無効化
 	Route53      bool   // カスタムドメインのレコード操作
 	HostedZoneID string // --with-route53 のゾーン
@@ -68,11 +81,16 @@ func Build(o Options) (Policy, error) {
 	if o.Prefix == "" {
 		return Policy{}, errors.New("prefix is required (name_prefix in kagerou.yaml, or --prefix)")
 	}
-	if o.SashikiSSM && o.InstanceID == "" {
-		return Policy{}, errors.New("--with-sashiki-ssm requires --instance-id")
-	}
-	if o.Route53 && o.HostedZoneID == "" {
-		return Policy{}, errors.New("--with-route53 requires --hosted-zone-id")
+	if o.SashikiSSM {
+		switch {
+		case o.InstanceID == "" && o.InstanceTag == "":
+			return Policy{}, errors.New("--with-sashiki-ssm requires --instance-id or --instance-tag Key=Value")
+		case o.InstanceID != "" && o.InstanceTag != "":
+			return Policy{}, errors.New("--instance-id and --instance-tag are mutually exclusive")
+		}
+		if k, _, ok := strings.Cut(o.InstanceTag, "="); o.InstanceTag != "" && (!ok || k == "") {
+			return Policy{}, fmt.Errorf("--instance-tag must be Key=Value, got %q", o.InstanceTag)
+		}
 	}
 	if o.ECR && o.EcrRepo == "" {
 		return Policy{}, errors.New("--with-ecr requires --ecr-repo (or project in kagerou.yaml)")
@@ -83,12 +101,21 @@ func Build(o Options) (Policy, error) {
 	// 無ければ従来どおり(Lambda/API は常時、S3/VPC はフラグ)。
 	wantLambda, wantAPI := true, true
 	wantS3, wantVPC := o.S3, o.VPC
+	// Route53 だけはフラグとの OR。テンプレートが RecordSet を持たなくても、
+	// 共有 base 側のゾーンに CI がレコードを足す構成があり得る
+	wantRoute53 := o.Route53
 	if t := o.Template; t != nil {
+		wantRoute53 = wantRoute53 || t.HasRoute53
 		wantLambda = t.has("AWS::Serverless::Function", "AWS::Lambda::Function")
 		wantAPI = t.has("AWS::Serverless::HttpApi", "AWS::Serverless::Api",
 			"AWS::ApiGatewayV2::Api", "AWS::ApiGateway::RestApi")
 		wantS3 = t.has("AWS::S3::Bucket")
 		wantVPC = t.HasVPC
+	}
+	if wantRoute53 && o.HostedZoneID == "" {
+		// テンプレート由来のときはフラグを立てた覚えが無いので、理由まで書く
+		return Policy{}, errors.New("route53 records need --hosted-zone-id " +
+			"(the template has AWS::Route53::RecordSet, or --with-route53 was given)")
 	}
 
 	sts := []Statement{
@@ -235,6 +262,28 @@ func Build(o Options) (Policy, error) {
 				Resource: fmt.Sprintf("arn:aws:ecr:*:*:repository/%s", o.EcrRepo),
 			})
 	}
+	if o.Template != nil && o.Template.HasEventSourceMapping {
+		sts = append(sts,
+			Statement{
+				// マッピングの CRUD は ARN で絞れない。uuid は作るまで決まらず、
+				// Lambda は Create/Delete/Update いずれも `Resource: *` として評価する
+				// (関数 ARN では通らない。絞ったつもりで 403 になる)
+				Sid: "EventSourceMapping", Effect: "Allow",
+				Action: []string{
+					"lambda:CreateEventSourceMapping", "lambda:DeleteEventSourceMapping",
+					"lambda:UpdateEventSourceMapping", "lambda:GetEventSourceMapping",
+					"lambda:ListEventSourceMappings",
+				},
+				Resource: "*",
+			},
+			Statement{
+				// タグ操作だけはマッピング ARN で評価される。CFN は作成直後に
+				// TagResource を呼ぶので、これが無いと作成が丸ごと巻き戻る
+				Sid: "EventSourceMappingTags", Effect: "Allow",
+				Action:   []string{"lambda:TagResource", "lambda:UntagResource", "lambda:ListTags"},
+				Resource: "arn:aws:lambda:*:*:event-source-mapping:*",
+			})
+	}
 	if wantS3 {
 		sts = append(sts, Statement{
 			// SPA 配布バケット。Tagging 系は kagerou がタグで環境を識別するため(CONTRACT §1)
@@ -262,16 +311,31 @@ func Build(o Options) (Policy, error) {
 		})
 	}
 	if o.SashikiSSM {
+		// 宛先インスタンスとドキュメントの両方で絞る。片方だけだと
+		// 「任意の EC2 で任意のシェルを実行できるロール」になる。
+		//
+		// ただし **2 つの statement に分ける**。SendCommand は宛先ごとに権限を
+		// 評価するので、1 つにまとめて条件を付けるとドキュメント ARN 側にも
+		// 同じ条件が掛かり、タグを持たないドキュメントが落ちて 403 になる。
+		target := Statement{
+			Sid: "SashikiSendCommandTarget", Effect: "Allow",
+			Action:   []string{"ssm:SendCommand"},
+			Resource: fmt.Sprintf("arn:aws:ec2:*:*:instance/%s", o.InstanceID),
+		}
+		if o.InstanceTag != "" {
+			// タグで絞れば、ホストを作り直して id が変わっても権限が追従する
+			k, v, _ := strings.Cut(o.InstanceTag, "=")
+			target.Resource = "arn:aws:ec2:*:*:instance/*"
+			target.Condition = map[string]any{
+				"StringEquals": map[string]string{"ssm:resourceTag/" + k: v},
+			}
+		}
 		sts = append(sts,
+			target,
 			Statement{
-				// 宛先インスタンスとドキュメントの両方で絞る。片方だけだと
-				// 「任意の EC2 で任意のシェルを実行できるロール」になる
-				Sid: "SashikiSendCommand", Effect: "Allow",
-				Action: []string{"ssm:SendCommand"},
-				Resource: []string{
-					fmt.Sprintf("arn:aws:ec2:*:*:instance/%s", o.InstanceID),
-					"arn:aws:ssm:*::document/AWS-RunShellScript",
-				},
+				Sid: "SashikiSendCommandDocument", Effect: "Allow",
+				Action:   []string{"ssm:SendCommand"},
+				Resource: "arn:aws:ssm:*::document/AWS-RunShellScript",
 			},
 			Statement{
 				// GetCommandInvocation はリソース単位で絞れない(読めるのは自分の command のみ)
@@ -287,12 +351,24 @@ func Build(o Options) (Policy, error) {
 			Resource: "*",
 		})
 	}
-	if o.Route53 {
-		sts = append(sts, Statement{
-			Sid: "Route53Records", Effect: "Allow",
-			Action:   []string{"route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"},
-			Resource: fmt.Sprintf("arn:aws:route53:::hostedzone/%s", o.HostedZoneID),
-		})
+	if wantRoute53 {
+		sts = append(sts,
+			Statement{
+				// GetHostedZone は CFN の RecordSet ハンドラが書く前に必ず読む。
+				// Change 系だけ足して 403 になるのが定番の踏み方
+				Sid: "Route53Records", Effect: "Allow",
+				Action: []string{
+					"route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets",
+					"route53:GetHostedZone",
+				},
+				Resource: fmt.Sprintf("arn:aws:route53:::hostedzone/%s", o.HostedZoneID),
+			},
+			Statement{
+				// 反映待ちのポーリング。change id は作るまで不明でゾーンにも紐付かない
+				Sid: "Route53ChangeStatus", Effect: "Allow",
+				Action:   []string{"route53:GetChange"},
+				Resource: "arn:aws:route53:::change/*",
+			})
 	}
 
 	return Policy{Version: "2012-10-17", Statement: sts}, nil

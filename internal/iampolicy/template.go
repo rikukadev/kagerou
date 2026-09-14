@@ -15,29 +15,43 @@ type TemplateFacts struct {
 	Counts  map[string]int // リソース Type → 個数
 	HasVPC  bool           // いずれかの Function が VpcConfig を持つ
 	Unknown []string       // 対応する権限を知らない型(ソート済み)。cmd が警告する
+
+	// 以下は「SAM が展開して初めて現れる」リソース。型を数えるだけでは
+	// 永久に見えないので、元になるプロパティから導く。
+	HasEventSourceMapping bool // Events の SQS 等、または明示の EventSourceMapping
+	HasRoute53            bool // 明示の RecordSet、または Api の Domain.Route53
+	HasCustomDomain       bool // 明示の DomainName、または Api の Domain
 }
 
 // knownTypes は Build が権限を導出できる(または既存 statement でカバー済みの)型。
 // ここに無い型は Unknown に入り、利用者へ「手で足して」と伝わる。
 var knownTypes = map[string]bool{
-	"AWS::Serverless::Function":      true,
-	"AWS::Lambda::Function":          true,
-	"AWS::Serverless::HttpApi":       true,
-	"AWS::Serverless::Api":           true,
-	"AWS::ApiGatewayV2::Api":         true,
-	"AWS::ApiGateway::RestApi":       true,
-	"AWS::S3::Bucket":                true,
-	"AWS::DynamoDB::Table":           true,
-	"AWS::SNS::Topic":                true,
-	"AWS::SNS::Subscription":         true, // SNSTopicLifecycle の Subscribe/Unsubscribe でカバー
-	"AWS::SQS::Queue":                true,
-	"AWS::SQS::QueuePolicy":          true, // SQSQueueLifecycle の Get/SetQueueAttributes でカバー
-	"AWS::Logs::LogGroup":            true, // LogGroups statement でカバー
-	"AWS::IAM::Role":                 true, // ExecutionRole statement でカバー
-	"AWS::Lambda::Permission":        true, // lambda:AddPermission でカバー
-	"AWS::ApiGatewayV2::Stage":       true, // apigateway:* でカバー
-	"AWS::ApiGatewayV2::Route":       true,
-	"AWS::ApiGatewayV2::Integration": true,
+	"AWS::Serverless::Function":        true,
+	"AWS::Lambda::Function":            true,
+	"AWS::Serverless::HttpApi":         true,
+	"AWS::Serverless::Api":             true,
+	"AWS::ApiGatewayV2::Api":           true,
+	"AWS::ApiGateway::RestApi":         true,
+	"AWS::S3::Bucket":                  true,
+	"AWS::DynamoDB::Table":             true,
+	"AWS::SNS::Topic":                  true,
+	"AWS::SNS::Subscription":           true, // SNSTopicLifecycle の Subscribe/Unsubscribe でカバー
+	"AWS::SQS::Queue":                  true,
+	"AWS::SQS::QueuePolicy":            true, // SQSQueueLifecycle の Get/SetQueueAttributes でカバー
+	"AWS::Logs::LogGroup":              true, // LogGroups statement でカバー
+	"AWS::IAM::Role":                   true, // ExecutionRole statement でカバー
+	"AWS::Lambda::Permission":          true, // lambda:AddPermission でカバー
+	"AWS::ApiGatewayV2::Stage":         true, // apigateway:* でカバー
+	"AWS::ApiGatewayV2::Route":         true,
+	"AWS::ApiGatewayV2::Integration":   true,
+	"AWS::ApiGatewayV2::DomainName":    true, // 同上(/domainnames も apigateway:*)
+	"AWS::ApiGatewayV2::ApiMapping":    true,
+	"AWS::S3::BucketPolicy":            true, // WebBucketLifecycle の s3:PutBucketPolicy でカバー
+	"AWS::Lambda::EventSourceMapping":  true,
+	"AWS::Route53::RecordSet":          true,
+	"AWS::Route53::RecordSetGroup":     true,
+	"AWS::ApiGateway::DomainName":      true,
+	"AWS::ApiGateway::BasePathMapping": true,
 }
 
 // tmplResource は検査に必要な部分だけ読む。CFN の独自タグ(!Ref / !Sub 等)を
@@ -65,10 +79,29 @@ func ScanTemplate(body []byte) (TemplateFacts, error) {
 		if !knownTypes[r.Type] {
 			unknown[r.Type] = true
 		}
-		if r.Type == "AWS::Serverless::Function" || r.Type == "AWS::Lambda::Function" {
+		switch r.Type {
+		case "AWS::Serverless::Function", "AWS::Lambda::Function":
 			if hasKey(&r.Properties, "VpcConfig") {
 				f.HasVPC = true
 			}
+			if usesEventSourceMapping(&r.Properties) {
+				f.HasEventSourceMapping = true
+			}
+		case "AWS::Serverless::Api", "AWS::Serverless::HttpApi":
+			// Domain は DomainName + ApiMapping に、Domain.Route53 は
+			// さらに RecordSet に展開される
+			if d := childNode(&r.Properties, "Domain"); d != nil {
+				f.HasCustomDomain = true
+				if hasKey(d, "Route53") {
+					f.HasRoute53 = true
+				}
+			}
+		case "AWS::Lambda::EventSourceMapping":
+			f.HasEventSourceMapping = true
+		case "AWS::Route53::RecordSet", "AWS::Route53::RecordSetGroup":
+			f.HasRoute53 = true
+		case "AWS::ApiGatewayV2::DomainName", "AWS::ApiGateway::DomainName":
+			f.HasCustomDomain = true
 		}
 	}
 	for k := range unknown {
@@ -82,6 +115,44 @@ func ScanTemplate(body []byte) (TemplateFacts, error) {
 func (f TemplateFacts) has(types ...string) bool {
 	for _, t := range types {
 		if f.Counts[t] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// eventSourceMappingTypes は SAM の Events のうち、展開すると
+// AWS::Lambda::EventSourceMapping になるもの。ここにある型を使った関数は
+// テンプレート本文に EventSourceMapping と 1 文字も書かれないのに
+// マッピングの権限を要求する。
+var eventSourceMappingTypes = map[string]bool{
+	"SQS": true, "DynamoDB": true, "Kinesis": true,
+	"MSK": true, "MQ": true, "SelfManagedKafka": true, "DocumentDB": true,
+}
+
+// childNode は mapping ノードの直下の値ノードを返す。無ければ nil。
+func childNode(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// usesEventSourceMapping は Properties.Events に SQS 等の
+// ポーリング型イベントがあるかを見る。
+func usesEventSourceMapping(props *yaml.Node) bool {
+	events := childNode(props, "Events")
+	if events == nil || events.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 1; i < len(events.Content); i += 2 {
+		t := childNode(events.Content[i], "Type")
+		if t != nil && eventSourceMappingTypes[t.Value] {
 			return true
 		}
 	}

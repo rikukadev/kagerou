@@ -662,6 +662,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	baseBucket := fs.String("base-bucket", "", "shared preview base bucket to sync artifacts into (post_up aws s3 sync)")
 	ssm := fs.Bool("with-sashiki-ssm", false, "sashiki action transport=ssm")
 	instance := fs.String("instance-id", "", "target instance for --with-sashiki-ssm")
+	instanceTag := fs.String("instance-tag", "", "scope --with-sashiki-ssm by instance tag 'Key=Value' instead of a fixed id")
 	cf := fs.Bool("with-cloudfront", false, "CloudFront cache invalidation")
 	r53 := fs.Bool("with-route53", false, "Route53 record changes")
 	zone := fs.String("hosted-zone-id", "", "hosted zone for --with-route53")
@@ -725,7 +726,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			Template: facts,
 			ECR:      *ecr, EcrRepo: ecrRepoName,
 			S3: *s3, VPC: *vpc,
-			SashikiSSM: *ssm, InstanceID: *instance,
+			SashikiSSM: *ssm, InstanceID: *instance, InstanceTag: *instanceTag,
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
 			BaseBucket: *baseBucket,
 		})

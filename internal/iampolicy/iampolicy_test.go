@@ -237,3 +237,115 @@ func TestBuildValidation(t *testing.T) {
 		t.Error("--with-ecr は ecr-repo 必須のはず")
 	}
 }
+
+// ここから下は「実 AWS で 403 を踏んでから足した権限」の回帰。どれも
+// ローカル(admin)では再現せず、CI の絞ったロールでしか出ない類なので、
+// 落ちたら「また同じ穴を開けた」と読むこと。
+
+func TestRoute53NeedsGetHostedZone(t *testing.T) {
+	s := mustJSON(t, Options{Prefix: "p-", Route53: true, HostedZoneID: "Z123"})
+	for _, want := range []string{
+		// CFN の RecordSet ハンドラは書く前にゾーンを読む
+		"route53:GetHostedZone",
+		// 反映待ちのポーリング。change id はゾーンに紐付かないので別 statement
+		"route53:GetChange",
+		"arn:aws:route53:::change/*",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("route53 policy missing %q", want)
+		}
+	}
+}
+
+func TestRoute53DerivedFromTemplate(t *testing.T) {
+	f, err := ScanTemplate([]byte(`
+Resources:
+  Rec:
+    Type: AWS::Route53::RecordSet
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Unknown) != 0 {
+		t.Errorf("RecordSet を未知型として警告している: %v", f.Unknown)
+	}
+	// テンプレートが RecordSet を持てば --with-route53 無しでも権限が要る
+	if _, err := Build(Options{Prefix: "p-", Template: &f}); err == nil {
+		t.Error("RecordSet があるのに hosted-zone-id 無しで通ってしまった")
+	}
+	s := mustJSON(t, Options{Prefix: "p-", Template: &f, HostedZoneID: "Z9"})
+	if !strings.Contains(s, "route53:ChangeResourceRecordSets") {
+		t.Error("テンプレート由来の route53 権限が出ていない")
+	}
+}
+
+func TestEventSourceMappingScoping(t *testing.T) {
+	f, err := ScanTemplate([]byte(`
+Resources:
+  Fn:
+    Type: AWS::Serverless::Function
+  Map:
+    Type: AWS::Lambda::EventSourceMapping
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Unknown) != 0 {
+		t.Errorf("EventSourceMapping を未知型として警告している: %v", f.Unknown)
+	}
+	p, err := Build(Options{Prefix: "p-", Template: &f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crud := findSid(t, p, "EventSourceMapping")
+	// CRUD を関数 ARN に絞ると 403 になる(Lambda は Resource:* で評価する)。
+	// 「絞ったつもり」を防ぐため、ここは * であることを明示的に固定する
+	if got, ok := crud.Resource.(string); !ok || got != "*" {
+		t.Errorf("mapping の CRUD は Resource:* のはず: %#v", crud.Resource)
+	}
+	tags := findSid(t, p, "EventSourceMappingTags")
+	// 逆にタグはマッピング ARN で評価される。CFN が作成直後に呼ぶので必須
+	if got, _ := tags.Resource.(string); got != "arn:aws:lambda:*:*:event-source-mapping:*" {
+		t.Errorf("タグはマッピング ARN で絞るはず: %#v", tags.Resource)
+	}
+	if !strings.Contains(strings.Join(tags.Action, ","), "lambda:TagResource") {
+		t.Errorf("lambda:TagResource が無い: %v", tags.Action)
+	}
+}
+
+func TestSendCommandTagConditionOnlyOnInstance(t *testing.T) {
+	p, err := Build(Options{Prefix: "p-", SashikiSSM: true, InstanceTag: "Role=sashiki"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := findSid(t, p, "SashikiSendCommandTarget")
+	if target.Condition == nil {
+		t.Error("宛先インスタンスにタグ条件が無い(任意の EC2 を叩けてしまう)")
+	}
+	// 条件をドキュメント側にも掛けると、タグを持たない AWS-RunShellScript が
+	// 落ちて SendCommand 全体が 403 になる。statement を分ける理由がこれ
+	doc := findSid(t, p, "SashikiSendCommandDocument")
+	if doc.Condition != nil {
+		t.Error("ドキュメント側にタグ条件が掛かっている(SendCommand が 403 になる)")
+	}
+}
+
+func TestSendCommandValidation(t *testing.T) {
+	if _, err := Build(Options{Prefix: "p-", SashikiSSM: true, InstanceID: "i-1", InstanceTag: "K=V"}); err == nil {
+		t.Error("id とタグの併用はエラーのはず")
+	}
+	if _, err := Build(Options{Prefix: "p-", SashikiSSM: true, InstanceTag: "nope"}); err == nil {
+		t.Error("Key=Value でないタグはエラーのはず")
+	}
+}
+
+func findSid(t *testing.T, p Policy, sid string) Statement {
+	t.Helper()
+	for _, s := range p.Statement {
+		if s.Sid == sid {
+			return s
+		}
+	}
+	t.Fatalf("statement %q が無い", sid)
+	return Statement{}
+}
