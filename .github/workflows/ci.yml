@@ -200,6 +200,9 @@ jobs:
       - name: Run E2E
         env:
           NAME: e2e-ssr-${{ github.run_id }}
+          # kagerou.yaml は生テンプレートを指している(offline で iam-policy が
+          # 回せるように)。実デプロイは sam package の成果物で行う(#135)
+          KAGEROU_TEMPLATE: packaged-ssr.yaml
         run: ./e2e/aws/run.sh bin/kagerou e2e/aws/ssr/kagerou.yaml "$NAME"
 
       - name: Clean up
@@ -233,6 +236,29 @@ jobs:
           # bin に指定したファイルが実在すること(npm は warn にしかしない)
           bin=$(node -p "require('./package.json').bin.kagerou")
           test -f "$bin" || { echo "::error::bin $bin が無い"; exit 1; }
+
+  # E2E のデプロイロールに attach しているポリシー(e2e/aws/ci-policy.json)が、
+  # 生成器の出す最小ポリシーと一致しているかを見る。**穴を踏む → 手で足す →
+  # 動く → 生成器は知らないまま**、というループを止めるための番人(#135)。
+  #
+  # 4 fixture は 1 本のロールを共有しているので、単独の構成と比べると
+  # 「他の構成にだけ要る権限」が全部 extra として出る。--config を並べて
+  # 生成側を和集合にすることで、本当に見たい missing が埋もれないようにする。
+  iam-policy-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check attached policy against the generated minimal set
+        run: |
+          go run ./cmd/kagerou iam-policy \
+            --config e2e/aws/3tier/kagerou.yaml \
+            --config e2e/aws/ssr/kagerou.yaml \
+            --config e2e/aws/multi/kagerou.yaml \
+            --config e2e/aws/worker/kagerou.yaml \
+            --check e2e/aws/ci-policy.json
 
   vuln:
     runs-on: ubuntu-latest

@@ -212,6 +212,8 @@ func Build(o Options) (Policy, error) {
 			Action: []string{
 				"dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable", "dynamodb:UpdateTable",
 				"dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource",
+				// CFN が作成・更新のたびに読む(テーブルを作るだけでも要る)
+				"dynamodb:DescribeContinuousBackups", "dynamodb:DescribeTimeToLive",
 			},
 			Resource: fmt.Sprintf("arn:aws:dynamodb:*:*:table/%s*", p),
 		})
@@ -687,6 +689,14 @@ func (s *stringList) UnmarshalJSON(b []byte) error {
 // extra = attached にあって generated に無い(過剰権限の疑い)、
 // missing = generated が必要とするが attached に無い(壊れる恐れ)。いずれもソート済み。
 func CheckDrift(generated Policy, attached []byte) (extra, missing []string, err error) {
+	return CheckDriftActions(PolicyAllowActions(generated), attached)
+}
+
+// CheckDriftActions は生成側の Allow アクション集合と attach ポリシーを突き合わせる。
+// 1 本のロールを複数構成で共有している場合に和集合を渡せるよう、Policy ではなく
+// 集合を受ける(#135)。単独の構成と比べると、他の構成にだけ要る権限が全部
+// over-permission に見えてしまい、本当に見たい missing が埋もれる。
+func CheckDriftActions(gen map[string]bool, attached []byte) (extra, missing []string, err error) {
 	var ap attachedPolicy
 	if err := json.Unmarshal(attached, &ap); err != nil {
 		return nil, nil, fmt.Errorf("attached policy JSON: %w", err)
@@ -700,7 +710,6 @@ func CheckDrift(generated Policy, attached []byte) (extra, missing []string, err
 			att[a] = true
 		}
 	}
-	gen := PolicyAllowActions(generated)
 	for a := range att {
 		if !gen[a] {
 			extra = append(extra, a)

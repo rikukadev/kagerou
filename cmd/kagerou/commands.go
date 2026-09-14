@@ -655,6 +655,20 @@ func loadTemplateFacts(templatePath string) *iampolicy.TemplateFacts {
 }
 
 // allowFlag は繰り返し可能な --allow 'actions=resources' を集める(--doc execution)。
+// stringsFlag は繰り返し指定できる文字列フラグ。
+type stringsFlag []string
+
+func (f *stringsFlag) String() string     { return strings.Join(*f, ",") }
+func (f *stringsFlag) Set(v string) error { *f = append(*f, v); return nil }
+
+// first は最初の値(未指定なら既定のファイル名)を返す。
+func (f stringsFlag) first() string {
+	if len(f) == 0 {
+		return config.DefaultFile
+	}
+	return f[0]
+}
+
 type allowFlag []iampolicy.AllowRule
 
 func (a *allowFlag) String() string { return "" }
@@ -683,7 +697,8 @@ func splitCSV(s string) []string {
 
 func cmdIamPolicy(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("iam-policy", flag.ContinueOnError)
-	cfgPath := fs.String("config", config.DefaultFile, "config file")
+	var cfgPaths stringsFlag
+	fs.Var(&cfgPaths, "config", "config file (repeatable; with --check the generated policies are unioned)")
 	doc := fs.String("doc", "policy", "which document to emit: policy | trust | boundary | execution")
 	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
 	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
@@ -710,9 +725,15 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := config.LoadOrDefault(*cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPaths.first())
 	if err != nil {
 		return err
+	}
+	// 複数指定は「複数構成ぶんの最小ポリシーを足し合わせたものが、実際に attach
+	// されているポリシーと一致するか」を見るための機能(#135)。生成物そのものは
+	// 1 構成ぶんしか意味を持たないので、出力用途では受け付けない。
+	if len(cfgPaths) > 1 && (*check == "" || *doc != "policy") {
+		return fmt.Errorf("--config can only be repeated with --doc policy --check <file>")
 	}
 	prefixOrCfg := func() string {
 		if *prefix != "" {
@@ -726,11 +747,13 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		return fmt.Errorf("--check does not apply to --doc trust")
 	}
 
-	// 生成する Policy(policy / boundary / execution)。trust は別扱いで先に返す。
-	var pol iampolicy.Policy
-	var note string
-	switch *doc {
-	case "policy":
+	// buildPolicy は 1 つの config から最小ポリシーを作る。--check の和集合モードで
+	// config ごとに呼ぶので、switch の外に出してある(#135)。
+	buildPolicy := func(cfg config.Config) (iampolicy.Policy, error) {
+		pfx := *prefix
+		if pfx == "" {
+			pfx = cfg.NamePrefix
+		}
 		ecrRepoName := *ecrRepo
 		if ecrRepoName == "" {
 			ecrRepoName = cfg.Project
@@ -752,10 +775,12 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		} else {
 			fmt.Fprintln(os.Stderr, "kagerou iam-policy: template not found — falling back to --with-* flags only (the template is normally the source of truth)")
 		}
-		pol, err = iampolicy.Build(iampolicy.Options{
-			Prefix:   prefixOrCfg(),
+		return iampolicy.Build(iampolicy.Options{
+			Prefix:   pfx,
 			Template: facts,
-			ECR:      *ecr, EcrRepo: ecrRepoName,
+			// テンプレートが Image なら ECR は要る。--with-ecr を付け忘れても
+			// 足りないポリシーを出さない(テンプレートが真実の源、#71/#135)
+			ECR: *ecr || (facts != nil && facts.HasImage), EcrRepo: ecrRepoName,
 			S3: *s3, VPC: *vpc,
 			SashikiSSM: *ssm, InstanceID: *instance, InstanceTag: *instanceTag,
 			// {base_domain} を使う設定なら SSM の読み取り権限も要る。フラグにすると
@@ -764,6 +789,14 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
 			BaseBucket: *baseBucket,
 		})
+	}
+
+	// 生成する Policy(policy / boundary / execution)。trust は別扱いで先に返す。
+	var pol iampolicy.Policy
+	var note string
+	switch *doc {
+	case "policy":
+		pol, err = buildPolicy(cfg)
 		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
 	case "boundary":
 		var regs []string
@@ -813,7 +846,22 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		if err != nil {
 			return fmt.Errorf("--check: %w", err)
 		}
-		extra, missing, err := iampolicy.CheckDrift(pol, data)
+		// 2 つ目以降の config も生成して足し合わせる(#135)。
+		gen := iampolicy.PolicyAllowActions(pol)
+		for _, path := range cfgPaths[1:] {
+			other, err := config.LoadOrDefault(path)
+			if err != nil {
+				return err
+			}
+			op, err := buildPolicy(other)
+			if err != nil {
+				return err
+			}
+			for a := range iampolicy.PolicyAllowActions(op) {
+				gen[a] = true
+			}
+		}
+		extra, missing, err := iampolicy.CheckDriftActions(gen, data)
 		if err != nil {
 			return err
 		}
@@ -830,6 +878,11 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			if _, err := fmt.Fprintf(out, "extra\t%s\t(over-permission: not in the generated minimal set)\n", a); err != nil {
 				return err
 			}
+		}
+		if len(missing) > 0 {
+			// 生成器が要求するのに attach に無い = デプロイが 403 で落ちる側。
+			// over-permission より重いので、こちらも必ず失敗させる。
+			return fmt.Errorf("drift: %d action(s) missing from the attached policy", len(missing))
 		}
 		if len(extra) > 0 {
 			return fmt.Errorf("drift: %d action(s) beyond the generated minimal policy", len(extra))
