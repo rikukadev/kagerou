@@ -32,7 +32,7 @@ type Facts struct {
 	HasDockerfile bool
 	HasLWA        bool     // その Dockerfile に Lambda Web Adapter が入っているか
 	DockerfileDir string   // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
-	AppPort       string   // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
+	AppPort       string   // Dockerfile の EXPOSE / compose の ports・expose から検出した listen ポート
 	HasTemplate   bool     // ルートに template.yaml があるか
 	Services      int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
 	ServiceNames  []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
@@ -520,24 +520,143 @@ func exists(path string) bool {
 }
 
 var (
-	exposeRe      = regexp.MustCompile(`(?mi)^\s*EXPOSE\s+(\d+)`)
-	composePortRe = regexp.MustCompile(`(?m)^\s*-\s*"?(?:\d+:)?(\d+)"?\s*$`)
+	exposeRe = regexp.MustCompile(`(?mi)^\s*EXPOSE\s+(\d+)`)
+
+	composeServiceHeadRe = regexp.MustCompile(`^  ([A-Za-z0-9_.-]+):\s*$`)
+	composeServiceKeyRe  = regexp.MustCompile(`^    ([A-Za-z0-9_.-]+):\s*(.*)$`)
+	composeListItemRe    = regexp.MustCompile(`^\s+-\s*(.+?)\s*$`)
 )
 
-// composePort は compose の ports("8080:3000" の右側 = コンテナ側)を拾う。
+// composeService は compose の 1 サービスのうち、ポート検出に要る分だけ。
+type composeService struct {
+	name   string
+	image  string
+	build  bool
+	ports  []string
+	expose []string
+}
+
+// parseComposeServices は services: 直下を読む。YAML パーサは持ち込まない
+// (このパッケージは標準ライブラリだけで閉じる)。読めない形は黙って捨てる。
+func parseComposeServices(s string) []composeService {
+	if i := strings.Index(s, "\nservices:"); i >= 0 {
+		s = s[i+1:]
+	} else if !strings.HasPrefix(s, "services:") {
+		return nil
+	}
+	var out []composeService
+	cur := -1
+	mode := ""
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			if strings.HasPrefix(line, "services:") {
+				continue
+			}
+			break // 次のトップレベルキー(volumes: など)
+		}
+		if m := composeServiceHeadRe.FindStringSubmatch(line); m != nil {
+			out = append(out, composeService{name: m[1]})
+			cur, mode = len(out)-1, ""
+			continue
+		}
+		if cur < 0 {
+			continue
+		}
+		if m := composeServiceKeyRe.FindStringSubmatch(line); m != nil {
+			mode = ""
+			switch m[1] {
+			case "image":
+				out[cur].image = strings.TrimSpace(m[2])
+			case "build":
+				out[cur].build = true
+			case "ports", "expose":
+				mode = m[1]
+			}
+			continue
+		}
+		if mode == "" {
+			continue
+		}
+		if m := composeListItemRe.FindStringSubmatch(line); m != nil {
+			if mode == "ports" {
+				out[cur].ports = append(out[cur].ports, m[1])
+			} else {
+				out[cur].expose = append(out[cur].expose, m[1])
+			}
+		}
+	}
+	return out
+}
+
+// ポートの持ち主として当てにしない image(DB・キャッシュ・検索・エミュレータ等)。
+var infraImageMarks = []string{
+	"mysql", "mariadb", "postgres", "redis", "valkey", "opensearch", "elasticsearch",
+	"kibana", "localstack", "traefik", "mailcatcher", "mailhog", "mailpit", "minio",
+	"rabbitmq", "memcached", "dynamodb-local", "adminer", "selenium", "ftp",
+}
+
+func isInfraImage(image string) bool {
+	l := strings.ToLower(image)
+	for _, m := range infraImageMarks {
+		if strings.Contains(l, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// containerPort は ports / expose の 1 エントリからコンテナ側のポートを取る。
+// "8080:3000" は 3000、"9200" は 9200。変数展開など数値にならないものは捨てる。
+func containerPort(entry string) string {
+	e := strings.Trim(strings.TrimSpace(entry), `"'`)
+	if i := strings.Index(e, "/"); i >= 0 {
+		e = e[:i]
+	}
+	if i := strings.LastIndex(e, ":"); i >= 0 {
+		e = e[i+1:]
+	}
+	if e == "" {
+		return ""
+	}
+	for _, r := range e {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return e
+}
+
+// composePort は compose から listen ポートを拾う。アプリのサービス
+// (build: がある > DB 等の既製 image でない)を先に見て、そのサービスの
+// ports / expose の中だけを読む。ブロックの外まで走査すると、変数展開で
+// 読めない行を飛び越えて別サービスのポート(DB や検索)を拾ってしまう。
 func composePort(dir string) string {
 	for _, name := range composeFiles {
 		b, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			continue
 		}
-		s := string(b)
-		i := strings.Index(s, "ports:")
-		if i < 0 {
-			continue
-		}
-		if m := composePortRe.FindStringSubmatch(s[i:]); m != nil {
-			return m[1]
+		svcs := parseComposeServices(string(b))
+		for _, pick := range []func(composeService) bool{
+			func(s composeService) bool { return s.build },
+			func(s composeService) bool { return !isInfraImage(s.image) },
+			func(composeService) bool { return true },
+		} {
+			for _, svc := range svcs {
+				if !pick(svc) {
+					continue
+				}
+				for _, entries := range [][]string{svc.ports, svc.expose} {
+					for _, e := range entries {
+						if p := containerPort(e); p != "" {
+							return p
+						}
+					}
+				}
+			}
 		}
 	}
 	return ""

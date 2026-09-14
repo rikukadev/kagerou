@@ -313,6 +313,49 @@ func TestScanPHPComposerInSubdir(t *testing.T) {
 	}
 }
 
+func TestScanComposePortPrefersAppService(t *testing.T) {
+	// アプリは expose だけ、DB の ports は変数展開、検索エンジンは素の expose。
+	// ports: の外まで走査すると、読めない DB の行を飛び越えて 9200 を拾ってしまう。
+	dir := t.TempDir()
+	write(t, dir, "compose.yaml", `services:
+  app:
+    image: ghcr.io/example/app:latest
+    expose:
+      - "80"
+  database:
+    image: ghcr.io/example/images/mysql:8
+    ports:
+      - "${DATABASE_PORT:-11001}:3306"
+  opensearch:
+    image: opensearchproject/opensearch:2
+    expose:
+      - "9200"
+volumes:
+  data:
+`)
+	if got := Scan(dir).AppPort; got != "80" {
+		t.Fatalf("AppPort = %q, want 80 (アプリのサービスの expose)", got)
+	}
+}
+
+func TestScanComposePortPrefersBuildService(t *testing.T) {
+	// build: があるサービスが最優先(既製 image の判定より強い)。
+	dir := t.TempDir()
+	write(t, dir, "compose.yaml", `services:
+  cache:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  web:
+    build: .
+    ports:
+      - "8080:3000"
+`)
+	if got := Scan(dir).AppPort; got != "3000" {
+		t.Fatalf("AppPort = %q, want 3000", got)
+	}
+}
+
 func TestScanPHPAppWithJSAssets(t *testing.T) {
 	// authense 型: PHP アプリのリポジトリに、画面用の JS バンドルが同居している。
 	// 走査順では assets/ が先に見つかるが、デプロイされるのは PHP のアプリ。
