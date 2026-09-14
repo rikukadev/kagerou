@@ -380,6 +380,26 @@ func cmdURL(args []string, out *os.File) error {
 	return err
 }
 
+// explicitFlags は **実際に指定された**フラグ名の集合。
+//
+// 既定値との一致で「未指定」を判定してはいけない。既定値と同じ値を明示した
+// ときに検出値へ負ける(`-region ap-northeast-1` が効かなかった #161)。
+// flag.FlagSet.Visit は指定されたものだけを回すので、この違いを拾える。
+func explicitFlags(fs *flag.FlagSet) map[string]bool {
+	out := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
+	return out
+}
+
+// resolveRegion は init のリージョンを決める。明示指定が最優先で、
+// 無いときだけ検出値(samconfig.toml / AWS_REGION / ~/.aws/config)を使う。
+func resolveRegion(explicit bool, flagValue, detected string) string {
+	if !explicit && detected != "" {
+		return detected
+	}
+	return flagValue
+}
+
 func cmdInit(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	project := fs.String("project", "", "project name (default: current directory name)")
@@ -412,10 +432,10 @@ func cmdInit(args []string, out *os.File) error {
 	// setup は選んだプロファイルで動く)
 	chooseProfile(interactive, os.Stdin, os.Stderr)
 
+	explicit := explicitFlags(fs)
+
 	det := scaffold.Detect(*dir)
-	if *region == "ap-northeast-1" && det.Region != "" { // フラグ未指定なら検出値を使う
-		*region = det.Region
-	}
+	*region = resolveRegion(explicit["region"], *region, det.Region)
 	if *compute != "lambda" && *compute != "ecs" {
 		return fmt.Errorf("--compute %q: want lambda or ecs", *compute)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,5 +96,38 @@ func TestTemplateCandidatesOrder(t *testing.T) {
 	// 設定がカレント直下なら重複しない
 	if got := templateCandidates("", "kagerou.yaml"); len(got) != 1 || got[0] != "template.yaml" {
 		t.Errorf("カレント直下で重複している: %v", got)
+	}
+}
+
+func TestRegionFlagBeatsDetection(t *testing.T) {
+	// 既定値と同じ値を明示したケースがこのバグの本体(#161)。
+	// `-region ap-northeast-1` は検出値に負けてはいけない
+	parse := func(args ...string) (map[string]bool, string) {
+		fs := flag.NewFlagSet("init", flag.ContinueOnError)
+		region := fs.String("region", "ap-northeast-1", "AWS region")
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		return explicitFlags(fs), *region
+	}
+
+	cases := []struct {
+		name     string
+		args     []string
+		detected string
+		want     string
+	}{
+		{"既定値と同じ値を明示", []string{"-region", "ap-northeast-1"}, "us-west-2", "ap-northeast-1"},
+		{"既定値と違う値を明示", []string{"-region", "eu-west-1"}, "us-west-2", "eu-west-1"},
+		{"未指定なら検出値", nil, "us-west-2", "us-west-2"},
+		{"未指定で検出もなし", nil, "", "ap-northeast-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			explicit, flagValue := parse(tc.args...)
+			if got := resolveRegion(explicit["region"], flagValue, tc.detected); got != tc.want {
+				t.Fatalf("region = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
