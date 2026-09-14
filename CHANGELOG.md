@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.0](https://github.com/rikukadev/kagerou/compare/v0.10.0...v0.11.0) (2026-09-14)
+
+
+### Features
+
+* **alb-base:** publish the regional certificate ARN ([#146](https://github.com/rikukadev/kagerou/issues/146)) ([e71bf6a](https://github.com/rikukadev/kagerou/commit/e71bf6abf153fa64754eb5db6c30bca4ab919dc7))
+
+
+### Bug Fixes
+
+* **appscan:** detect PHP via composer.json, and read compose ports per service ([#154](https://github.com/rikukadev/kagerou/issues/154)) ([96bd552](https://github.com/rikukadev/kagerou/commit/96bd5525c6c5d8be04b5e4a285208b4c924176f3))
+* **appscan:** read every Dockerfile, not just the one named Dockerfile ([#155](https://github.com/rikukadev/kagerou/issues/155)) ([2d91e49](https://github.com/rikukadev/kagerou/commit/2d91e4910501d289bbed161269612060aae47601))
+* **iam-policy:** emit the immutable-subject sub form in --doc trust ([#148](https://github.com/rikukadev/kagerou/issues/148)) ([9d692f7](https://github.com/rikukadev/kagerou/commit/9d692f75f8fdbce08c331c505a6d836daf182f8f))
+* **iam-policy:** find the template next to the config, and refuse to --check without one ([#149](https://github.com/rikukadev/kagerou/issues/149)) ([18163e3](https://github.com/rikukadev/kagerou/commit/18163e37c8bf52faf6add43d874cc4b487cb2820))
+* **recommend:** let an existing shared ALB change the answer ([#156](https://github.com/rikukadev/kagerou/issues/156)) ([8242e7c](https://github.com/rikukadev/kagerou/commit/8242e7c3ba99e94f1b36d14948a71473380b4fe7))
+
+
+### Documentation
+
+* write down how work is claimed, so it stops being implemented twice ([#150](https://github.com/rikukadev/kagerou/issues/150)) ([8241fb8](https://github.com/rikukadev/kagerou/commit/8241fb8dc5aebb42e86fb5861f84afcff2f3bf51))
+
 ## [0.10.0](https://github.com/rikukadev/kagerou/compare/v0.9.0...v0.10.0) (2026-09-14)
 
 
