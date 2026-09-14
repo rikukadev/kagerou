@@ -22,7 +22,13 @@ readiness_timeout: 300s
 {{- else}}
 ttl: 72h
 {{- end}}
-{{- if and .ALB .Domain}}
+{{- if .MultiService}}
+# 複数サービスの環境。ALB では **ホストで分ける**(DESIGN §13)ので、
+# 各サービスは <service>-{name}.{{.Domain}} で出る。url_template は代表サービス:
+#   {{range .ServiceSpecs}}{{.Name}}-{name}.{{$.Domain}}{{if .Primary}} ← 代表{{end}}
+#   {{end}}
+url_template: "https://{{.PrimaryService}}-{name}.{{.Domain}}"
+{{- else if and .ALB .Domain}}
 # URL は共有 ALB(deploy/alb-base.yaml)経由の独自ドメイン。ホスト名は
 # この url_template から導かれる(テンプレートの EnvKagerouUrl 参照)
 url_template: "https://{name}.{{.Domain}}"
