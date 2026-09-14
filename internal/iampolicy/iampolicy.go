@@ -78,6 +78,29 @@ type Options struct {
 }
 
 // Build は選択された構成の最小権限ポリシーを組む。
+// ssmParamARNs は {{resolve:ssm}} のパスを ARN にする。
+//
+// リージョン/アカウントはワイルドカードのまま。1 本のロールを複数リージョンで
+// 使う運用があり、ここを固定すると「動いていたロールが別リージョンで落ちる」に
+// なる(名前空間の絞りはパス側で効いている)。
+func ssmParamARNs(paths []string) any {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, "arn:aws:ssm:*:*:parameter"+ensureLeadingSlash(p))
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return out
+}
+
+func ensureLeadingSlash(p string) string {
+	if strings.HasPrefix(p, "/") {
+		return p
+	}
+	return "/" + p
+}
+
 func Build(o Options) (Policy, error) {
 	if o.Prefix == "" {
 		return Policy{}, errors.New("prefix is required (name_prefix in kagerou.yaml, or --prefix)")
@@ -204,6 +227,57 @@ func Build(o Options) (Policy, error) {
 			Action:   []string{"apigateway:*"},
 			Resource: "arn:aws:apigateway:*::*",
 		})
+	}
+	if o.Template != nil && o.Template.has(
+		"AWS::ElasticLoadBalancingV2::TargetGroup", "AWS::ElasticLoadBalancingV2::ListenerRule") {
+		sts = append(sts, Statement{
+			// 共有 ALB 入口。ALB 本体(固定費)はベースの持ち物で、環境が作るのは
+			// ターゲットグループとリスナールールだけ。どちらも作る前は ARN が
+			// 分からず、ルールは共有リスナー配下に付くので Resource は絞れない。
+			// Describe* はロールバック時に CFN が読む(作成だけでも要る)。
+			Sid: "SharedAlbEntrypoint", Effect: "Allow",
+			Action: []string{
+				"elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:DeleteTargetGroup",
+				"elasticloadbalancing:ModifyTargetGroupAttributes",
+				"elasticloadbalancing:RegisterTargets", "elasticloadbalancing:DeregisterTargets",
+				"elasticloadbalancing:CreateRule", "elasticloadbalancing:DeleteRule", "elasticloadbalancing:ModifyRule",
+				"elasticloadbalancing:AddTags", "elasticloadbalancing:RemoveTags",
+				"elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetGroupAttributes",
+				"elasticloadbalancing:DescribeRules", "elasticloadbalancing:DescribeListeners",
+				"elasticloadbalancing:DescribeTags", "elasticloadbalancing:DescribeTargetHealth",
+			},
+			Resource: "*",
+		})
+	}
+	if o.Template != nil && o.Template.has("AWS::ECS::Service", "AWS::ECS::TaskDefinition") {
+		sts = append(sts, Statement{
+			// compute: ecs。クラスタは共有ベースの持ち物なので作らない。
+			// タスク定義はリビジョンが増えるので ARN を事前に絞れない。
+			Sid: "EcsService", Effect: "Allow",
+			Action: []string{
+				"ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition",
+				"ecs:CreateService", "ecs:UpdateService", "ecs:DeleteService", "ecs:DescribeServices",
+				"ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource",
+			},
+			Resource: "*",
+		})
+	}
+	if o.Template != nil && len(o.Template.SSMParams) > 0 {
+		// CloudFormation は {{resolve:ssm:…}} を **このロールの資格情報で** 解決する。
+		// 読むパスはテンプレートに書いてあるので、そこまで絞れる。
+		sts = append(sts, Statement{
+			Sid: "ResolveSsmDynamicReferences", Effect: "Allow",
+			Action:   []string{"ssm:GetParameter", "ssm:GetParameters"},
+			Resource: ssmParamARNs(o.Template.SSMParams),
+		})
+		if o.Template.HasSecureSSM {
+			sts = append(sts, Statement{
+				// ssm-secure は SecureString。既定キーでも復号の許可が要る
+				Sid: "DecryptSecureSsm", Effect: "Allow",
+				Action:   []string{"kms:Decrypt"},
+				Resource: "*",
+			})
+		}
 	}
 	if o.Template != nil && o.Template.has("AWS::DynamoDB::Table") {
 		sts = append(sts, Statement{

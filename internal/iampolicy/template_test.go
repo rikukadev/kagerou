@@ -149,3 +149,70 @@ func TestScanTemplateDetectsImagePackaging(t *testing.T) {
 		})
 	}
 }
+
+func TestScanTemplateDynamicRefs(t *testing.T) {
+	// 動的参照はプロパティの「値」なので、型の数え上げには現れない。
+	// 拾わないと警告も出ないまま足りないポリシーになる(#170)
+	body := []byte(`
+Resources:
+  Rule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: "{{resolve:ssm:/kagerou/base/relay/alb_listener_arn}}"
+  Svc:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: "{{resolve:ssm:/kagerou/base/relay/alb_cluster}}"
+      Dup: "{{resolve:ssm:/kagerou/base/relay/alb_cluster}}"
+      Pinned: "{{resolve:ssm:/kagerou/base/relay/alb_vpc_id:3}}"
+`)
+	f, err := ScanTemplate(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/kagerou/base/relay/alb_cluster",
+		"/kagerou/base/relay/alb_listener_arn",
+		"/kagerou/base/relay/alb_vpc_id", // バージョン指定は落とす
+	}
+	if strings.Join(f.SSMParams, ",") != strings.Join(want, ",") {
+		t.Fatalf("SSMParams = %v, want %v", f.SSMParams, want)
+	}
+	if f.HasSecureSSM {
+		t.Error("ssm-secure は使っていない")
+	}
+	// ALB / ECS の型は既知になったので警告しない
+	if len(f.Unknown) != 0 {
+		t.Errorf("Unknown = %v, want empty", f.Unknown)
+	}
+}
+
+func TestScanTemplateSecureSSM(t *testing.T) {
+	f, err := ScanTemplate([]byte(`
+Resources:
+  X:
+    Type: AWS::ECS::Service
+    Properties:
+      Secret: "{{resolve:ssm-secure:/app/db/password}}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.HasSecureSSM {
+		t.Error("ssm-secure を検出できていない")
+	}
+	if len(f.SSMParams) != 1 || f.SSMParams[0] != "/app/db/password" {
+		t.Fatalf("SSMParams = %v", f.SSMParams)
+	}
+}
+
+func TestScanTemplateNoDynamicRefs(t *testing.T) {
+	// 使っていないテンプレートで ssm: を増やさない
+	f, err := ScanTemplate([]byte("Resources:\n  F:\n    Type: AWS::Serverless::Function\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.SSMParams) != 0 || f.HasSecureSSM {
+		t.Fatalf("動的参照なしで拾っている: %+v", f.SSMParams)
+	}
+}
