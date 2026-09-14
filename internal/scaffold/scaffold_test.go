@@ -708,3 +708,54 @@ func TestScaffoldOmitsReadinessWithoutEvidence(t *testing.T) {
 		t.Errorf("根拠が無いのに readiness_path を書いている:\n%s", ky)
 	}
 }
+
+func TestTemplateUsesDetectedDockerfile(t *testing.T) {
+	// LWA を Dockerfile.lambda に分けている構成。ここを "Dockerfile" に固定すると
+	// LWA の無いイメージ(ECS/本番用)が Lambda に載る(#160)
+	dir := t.TempDir()
+	p := Params{Project: "web", Region: "r", HasDockerfile: true,
+		DockerfileName: "Dockerfile.lambda"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	if !strings.Contains(tp, "Dockerfile: Dockerfile.lambda") {
+		t.Errorf("検出したファイル名を使っていない:\n%s", tp)
+	}
+
+	// モノレポ: api/ に置かれていればビルドコンテキストもそこを指す。
+	// SAM は Dockerfile を DockerContext からの相対で解決する
+	dir2 := t.TempDir()
+	p2 := Params{Project: "web", Region: "r", HasDockerfile: true,
+		DockerfileName: "Dockerfile.lambda", DockerfileDir: "api"}
+	if _, err := Run(dir2, p2, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp2 := read(t, dir2, "template.yaml")
+	if !strings.Contains(tp2, "DockerContext: ./api") {
+		t.Errorf("ビルドコンテキストが Dockerfile の場所を指していない:\n%s", tp2)
+	}
+
+	// 検出できなければ従来どおり(Dockerfile 雛形を生成する経路も含む)
+	dir3 := t.TempDir()
+	if _, err := Run(dir3, Params{Project: "web", Region: "r", Framework: "go"}, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp3 := read(t, dir3, "template.yaml")
+	if !strings.Contains(tp3, "Dockerfile: Dockerfile") || !strings.Contains(tp3, "DockerContext: .") {
+		t.Errorf("既定は Dockerfile / . のはず:\n%s", tp3)
+	}
+}
+
+func TestMultiServiceTemplateUsesDetectedDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "relay", Region: "r", Domain: "relay.example.com", Entrypoint: "alb",
+		HasDockerfile: true, DockerfileName: "Dockerfile.lambda",
+		Services: []string{"gateway", "api"}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if tp := read(t, dir, "template.yaml"); !strings.Contains(tp, "Dockerfile: Dockerfile.lambda") {
+		t.Errorf("multi 版も検出したファイル名を使うはず:\n%s", tp)
+	}
+}

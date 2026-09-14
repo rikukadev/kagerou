@@ -22,6 +22,13 @@ type Params struct {
 	Sashiki       bool   // sashiki 併用の hooks / DB env を含める
 	Port          string // アプリの listen ポート(検出値。空なら framework 既定)
 	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
+	// DockerfileName は template.yaml がビルドに使うファイル名(既定 "Dockerfile")。
+	// LWA を `Dockerfile.lambda` に分ける構成があるので、検出した名前をそのまま
+	// 生成物に流す。ここを固定にすると、LWA の無いイメージが Lambda に載る(#160)。
+	DockerfileName string
+	// DockerfileDir は Dockerfile のあるディレクトリ(ルートからの相対)。
+	// モノレポでは api/ 等に置かれるので、ビルドコンテキストもそこを指す。
+	DockerfileDir string
 	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
 	Driver        string // "stack"(既定)/ "static"
 	// Compute は stack driver の実行形。"lambda"(既定: LWA で包む、アイドル $0)
@@ -413,6 +420,27 @@ func (p Params) PortOrDefault() string {
 		return defaultPort(variant)
 	}
 	return "3000"
+}
+
+// DockerfileOrDefault は template.yaml の `Dockerfile:` に書く名前。
+// 検出できなかったときだけ "Dockerfile" に落とす。
+func (p Params) DockerfileOrDefault() string {
+	if p.DockerfileName != "" {
+		return p.DockerfileName
+	}
+	return "Dockerfile"
+}
+
+// DockerContext は template.yaml の `DockerContext:` に書くビルドコンテキスト。
+//
+// SAM は DockerContext をテンプレートからの相対、Dockerfile をその
+// DockerContext からの相対で解決する。モノレポで api/Dockerfile を検出したなら
+// コンテキストも api/ を指さないと、ビルドが別の場所を見る。
+func (p Params) DockerContext() string {
+	if p.DockerfileDir == "" {
+		return "."
+	}
+	return "./" + filepath.ToSlash(p.DockerfileDir)
 }
 
 // ServiceSpec はテンプレートに渡す 1 サービスぶんの値。

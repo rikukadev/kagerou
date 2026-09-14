@@ -444,6 +444,7 @@ func cmdInit(args []string, out *os.File) error {
 	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
+		DockerfileName: det.DockerfileName, DockerfileDir: det.DockerfileDir,
 		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
 		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames}
 	// routing は preview base から配るときにだけ意味がある。compute が
