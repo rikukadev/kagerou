@@ -406,7 +406,8 @@ func cmdInit(args []string, out *os.File) error {
 	region := fs.String("region", "ap-northeast-1", "AWS region")
 	sashiki := fs.Bool("sashiki", false, "include sashiki hooks / DB env")
 	compute := fs.String("compute", "lambda", "how environments run: lambda (LWA, idle $0) | ecs (Fargate + shared ALB)")
-	entrypoint := fs.String("entrypoint", "alb", "how environments are exposed: alb (shared ALB, custom domain) | apigateway (raw execute-api URL)")
+	entrypoint := fs.String("entrypoint", "alb", "how environments are exposed: alb (shared ALB, custom domain) | apigateway (lambda: raw execute-api URL; ecs: HTTP API + VPC Link, no fixed cost)")
+	auth := fs.Bool("auth", false, "put previews behind an OIDC login (CloudFront + Lambda@Edge)")
 	domain := fs.String("domain", "", "preview domain (e.g. myapp.example.com). Default: detected from your Route53 zone")
 	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
 	dir := fs.String("dir", ".", "output directory")
@@ -445,7 +446,7 @@ func cmdInit(args []string, out *os.File) error {
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
 		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
-		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames}
+		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames, Auth: *auth}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {
@@ -485,7 +486,9 @@ func cmdInit(args []string, out *os.File) error {
 	}, os.Stderr)
 
 	// 非対話: 全部入りで生成してテキストのチェックリスト
-	if det.HasDockerfile && !det.HasLWA {
+	// LWA が要るのは Lambda 形だけ。ecs は素のコンテナをそのまま動かすので、
+	// ここで勧めると「要らないものを足せ」と言うことになる
+	if det.HasDockerfile && !det.HasLWA && !p.ECS() && !p.Static() {
 		fmt.Fprintln(os.Stderr, "kagerou: hint: your Dockerfile lacks Lambda Web Adapter — add this line to the final stage:\n  "+scaffold.LWALine)
 	}
 	if det.SuggestSashiki() && !p.Sashiki {

@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  kagerou edge base — shared delivery for one app's preview environments, with
+  OIDC login enforced at CloudFront (Lambda@Edge). Deploy ONCE per app, in
+  us-east-1 (both CloudFront certificates and Lambda@Edge must live there).
+  Environments become https://<name>.<DomainName>/ backed by s3://<bucket>/<name>/.
+
+# preview base との違いは入口の認証だけ。ALB の authenticate-oidc は S3 を
+# 守れないので、S3 配信に認証をかけられるのはここ(CloudFront の手前)しかない。
+#
+# デプロイ(us-east-1 固定。Lambda@Edge の制約):
+#   sam deploy --template-file deploy/edge-base.yaml --region us-east-1 \
+#     --stack-name kagerou-edge-base-{{.Project}} --capabilities CAPABILITY_IAM \
+#     --resolve-s3 --parameter-overrides Project={{.Project}} DomainName=... HostedZoneId=...
+#
+# 認証の設定は **このテンプレートには書かない**。client_secret を
+# CloudFormation に渡すとコンソールから読めてしまうので、SecureString として
+# 人が置く(下の SSM パラメータと同じ prefix に集まる):
+#   aws ssm put-parameter --region us-east-1 --type String       --name /kagerou/edge-auth/<DomainName>/issuer    --value https://accounts.google.com
+#   aws ssm put-parameter --region us-east-1 --type String       --name /kagerou/edge-auth/<DomainName>/client_id --value <client id>
+#   aws ssm put-parameter --region us-east-1 --type SecureString --name /kagerou/edge-auth/<DomainName>/client_secret --value <client secret>
+#   aws ssm put-parameter --region us-east-1 --type SecureString --name /kagerou/edge-auth/<DomainName>/session_secret --value "$(openssl rand -base64 32)"
+#   # 任意: 会社ドメインだけ通す(未設定なら IdP で認証できる全員が入れる)
+#   aws ssm put-parameter --region us-east-1 --type String       --name /kagerou/edge-auth/<DomainName>/allowed_domain --value example.com
+#
+# IdP 側に登録する redirect_uri は **1 本だけ**:
+#   https://auth.<DomainName>/_kagerou/auth/callback
+
+Parameters:
+  Project:
+    Type: String
+    AllowedPattern: "[a-z]([a-z0-9-]*[a-z0-9])?"
+    Description: kagerou project name; namespaces every resource so each app owns its base
+  Mode:
+    Type: String
+    Default: per-app
+    AllowedValues: [per-app, shared]
+    Description: >
+      per-app: one base per project; URLs are <name>.<DomainName>.
+      shared: one base for every project on this domain; URLs are
+      <project>--<name>.<DomainName>.
+  DomainName:
+    Type: String
+    Description: >
+      This app's preview domain (todo.example.com -> pr-42.todo.example.com).
+      auth.<DomainName> is reserved as the OIDC callback host.
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Hosted zone that owns the parent of DomainName
+  Routing:
+    Type: String
+    Default: directory
+    AllowedValues: [directory, spa]
+    Description: >
+      How to resolve extensionless paths. "directory" appends /index.html.
+      "spa" maps them all to the environment's index.html.
+
+Conditions:
+  IsShared: !Equals [!Ref Mode, shared]
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "kagerou-base-${Project}-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "*.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "kagerou-edge-${Project}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # 認証と、Host → S3 プレフィックスの書き換えを兼ねる。
+  # viewer-request には CloudFront Function と Lambda@Edge を **両方は付けられない**
+  # ので、preview base では Function がやっている書き換えもこちらに寄せている。
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "kagerou-edge-auth-${Project}"
+      CodeUri: edge-auth/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      # viewer-request の上限は 5 秒 / 128MB(緩和できない)
+      Timeout: 5
+      MemorySize: 128
+      AutoPublishAlias: live
+      Role: !GetAtt AuthFunctionRole.Arn
+
+  AuthFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            # Lambda@Edge は両方の principal から引き受けられる必要がある
+            Principal:
+              Service: [lambda.amazonaws.com, edgelambda.amazonaws.com]
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: read-auth-config
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # 読めるのは自分のドメインの設定だけ。他プロジェクトの
+              # client_secret には手が届かない
+              - Effect: Allow
+                Action: [ssm:GetParametersByPath]
+                Resource: !Sub "arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/kagerou/edge-auth/${DomainName}"
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub "arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/kagerou/edge-auth/${DomainName}/*"
+              - Effect: Allow
+                Action: [kms:Decrypt]
+                Resource: !Sub "arn:aws:kms:us-east-1:${AWS::AccountId}:alias/aws/ssm"
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "kagerou edge base (${Project}, OIDC login)"
+        HttpVersion: http2
+        Aliases:
+          - !Sub "*.${DomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        DefaultCacheBehavior:
+          TargetOriginId: bucket
+          ViewerProtocolPolicy: redirect-to-https
+          # プレビューは正しさ優先: キャッシュ無効(Managed-CachingDisabled)。
+          # 認証済みの応答をエッジに残さないためでもある
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          # Cookie と querystring がオリジンまで要る(state / code の受け渡し)
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+          LambdaFunctionAssociations:
+            - EventType: viewer-request
+              LambdaFunctionARN: !Ref AuthFunction.Version
+              IncludeBody: false
+        Origins:
+          - Id: bucket
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${Bucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  # auth.<domain> も含めてワイルドカードで受ける(受け口は 1 本だけなので
+  # 追加のレコードは要らない)
+  WildcardRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "*.${DomainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2 # CloudFront の固定 hosted zone
+
+  # ベース↔環境のデータ契約(CONTRACT §9)。preview base と同じキーを書くので、
+  # kagerou init からは「認証付きのベースが既にある」として同じに見える。
+  DomainParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If [IsShared, "/kagerou/base/_shared/domain", !Sub "/kagerou/base/${Project}/domain"]
+      Type: String
+      Value: !Ref DomainName
+  BucketParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If [IsShared, "/kagerou/base/_shared/bucket", !Sub "/kagerou/base/${Project}/bucket"]
+      Type: String
+      Value: !Ref Bucket
+  DistributionParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If [IsShared, "/kagerou/base/_shared/distribution", !Sub "/kagerou/base/${Project}/distribution"]
+      Type: String
+      Value: !Ref Distribution
+  RoutingParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !If [IsShared, "/kagerou/base/_shared/routing", !Sub "/kagerou/base/${Project}/routing"]
+      Type: String
+      Value: !Ref Routing
+
+  # Lambda@Edge が読む非機密の設定。機密(client_secret / session_secret)は
+  # 人が同じ prefix に SecureString で置く(このテンプレートは受け取らない)。
+  EdgeModeParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/edge-auth/${DomainName}/mode"
+      Type: String
+      Value: !Ref Mode
+  EdgeRoutingParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/edge-auth/${DomainName}/routing"
+      Type: String
+      Value: !Ref Routing
+
+Outputs:
+  Domain:
+    Value: !Ref DomainName
+  Bucket:
+    Value: !Ref Bucket
+  DistributionId:
+    Value: !Ref Distribution
+  CallbackUrl:
+    Description: Register exactly this redirect_uri with your OIDC provider
+    Value: !Sub "https://auth.${DomainName}/_kagerou/auth/callback"
+  AuthConfigPrefix:
+    Description: Put issuer / client_id / client_secret / session_secret here (us-east-1)
+    Value: !Sub "/kagerou/edge-auth/${DomainName}/"
