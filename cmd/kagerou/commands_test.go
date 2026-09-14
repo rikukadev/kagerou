@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestKVFlag(t *testing.T) {
 	f := kvFlag{}
@@ -51,5 +55,45 @@ func TestParseUpFlagsAndConfigMerge(t *testing.T) {
 	}
 	if cfg.Template != "template.yaml" {
 		t.Fatalf("default template expected: %+v", cfg)
+	}
+}
+
+// #144: 設定を別ディレクトリに置き、template が CI 生成物(手元には無い)を
+// 指す構成。落ち先がカレント直下固定だと素のテンプレートに辿り着けず、
+// テンプレート由来の導出がまるごと効かないポリシーを黙って出す。
+func TestLoadTemplateFactsFallsBackNextToConfig(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "e2e", "ssr")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := "Resources:\n  Fn:\n    Type: AWS::Serverless::Function\n    Properties:\n      PackageType: Image\n"
+	if err := os.WriteFile(filepath.Join(sub, "template.yaml"), []byte(tmpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// packaged.yaml は存在しない(CI で作られる)
+	facts := loadTemplateFacts(filepath.Join(dir, "packaged.yaml"), filepath.Join(sub, "kagerou.yaml"))
+	if facts == nil {
+		t.Fatal("設定の隣の template.yaml に落ちていない")
+	}
+	if !facts.HasImage {
+		t.Error("落ちた先のテンプレートを読めていない")
+	}
+}
+
+func TestTemplateCandidatesOrder(t *testing.T) {
+	got := templateCandidates("packaged.yaml", "e2e/ssr/kagerou.yaml")
+	want := []string{"packaged.yaml", "e2e/ssr/template.yaml", "template.yaml"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("候補 %d = %q (want %q)", i, got[i], want[i])
+		}
+	}
+	// 設定がカレント直下なら重複しない
+	if got := templateCandidates("", "kagerou.yaml"); len(got) != 1 || got[0] != "template.yaml" {
+		t.Errorf("カレント直下で重複している: %v", got)
 	}
 }

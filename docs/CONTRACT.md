@@ -231,6 +231,12 @@ hooks:
 CI の drift ガードに使える。判定はアクション集合の比較で、resource スコープの緩さは見ない
 (Access Analyzer / Cloudsplaining の前段の軽い網)。
 
+導出に使うテンプレートは `template` → **設定ファイルの隣の `template.yaml`** →
+カレント直下の `template.yaml` の順に探す。1 つも見つからなければ生成は
+`--with-*` だけに落ちるので、**`--check` は比較せずエラーにする**(基準そのものが
+壊れた状態の drift 判定は意味を持たないため)。生成のみのときは警告に留めるが、
+「フラグに落ちた」ではなく「このポリシーでは足りない」と伝える。
+
 保証する性質(外部が依存してよい):
 
 - **デプロイロールは OIDC の `sts:AssumeRoleWithWebIdentity` 前提**で、`sub` を
