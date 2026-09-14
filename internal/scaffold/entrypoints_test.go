@@ -25,7 +25,7 @@ func TestScaffoldComputeAPIGateway(t *testing.T) {
 		"resolve:ssm:/kagerou/base/relay/apigw_vpc_link_id",
 		"resolve:ssm:/kagerou/base/relay/apigw_namespace_id",
 		"resolve:ssm:/kagerou/base/relay/apigw_cluster",
-		"resolve:ssm:/kagerou/base/relay/apigw_certificate_arn",
+		"resolve:ssm:/kagerou/base/relay/regional_certificate_arn",
 		// ecs 形と同じ理由でサブネットだけはリスト型パラメータ
 		"AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>",
 		"Default: /kagerou/base/relay/apigw_subnets",

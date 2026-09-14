@@ -220,7 +220,7 @@ Resources:
       # https://pr-42.api.example.com → pr-42.api.example.com
       DomainName: !Select [1, !Split ["//", !Ref EnvKagerouUrl]]
       DomainNameConfigurations:
-        - CertificateArn: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/apigw_certificate_arn{{"}}"}}"
+        - CertificateArn: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/regional_certificate_arn{{"}}"}}"
           EndpointType: REGIONAL
 
   ApiMapping:

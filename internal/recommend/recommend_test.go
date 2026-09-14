@@ -12,6 +12,10 @@ func TestEntry(t *testing.T) {
 	multi := appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 3}
 	ws := appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 1, Realtime: true}
 	staticOnly := appscan.Facts{Framework: "astro"}
+	// コンテナ化していない構成: Dockerfile もポートもサービス数も無いが、
+	// DB ドライバ / WebSocket 依存が「サーバはある」と言っている
+	dbOnly := appscan.Facts{Framework: "go", DBDriver: "go-sql-driver/mysql"}
+	wsOnly := appscan.Facts{Framework: "node", Realtime: true}
 
 	cases := []struct {
 		name string
@@ -24,6 +28,8 @@ func TestEntry(t *testing.T) {
 		{"単一サービス", server, Options{}, Lambda},
 		{"複数サービス", multi, Options{}, APIGateway},
 		{"WebSocket は上限のある入口を避ける", ws, Options{}, ALB},
+		{"Dockerfile が無くても DB ドライバは compute の証拠", dbOnly, Options{}, Lambda},
+		{"Dockerfile が無くても realtime 依存は compute の証拠", wsOnly, Options{}, ALB},
 
 		// 認証あり: ALB か Lambda@Edge のどちらか
 		{"認証 + 静的のみ(ALB は S3 を守れない)", staticOnly, Options{Auth: true}, EdgeAuth},

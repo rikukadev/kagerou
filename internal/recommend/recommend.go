@@ -71,11 +71,10 @@ type Choice struct {
 //     どちらかに寄せる。API Gateway はブラウザのログインができないので外す
 //   - それ以外は「安くて早い」順に降り、その構成では無理な理由があるときだけ次へ
 func Entry(f appscan.Facts, o Options) Choice {
-	hasCompute := f.HasDockerfile || f.AppPort != "" || f.Services > 0
 	multi := f.Services > 1
 
 	switch {
-	case !hasCompute:
+	case !HasCompute(f):
 		// 静的のみ。認証が要るなら ALB は S3 を守れないので Lambda@Edge しかない
 		if o.Auth {
 			return choice(EdgeAuth,
@@ -178,6 +177,15 @@ func Entry(f appscan.Facts, o Options) Choice {
 			)
 		}
 	}
+}
+
+// HasCompute は「サーバがあるか」。入口の形(Dockerfile / ポート / サービス数)
+// だけに頼らない: コンテナ化していない構成(zip Lambda 等)ではそのどれも空に
+// なることがある。DB ドライバと WebSocket 依存は静的配信では説明が付かないので、
+// それ自体が compute の証拠として使える。
+func HasCompute(f appscan.Facts) bool {
+	return f.HasDockerfile || f.AppPort != "" || f.Services > 0 ||
+		f.DBDriver != "" || f.Realtime
 }
 
 func cand(e Entrypoint, usable bool, reason string) Candidate {

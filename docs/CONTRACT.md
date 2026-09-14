@@ -289,16 +289,41 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/<project>/alb_task_security_group
 /kagerou/base/<project>/alb_assign_public_ip     # ENABLED | DISABLED
 
-# ALB ベースが作る **regional** な ACM 証明書(*.<domain>)。ALB 専用ではないので
-# alb_ を付けない。API Gateway のカスタムドメイン・AppSync もこれを使う
+# API Gateway ベース(deploy/apigw-base.yaml。compute: ecs × 入口 = apigateway)。
+# ALB と同じコンテナを固定費ゼロで受けるための VPC Link / Cloud Map。
+# 置き方は ALB ベースと同じ(per-app・アプリのリージョン)で、接頭辞だけ違う
+/kagerou/base/<project>/apigw_vpc_link_id
+/kagerou/base/<project>/apigw_namespace_id       # Cloud Map。環境ごとにサービスを足す
+/kagerou/base/<project>/apigw_hosted_zone_id     # 環境ごとに A レコードを足すため
+/kagerou/base/<project>/apigw_cluster
+/kagerou/base/<project>/apigw_vpc_id
+/kagerou/base/<project>/apigw_subnets
+/kagerou/base/<project>/apigw_task_security_group
+/kagerou/base/<project>/apigw_assign_public_ip   # ENABLED | DISABLED
+
+# **regional** な ACM 証明書(*.<domain>)。ALB 専用ではないので alb_ を付けない。
+# API Gateway のカスタムドメイン・AppSync もこれを使う。1 つの project では
+# ALB ベースと API Gateway ベースは排他なので、書き手はそのどちらか片方
 /kagerou/base/<project>/regional_certificate_arn
 ```
 
 **証明書はリージョンで用途が分かれる。** CloudFront は us-east-1 の証明書しか
 受けず、API Gateway のカスタムドメイン(regional)・ALB・AppSync は逆に
-us-east-1 のものを受けない。preview base が作るのは前者、ALB ベースが作るのは
-後者で、どちらも同じ `*.<domain>` を覆う(ワイルドカードは 1 ラベル分)。
-**regional な入口が要るとき、2 枚目を立てる必要はない**(#133)。
+us-east-1 のものを受けない。preview base が作るのは前者、ALB / API Gateway
+ベースが作るのは後者で、どちらも同じ `*.<domain>` を覆う(ワイルドカードは
+1 ラベル分)。**regional な入口が要るとき、2 枚目を立てる必要はない**(#133)。
+
+**`*_subnets` だけは動的参照で読めない**。動的参照は「文字列を書く場所」でしか
+展開されず、`Fn::Split` の中では素の文字列のまま渡る(cfn-lint E1018)。そのため
+環境テンプレートは `BaseSubnets` というリスト型の SSM パラメータで受け取る:
+
+```yaml
+  BaseSubnets:
+    Type: AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
+    Default: /kagerou/base/<project>/alb_subnets   # apigateway 入口なら apigw_subnets
+```
+
+`Env*` ではないので kagerou は値を渡さず、`Default` の SSM パスから解決される。
 
 `kagerou capacity` はこの `alb_listener_arn` を読み、**あと何面置けるか**を出す。
 上限は Service Quotas ではなく `elbv2 DescribeAccountLimits` から取る(引き上げ済みの
@@ -336,13 +361,21 @@ ALB ベース = アプリのリージョン)。解決側は入口を知らない
 
 ### 入口(entrypoint)
 
-環境の公開経路は 3 つ。**既定は独自ドメイン**で、生の AWS URL はフォールバック:
+環境の公開経路は **compute と entrypoint の組み合わせ**で決まる。
+**既定は独自ドメイン**(`alb`)で、`apigateway` の中身は compute で変わる:
 
-| 入口 | 使うとき | 環境が作るもの |
+| compute × 入口 | 使うとき | 環境が作るもの |
 |---|---|---|
-| `alb`(既定) | 独自ドメインで配る。`compute: ecs` は常にこれ、`compute: lambda` もドメインがあればこれ | リスナールール + ターゲットグループ(lambda ターゲットなら invoke 権限も)。どれも無料 |
-| `apigateway` | ドメインが取れないときのフォールバック | HTTP API(生の `execute-api` URL) |
+| `lambda` × `alb`(既定) | 独自ドメインで配る | リスナールール + ターゲットグループ + invoke 権限。どれも無料 |
+| `lambda` × `apigateway` | ドメインが取れないときのフォールバック | HTTP API(生の `execute-api` URL) |
+| `ecs` × `alb` | 常駐プロセス。応答時間の上限が要らない | リスナールール + ターゲットグループ + ECS サービス |
+| `ecs` × `apigateway` | 同じコンテナを**固定費ゼロ**で動かす | HTTP API + Cloud Map サービス + ECS サービス + カスタムドメイン |
 | CloudFront(preview base) | `driver: static` | S3 プレフィックスのみ |
+
+`ecs` × `apigateway` は ALB を持たないので月 $18 の固定費が消える代わりに、
+リクエストが 30 秒で切れる。タスクの IP は起動のたびに変わるので、ターゲット
+グループではなく **Cloud Map に SRV で登録**して VPC Link から名前で引く
+(A レコードでは VPC Link 統合が繋がらない)。
 
 `alb` では ALB 本体(固定費)は共有ベースの持ち物で、環境が足すのはホストヘッダの
 ルール 1 本とターゲットグループだけ。lambda ターゲットは VPC の外のままなので、
@@ -369,6 +402,39 @@ NAT 経由 egress の本番乖離を縮めたい場合は、alb-base の `TaskSu
   内容に触れない
 - `_shared` は project 名として使えない文字(`_`)で始まるので、実在の
   project と衝突しない
+
+### 認証つきのベース(edge)
+
+`kagerou init --auth` は preview base の代わりに **edge base**
+(`deploy/edge-base.yaml` + `deploy/edge-auth/index.mjs`)を生成する。
+ALB の `authenticate-oidc` は S3 を守れないので、静的配信に認証をかけられるのは
+CloudFront の手前(Lambda@Edge)だけ。
+
+書く SSM キーは preview base と**同じ**(`/kagerou/base/<project>/…`)。
+環境側から見た契約は変わらず、入口に認証が挟まるだけになる。
+
+認証の設定は別 prefix に置き、**機密はテンプレートに載せない**。Lambda@Edge は
+環境変数を持てないので、関数が cold start 時にここを読む(**us-east-1**):
+
+```
+/kagerou/edge-auth/<domain>/issuer          # 例 https://accounts.google.com
+/kagerou/edge-auth/<domain>/client_id
+/kagerou/edge-auth/<domain>/client_secret   # SecureString。人が置く
+/kagerou/edge-auth/<domain>/session_secret  # SecureString。セッション Cookie の署名鍵
+/kagerou/edge-auth/<domain>/allowed_domain  # 任意。未設定なら IdP で認証できる全員が入れる
+/kagerou/edge-auth/<domain>/mode            # テンプレートが書く
+/kagerou/edge-auth/<domain>/routing         # テンプレートが書く
+```
+
+`<project>` ではなく `<domain>` で引くのは、関数が Host ヘッダからしか自分の
+素性を知れないため(Lambda@Edge に環境変数もタグも渡らない)。
+
+IdP に登録する redirect_uri は **1 本だけ**:
+`https://auth.<domain>/_kagerou/auth/callback`。環境のホスト名は毎回変わり、
+ワイルドカードの redirect_uri は登録できないので、受け口を 1 か所に寄せて
+元のホストと URI は署名付きの `state` で持ち回る。セッション Cookie は
+`Domain=.<domain>` で発行するので、全環境で共有される
+(= 環境ごとにログインし直さない)。
 
 ### routing
 

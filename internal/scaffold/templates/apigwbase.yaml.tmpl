@@ -111,7 +111,7 @@ Resources:
   SsmCertificate:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "/kagerou/base/${Project}/apigw_certificate_arn"
+      Name: !Sub "/kagerou/base/${Project}/regional_certificate_arn"
       Type: String
       Value: !Ref Certificate
   SsmVpcLink:

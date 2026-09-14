@@ -57,7 +57,9 @@ func usage() {
 	fmt.Fprint(os.Stderr, `kagerou — ephemeral environments on AWS
 
 Usage:
-  kagerou init [--sashiki] [--compute ecs]  generate the onboarding files (interactive)
+  kagerou init [--sashiki] [--auth]  generate the onboarding files (interactive)
+                                     --compute lambda|ecs · --entrypoint alb|apigateway
+                                     --compute lambda|ecs|apigateway picks the entrypoint
   kagerou diagnose [--dir <path>]    inspect a repository and print what kagerou would do
                                      (read-only: no files written, no AWS calls)
   kagerou validate [--name <name>]   check the template against the contract
