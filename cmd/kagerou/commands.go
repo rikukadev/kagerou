@@ -374,6 +374,7 @@ func cmdInit(args []string, out *os.File) error {
 	sashiki := fs.Bool("sashiki", false, "include sashiki hooks / DB env")
 	compute := fs.String("compute", "lambda", "how environments run: lambda (LWA, idle $0) | ecs (Fargate + shared ALB)")
 	entrypoint := fs.String("entrypoint", "alb", "how environments are exposed: alb (shared ALB, custom domain) | apigateway (raw execute-api URL)")
+	domain := fs.String("domain", "", "preview domain (e.g. myapp.example.com). Default: detected from your Route53 zone")
 	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
 	dir := fs.String("dir", ".", "output directory")
 	plain := fs.Bool("plain", false, "print plain text instead of the interactive wizard")
@@ -411,7 +412,7 @@ func cmdInit(args []string, out *os.File) error {
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
 		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
-		URLShape: det.Facts.URLShape}
+		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {
@@ -419,6 +420,24 @@ func cmdInit(args []string, out *os.File) error {
 	}
 	if b, ok := det.Base(p.Project); ok {
 		p.BaseBucket = b.Bucket
+	}
+	// 独自ドメインが既定(DESIGN §13)。TTY では質問で決まるが、非対話でも
+	// 決められるところまでは決める: --domain > 既存ベース > ゾーンが 1 つなら自動。
+	// ゾーンが複数あるときだけ利用者に選んでもらう(生 URL にフォールバック)。
+	if *plain || !term.IsTerminal(int(out.Fd())) {
+		switch base, ok := det.Base(p.Project); {
+		case *domain != "":
+			p.Domain = *domain
+		case ok:
+			p.Domain = base.Domain
+		case len(det.Zones) == 1:
+			p.Domain = p.Project + "." + det.Zones[0]
+		case len(det.Zones) > 1:
+			fmt.Fprintf(os.Stderr, "kagerou: hint: %d hosted zones found — pass --domain <host> to serve previews on a custom domain (falling back to the raw AWS URL)\n", len(det.Zones))
+		}
+		// preview base(CloudFront)が要るのは static だけ。ALB 構成は
+		// deploy/alb-base.yaml が入口になる(両方は出さない)
+		p.SetupBase = p.Static() && p.Domain != ""
 	}
 
 	// TTY なら「検出結果でプリチェックされた選択 TUI → 生成 → チェックリスト」

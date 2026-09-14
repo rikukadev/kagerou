@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -29,13 +30,14 @@ type Facts struct {
 	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go
 	DBDriver      string // mysql2 / pg / go-sql-driver/mysql など(空 = DB 依存なし)
 	HasDockerfile bool
-	HasLWA        bool   // その Dockerfile に Lambda Web Adapter が入っているか
-	DockerfileDir string // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
-	AppPort       string // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
-	HasTemplate   bool   // ルートに template.yaml があるか
-	Services      int    // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
-	Realtime      bool   // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
-	Wants         Wants  // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
+	HasLWA        bool     // その Dockerfile に Lambda Web Adapter が入っているか
+	DockerfileDir string   // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
+	AppPort       string   // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
+	HasTemplate   bool     // ルートに template.yaml があるか
+	Services      int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
+	ServiceNames  []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
+	Realtime      bool     // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
+	Wants         Wants    // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
 
 	// URLShape は設定ファイルから推定した URL 構成(kagerou#109 v1):
 	//   "cross" = フロントと API が別オリジン(traefik Host ラベル / nginx
@@ -178,6 +180,13 @@ func scanDir(dir, rel string, f *Facts) {
 	}
 	if n := serviceCount(dir); n > f.Services {
 		f.Services = n
+		// 名前が取れるなら覚える(ALB のホスト規約 <service>-<env> に使う)。
+		// cmd/*/main.go を優先(1 イメージ複数バイナリの形がそのまま出る)
+		if names := cmdMainNames(dir); len(names) > 0 {
+			f.ServiceNames = names
+		} else if names := composeServiceNames(dir); len(names) > 0 {
+			f.ServiceNames = names
+		}
 	}
 	if !f.Realtime {
 		f.Realtime = realtimeUsed(dir)
@@ -231,17 +240,54 @@ func composeServiceCount(dir string) int {
 
 // cmdMainCount は Go の「cmd/<name>/main.go」の数(複数バイナリ = 複数サービス)。
 func cmdMainCount(dir string) int {
+	return len(cmdMainNames(dir))
+}
+
+// cmdMainNames は cmd/<name>/main.go の <name>(= サービス名)を並べる。
+// ALB の入口では「<service>-<env>」というホスト名の規約に使う。
+func cmdMainNames(dir string) []string {
 	entries, err := os.ReadDir(filepath.Join(dir, "cmd"))
 	if err != nil {
-		return 0
+		return nil
 	}
-	n := 0
+	var names []string
 	for _, e := range entries {
 		if e.IsDir() && exists(filepath.Join(dir, "cmd", e.Name(), "main.go")) {
-			n++
+			names = append(names, e.Name())
 		}
 	}
-	return n
+	sort.Strings(names)
+	return names
+}
+
+// composeServiceNames は compose の services: 直下のキーを並べる。
+func composeServiceNames(dir string) []string {
+	for _, name := range composeFiles {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		s := string(b)
+		i := strings.Index(s, "\nservices:")
+		if i < 0 && !strings.HasPrefix(s, "services:") {
+			continue
+		}
+		if i < 0 {
+			i = 0
+		}
+		rest := s[i:]
+		if k := regexp.MustCompile(`(?m)^(volumes|networks|configs|secrets):`).FindStringIndex(rest); k != nil && k[0] > 0 {
+			rest = rest[:k[0]]
+		}
+		var names []string
+		for _, m := range composeServiceEntryRe.FindAllStringSubmatch(rest, -1) {
+			names = append(names, m[1])
+		}
+		if len(names) > 0 {
+			return names
+		}
+	}
+	return nil
 }
 
 // realtimeUsed は WebSocket / SSE の痕跡を探す。これがあると、オリジン応答に

@@ -31,6 +31,10 @@ type Params struct {
 	// 配る)または "apigateway"(生の execute-api URL。ドメインが無いときの
 	// フォールバック)。compute: ecs は常に ALB。
 	Entrypoint string
+	// Services は appscan が見つけたサービス名(cmd/<name>/main.go 等)。
+	// ALB 入口では 1 環境の中で **ホストで分ける**(<service>-<env>.<domain>)。
+	// パス分割を採らないのは DESIGN §10/§13 の決定。
+	Services []string
 	// Dist は static のときに同期する成果物ディレクトリ。
 	Dist string
 	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
@@ -106,7 +110,9 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
 		// static には compute が無いので template.yaml も Dockerfile も要らない。
 		// ここで落とさないと「消してから手で workflow を書く」ことになる(#81)。
-		{sel.Template && !p.Static() && !p.ECS(), "template.yaml", "template.yaml.tmpl", false},
+		{sel.Template && !p.Static() && !p.ECS() && !p.MultiService(), "template.yaml", "template.yaml.tmpl", false},
+		// 複数サービスの環境は ALB のホストで分ける(1 環境 = 複数ホスト。DESIGN §13)
+		{sel.Template && p.MultiService(), "template.yaml", "template.multi.yaml.tmpl", false},
 		// compute: ecs は Lambda/LWA で包まず、Fargate + 共有 ALB のテンプレートを出す。
 		// ALB は固定費があるので共有ベース(deploy/alb-base.yaml)が持ち、環境は
 		// リスナールールとターゲットグループだけ足す。
@@ -385,6 +391,103 @@ func (p Params) ALB() bool {
 
 // LambdaALB は「lambda を共有 ALB に載せる」構成か(API Gateway を作らない)。
 func (p Params) LambdaALB() bool { return p.ALB() && !p.ECS() }
+
+// MultiService は 1 環境に複数サービスを立てる構成か。ALB 入口のときだけ
+// 意味を持つ(ホストで分けられるのが ALB の利点。DESIGN §13)。
+func (p Params) MultiService() bool { return p.LambdaALB() && len(p.Services) > 1 }
+
+// PortOrDefault は LWA に渡す listen ポート(検出値、無ければ framework 既定)。
+func (p Params) PortOrDefault() string {
+	if p.Port != "" {
+		return p.Port
+	}
+	if variant, ok := dockerfileVariant(p.Framework); ok {
+		return defaultPort(variant)
+	}
+	return "3000"
+}
+
+// ServiceSpec はテンプレートに渡す 1 サービスぶんの値。
+type ServiceSpec struct {
+	Name    string // api
+	Logical string // Api — CFN の論理 ID 接頭辞
+	Index   int    // 0,1,2 — リスナールール優先度の枝番
+	Host    string // api-${EnvKagerouEnv}.example.com(!Sub の中で使う)
+	EnvKey  string // API_URL — 他サービスの URL を届ける環境変数名
+	Primary bool   // 環境の代表(url_template が指す先)
+}
+
+// primaryNames は「代表サービス」に選ばれやすい名前(先頭が強い)。
+var primaryNames = []string{"gateway", "web", "app", "frontend", "www", "api"}
+
+// PrimaryService は環境の代表サービス名を返す(url_template の宛先)。
+func (p Params) PrimaryService() string {
+	if len(p.Services) == 0 {
+		return ""
+	}
+	for _, want := range primaryNames {
+		for _, s := range p.Services {
+			if s == want {
+				return s
+			}
+		}
+	}
+	return p.Services[0]
+}
+
+// ServiceSpecs はテンプレート用にサービス一覧を組む。
+func (p Params) ServiceSpecs() []ServiceSpec {
+	primary := p.PrimaryService()
+	out := make([]ServiceSpec, 0, len(p.Services))
+	for i, name := range p.Services {
+		out = append(out, ServiceSpec{
+			Name:    name,
+			Logical: logicalID(name),
+			Index:   i,
+			Host:    name + "-${EnvKagerouEnv}." + p.Domain,
+			EnvKey:  envKeyFor(name),
+			Primary: name == primary,
+		})
+	}
+	return out
+}
+
+// logicalID は CFN の論理 ID に使える形(英数字のみ・先頭大文字)に直す。
+func logicalID(name string) string {
+	var b strings.Builder
+	upper := true
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			s := string(r)
+			if upper {
+				s = strings.ToUpper(s)
+				upper = false
+			}
+			b.WriteString(s)
+		default:
+			upper = true // 区切り文字は落として次を大文字に
+		}
+	}
+	return b.String()
+}
+
+// envKeyFor は他サービスの URL を渡す環境変数名(api → API_URL)。
+func envKeyFor(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - 32)
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	b.WriteString("_URL")
+	return b.String()
+}
 
 // DriverFor は構成を決める。既存 kagerou.yaml の driver が最優先で、
 // 無ければ「compute があるか」で決める。

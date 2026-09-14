@@ -516,3 +516,58 @@ func TestScaffoldLambdaFallsBackToApiGatewayWithoutDomain(t *testing.T) {
 		t.Error("ドメイン無しで alb-base を出さない")
 	}
 }
+
+func TestScaffoldMultiServiceOnALB(t *testing.T) {
+	// 複数サービスの環境は ALB の「ホストで分ける」形で出る(DESIGN §13)。
+	dir := t.TempDir()
+	p := Params{Project: "shop", Region: "r", Compute: "lambda", Entrypoint: "alb",
+		Domain: "shop.example.com", Port: "8080",
+		Services: []string{"api", "gateway", "worker"}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		// サービスごとに function / ターゲット / ルール
+		"ApiFunction:", "GatewayFunction:", "WorkerFunction:",
+		"ApiListenerRule:", "GatewayListenerRule:", "WorkerListenerRule:",
+		`Command: ["/api"]`, `Command: ["/gateway"]`,
+		// ホストで分ける(パス分割しない)
+		`api-${EnvKagerouEnv}.shop.example.com`,
+		`gateway-${EnvKagerouEnv}.shop.example.com`,
+		// 優先度は base + 枝番
+		`Priority: !Sub "${EnvRulePriority}0"`,
+		`Priority: !Sub "${EnvRulePriority}2"`,
+		// 相互に URL が届く(発見のための設定が要らない)
+		"API_URL:", "GATEWAY_URL:", "WORKER_URL:",
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("multi-service template missing %q", want)
+		}
+	}
+	if strings.Contains(tp, "PathPattern") || strings.Contains(tp, "path-pattern") {
+		t.Error("パス分割は採らない(DESIGN §10/§13)")
+	}
+	// url_template は代表サービス(gateway が primaryNames で優先される)
+	ky := read(t, dir, "kagerou.yaml")
+	if !strings.Contains(ky, `url_template: "https://gateway-{name}.shop.example.com"`) {
+		t.Errorf("primary service url_template missing: %s", ky)
+	}
+}
+
+func TestScaffoldSingleServiceUnaffected(t *testing.T) {
+	// サービスが 1 つなら従来の単一 function テンプレのまま。
+	dir := t.TempDir()
+	p := Params{Project: "web", Region: "r", Compute: "lambda", Entrypoint: "alb",
+		Domain: "web.example.com", Services: []string{"web"}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	if !strings.Contains(tp, "AppFunction:") || strings.Contains(tp, "WebFunction:") {
+		t.Error("単一サービスは従来テンプレ(AppFunction)のまま")
+	}
+	if !strings.Contains(read(t, dir, "kagerou.yaml"), `url_template: "https://{name}.web.example.com"`) {
+		t.Error("単一サービスの URL にサービス名は付けない")
+	}
+}
