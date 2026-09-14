@@ -29,14 +29,18 @@ type diagnosis struct {
 }
 
 type diagnosisFacts struct {
-	Framework  string   `json:"framework,omitempty"`
-	Services   int      `json:"services"`
-	DBDriver   string   `json:"db_driver,omitempty"`
-	AppPort    string   `json:"app_port,omitempty"`
-	Dockerfile bool     `json:"dockerfile"`
-	LWA        bool     `json:"lambda_web_adapter"`
-	Realtime   bool     `json:"realtime"`
-	Wants      []string `json:"wants,omitempty"`
+	Framework  string `json:"framework,omitempty"`
+	Services   int    `json:"services"`
+	DBDriver   string `json:"db_driver,omitempty"`
+	AppPort    string `json:"app_port,omitempty"`
+	Dockerfile bool   `json:"dockerfile"`
+	// Dockerfiles は見つかった Dockerfile 全部。どれを見て LWA を判定したかが
+	// 分からないと、検出漏れなのか本当に無いのかを読者が切り分けられない(#151)
+	Dockerfiles []string `json:"dockerfiles,omitempty"`
+	LWA         bool     `json:"lambda_web_adapter"`
+	LWAFile     string   `json:"lambda_web_adapter_file,omitempty"`
+	Realtime    bool     `json:"realtime"`
+	Wants       []string `json:"wants,omitempty"`
 }
 
 type diagnosisAssumed struct {
@@ -77,7 +81,8 @@ func cmdDiagnose(args []string, out *os.File) error {
 		Assumed:   diagnosisAssumed{Auth: opts.Auth, AllowFixedCost: opts.AllowFixedCost, ExistingALB: opts.ExistingALB},
 		Facts: diagnosisFacts{
 			Framework: facts.Framework, Services: facts.Services, DBDriver: facts.DBDriver,
-			AppPort: facts.AppPort, Dockerfile: facts.HasDockerfile, LWA: facts.HasLWA,
+			AppPort: facts.AppPort, Dockerfile: facts.HasDockerfile,
+			Dockerfiles: facts.Dockerfiles, LWA: facts.HasLWA, LWAFile: lwaFile(facts),
 			Realtime: facts.Realtime, Wants: wantsList(facts.Wants),
 		},
 	}
@@ -117,9 +122,12 @@ func writeDiagnosis(out *os.File, d diagnosis) error {
 	line("port", d.Facts.AppPort)
 	line("database", d.Facts.DBDriver)
 	if d.Facts.Dockerfile {
-		v := "yes"
+		v := strings.Join(d.Facts.Dockerfiles, ", ")
+		if v == "" {
+			v = "yes"
+		}
 		if d.Facts.LWA {
-			v += " (Lambda Web Adapter present)"
+			v += "  (Lambda Web Adapter in " + d.Facts.LWAFile + ")"
 		}
 		line("dockerfile", v)
 	}
@@ -177,4 +185,12 @@ func wantsList(w appscan.Wants) []string {
 		}
 	}
 	return out
+}
+
+// lwaFile は LWA が入っていたファイル名。入っていなければ空。
+func lwaFile(f appscan.Facts) string {
+	if !f.HasLWA {
+		return ""
+	}
+	return f.DockerfileName
 }

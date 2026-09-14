@@ -30,14 +30,20 @@ type Facts struct {
 	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go / yii / laravel / php
 	DBDriver      string // mysql2 / pg / go-sql-driver/mysql など(空 = DB 依存なし)
 	HasDockerfile bool
-	HasLWA        bool     // その Dockerfile に Lambda Web Adapter が入っているか
-	DockerfileDir string   // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
-	AppPort       string   // Dockerfile の EXPOSE / compose の ports・expose から検出した listen ポート
-	HasTemplate   bool     // ルートに template.yaml があるか
-	Services      int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
-	ServiceNames  []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
-	Realtime      bool     // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
-	Wants         Wants    // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
+	HasLWA        bool   // いずれかの Dockerfile に Lambda Web Adapter が入っているか
+	DockerfileDir string // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
+	// DockerfileName は注入対象のファイル名(既定 "Dockerfile")。`Dockerfile.lambda`
+	// のようにビルド対象で分ける構成があるので、ディレクトリだけでは足りない(#151)。
+	DockerfileName string
+	// Dockerfiles はそのディレクトリで見つかった Dockerfile 全部(ソート済み)。
+	// 複数あるとき「どれに注入するか」を利用者に選ばせるために持つ。
+	Dockerfiles  []string
+	AppPort      string   // Dockerfile の EXPOSE / compose の ports・expose から検出した listen ポート
+	HasTemplate  bool     // ルートに template.yaml があるか
+	Services     int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
+	ServiceNames []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
+	Realtime     bool     // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
+	Wants        Wants    // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
 
 	// URLShape は設定ファイルから推定した URL 構成(kagerou#109 v1):
 	//   "cross" = フロントと API が別オリジン(traefik Host ラベル / nginx
@@ -178,13 +184,31 @@ func scanDir(dir, rel string, f *Facts) {
 	}
 	f.Wants = f.Wants.or(wants)
 
-	if !f.HasDockerfile && exists(filepath.Join(dir, "Dockerfile")) {
-		f.HasDockerfile = true
-		f.DockerfileDir = rel
-		if b, err := os.ReadFile(filepath.Join(dir, "Dockerfile")); err == nil {
-			f.HasLWA = strings.Contains(string(b), "lambda-adapter")
-			if m := exposeRe.FindAllStringSubmatch(string(b), -1); len(m) > 0 {
-				f.AppPort = m[len(m)-1][1] // マルチステージなら最後の EXPOSE
+	if !f.HasDockerfile {
+		if names := dockerfilesIn(dir); len(names) > 0 {
+			f.HasDockerfile = true
+			f.DockerfileDir = rel
+			f.Dockerfiles = names
+			// LWA は **どれか 1 つにでも**入っていれば導入済み。素の Dockerfile が
+			// ECS 用で、Lambda 用が別ファイル、という分け方は珍しくない(#151)
+			for _, n := range names {
+				b, err := os.ReadFile(filepath.Join(dir, n))
+				if err != nil {
+					continue
+				}
+				src := string(b)
+				if strings.Contains(src, "lambda-adapter") {
+					f.HasLWA = true
+					f.DockerfileName = n // 既に入っているファイル = Lambda 用
+				}
+				if f.AppPort == "" {
+					if m := exposeRe.FindAllStringSubmatch(src, -1); len(m) > 0 {
+						f.AppPort = m[len(m)-1][1] // マルチステージなら最後の EXPOSE
+					}
+				}
+			}
+			if f.DockerfileName == "" {
+				f.DockerfileName = names[0]
 			}
 		}
 	}
@@ -740,4 +764,33 @@ func addHost(f *Facts, h string) {
 		}
 	}
 	f.Hosts = append(f.Hosts, h)
+}
+
+// dockerfilesIn は dir 直下の Dockerfile 一式を返す。"Dockerfile" を先頭に、
+// 残り("Dockerfile.lambda" 等)を名前順で続ける。見つからなければ nil。
+func dockerfilesIn(dir string) []string {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var plain bool
+	var rest []string
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		switch {
+		case n == "Dockerfile":
+			plain = true
+		case strings.HasPrefix(n, "Dockerfile."):
+			// .dockerignore 等は拾わない
+			rest = append(rest, n)
+		}
+	}
+	sort.Strings(rest)
+	if plain {
+		return append([]string{"Dockerfile"}, rest...)
+	}
+	return rest
 }

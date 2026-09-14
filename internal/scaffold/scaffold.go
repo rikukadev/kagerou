@@ -554,9 +554,15 @@ func RoutingFor(framework string) string {
 const LWALine = "COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter"
 
 // InjectLWA は Dockerfile の最終ステージ(最後の FROM の直後)に LWA を注入する。
-// 既に入っていれば何もしない。
-func InjectLWA(dir string) (changed bool, err error) {
-	path := filepath.Join(dir, "Dockerfile")
+// 既に入っていれば何もしない。name が空なら "Dockerfile"。
+//
+// name を取るのは、`Dockerfile`(ECS / 本番)と `Dockerfile.lambda` を分けている
+// リポジトリで**用途の違うイメージ定義を書き換えないため**(#151)。
+func InjectLWA(dir, name string) (changed bool, err error) {
+	if name == "" {
+		name = "Dockerfile"
+	}
+	path := filepath.Join(dir, name)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return false, err

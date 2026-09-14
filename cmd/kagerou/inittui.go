@@ -344,7 +344,7 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if m.answer("docker") == 0 {
-				if changed, err := scaffold.InjectLWA(filepath.Join(m.dir, m.det.DockerfileDir)); err != nil {
+				if changed, err := scaffold.InjectLWA(filepath.Join(m.dir, m.det.DockerfileDir), m.det.DockerfileName); err != nil {
 					m.runErr = err
 					m.phase = phaseResult
 					return m, tea.Quit

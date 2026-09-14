@@ -659,3 +659,26 @@ func TestAlbBasePublishesRegionalCertificate(t *testing.T) {
 		t.Error("alb_ 接頭辞が付いている(ALB 専用の値ではない)")
 	}
 }
+
+// #151: 注入先はファイル名まで指定できる。Dockerfile.lambda を使う構成で
+// ECS / 本番用の Dockerfile を書き換えてしまわないため。
+func TestInjectLWATargetsNamedFile(t *testing.T) {
+	dir := t.TempDir()
+	plain := "FROM node:22\nEXPOSE 3000\n"
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(plain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile.lambda"), []byte(plain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := InjectLWA(dir, "Dockerfile.lambda")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if !strings.Contains(read(t, dir, "Dockerfile.lambda"), "lambda-adapter") {
+		t.Error("指定したファイルに注入されていない")
+	}
+	if read(t, dir, "Dockerfile") != plain {
+		t.Error("指定していない Dockerfile を書き換えた")
+	}
+}

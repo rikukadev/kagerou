@@ -28,10 +28,13 @@ type Detection struct {
 	HasDockerfile bool
 	HasLWA        bool
 	DockerfileDir string // Dockerfile のあるディレクトリ(ルート相対。LWA 注入先)
-	AppPort       string
-	HasTemplate   bool
-	Wants         appscan.Wants // 依存から推定した周辺リソース(DynamoDB/SQS/S3/Redis/OpenSearch)
-	Facts         appscan.Facts // 走査結果そのもの(入口の推薦 internal/recommend に渡す)
+	// DockerfileName は注入先のファイル名。Dockerfile.lambda 等に分かれている
+	// 構成で、用途の違うイメージを書き換えないため(#151)
+	DockerfileName string
+	AppPort        string
+	HasTemplate    bool
+	Wants          appscan.Wants // 依存から推定した周辺リソース(DynamoDB/SQS/S3/Redis/OpenSearch)
+	Facts          appscan.Facts // 走査結果そのもの(入口の推薦 internal/recommend に渡す)
 	// Driver は既存 kagerou.yaml の driver。再実行で構成を取り違えないための
 	// 一番強い手掛かりで、推定より優先する(#81)。空 = まだ設定が無い。
 	Driver string
@@ -135,7 +138,8 @@ func Detect(dir string) Detection {
 		Owner: f.Owner, Repo: f.Repo, Region: f.Region,
 		Framework: f.Framework, DBDriver: f.DBDriver,
 		HasDockerfile: f.HasDockerfile, HasLWA: f.HasLWA, DockerfileDir: f.DockerfileDir,
-		AppPort: f.AppPort, HasTemplate: f.HasTemplate, Wants: f.Wants, Facts: f,
+		DockerfileName: f.DockerfileName,
+		AppPort:        f.AppPort, HasTemplate: f.HasTemplate, Wants: f.Wants, Facts: f,
 		VarsSet: map[string]bool{},
 		Driver:  existingDriver(dir),
 	}
