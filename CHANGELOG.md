@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.10.0](https://github.com/rikukadev/kagerou/compare/v0.9.0...v0.10.0) (2026-09-14)
+
+
+### Features
+
+* **alb:** make the ALB base per-app (teams outgrow a single shared one) ([#142](https://github.com/rikukadev/kagerou/issues/142)) ([39ad708](https://github.com/rikukadev/kagerou/commit/39ad708815dff9c4cbb7422d02a2ab6ce3f29d36))
+* **config:** resolve {base_domain} from the preview base SSM contract ([#138](https://github.com/rikukadev/kagerou/issues/138)) ([6044b54](https://github.com/rikukadev/kagerou/commit/6044b5487773040ec96eafb58aebdb4783de27f1))
+* **init:** put lambda behind the shared ALB so custom domains are the default ([#131](https://github.com/rikukadev/kagerou/issues/131)) ([6107233](https://github.com/rikukadev/kagerou/commit/61072330fbe5b05025a0aa7aa8098d83a173d37c))
+* **init:** scaffold {base_domain} when the base was found in SSM ([#145](https://github.com/rikukadev/kagerou/issues/145)) ([7729014](https://github.com/rikukadev/kagerou/commit/772901444540ca026d0daa138d6d9dcb97aa908b))
+
+
+### Bug Fixes
+
+* **basedomain:** look for the base domain in the app's region too ([#143](https://github.com/rikukadev/kagerou/issues/143)) ([31cfea4](https://github.com/rikukadev/kagerou/commit/31cfea403a2297c792100d52367f5899826b3c5e))
+* **dist:** npm の license 表記を Apache-2.0 に直す ([f5f4623](https://github.com/rikukadev/kagerou/commit/f5f46239cea721fa35120fbd27460b686f3e1cf9))
+* **iam-policy:** derive the permissions that only fail under a scoped CI role ([#134](https://github.com/rikukadev/kagerou/issues/134)) ([d4984f6](https://github.com/rikukadev/kagerou/commit/d4984f6a20e976408c426ab3e17662993c6bf788))
+* **iam-policy:** drift 検出を CI に入れ、残る生成器の穴を塞ぐ ([6f32793](https://github.com/rikukadev/kagerou/commit/6f32793b424c7c9425756b58975e213343bf7be4)), closes [#135](https://github.com/rikukadev/kagerou/issues/135)
+
+
+### Documentation
+
+* 姉妹ツールを mahoroba と名指しする ([8dc5d85](https://github.com/rikukadev/kagerou/commit/8dc5d85766d9e98c48e20325482fe6cc20e33a6a))
+
 ## [0.9.0](https://github.com/rikukadev/kagerou/compare/v0.8.0...v0.9.0) (2026-09-13)
 
 
