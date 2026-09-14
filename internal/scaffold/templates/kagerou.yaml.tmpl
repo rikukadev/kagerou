@@ -17,10 +17,14 @@ name_prefix: {{.Project}}- # stack name becomes {{.Project}}-pr-42
 {{- end}}
 {{- if .ECS}}
 ttl: 24h # Fargate は動いている間ずっと課金されるので短め(Lambda 形は 72h)
-readiness_path: /healthz # Fargate の起動は 1〜2 分。応答するまで ready にしない
+readiness_path: {{if .HealthPath}}{{.HealthPath}}{{else}}/healthz{{end}} # Fargate の起動は 1〜2 分。応答するまで ready にしない
 readiness_timeout: 300s
 {{- else}}
 ttl: 72h
+{{- if .HealthPath}}
+# リポジトリのヘルスチェック設定から検出したパス。応答するまで ready にしない
+readiness_path: {{.HealthPath}}
+{{- end}}
 {{- end}}
 {{- if .MultiService}}
 # 複数サービスの環境。ALB では **ホストで分ける**(DESIGN §13)ので、

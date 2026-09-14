@@ -44,7 +44,11 @@ type Params struct {
 	// このときだけ kagerou.yaml に {base_domain} を書ける — 書いた先が実在する
 	// と分かっているため(#139)。
 	DomainFromSSM bool
-	SetupBase     bool // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+	// HealthPath はアプリのヘルスチェック用パス(appscan 検出、#165)。
+	// readiness の既定 "/" はルートが重い SSR で無駄に遅く、リダイレクトする
+	// アプリでは誤判定する。**検出できたときだけ** readiness_path に書く。
+	HealthPath string
+	SetupBase  bool // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
 	Routing string

@@ -682,3 +682,29 @@ func TestInjectLWATargetsNamedFile(t *testing.T) {
 		t.Error("指定していない Dockerfile を書き換えた")
 	}
 }
+
+// #165: 検出できたヘルスチェックのパスを readiness_path に書く。
+// 既定の "/" は、ルートが重い SSR で無駄に遅く、リダイレクトするアプリで誤判定する。
+func TestScaffoldUsesDetectedHealthPath(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "web", Region: "r", Compute: "lambda", Port: "3000", HealthPath: "/healthz"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if ky := read(t, dir, "kagerou.yaml"); !strings.Contains(ky, "readiness_path: /healthz") {
+		t.Errorf("検出したパスを使っていない:\n%s", ky)
+	}
+}
+
+func TestScaffoldOmitsReadinessWithoutEvidence(t *testing.T) {
+	// 検出できなければ書かない。当てずっぽうのパスを readiness にすると
+	// up が落ちる(200 が返らない)
+	dir := t.TempDir()
+	p := Params{Project: "web", Region: "r", Compute: "lambda", Port: "3000"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if ky := read(t, dir, "kagerou.yaml"); strings.Contains(ky, "readiness_path") {
+		t.Errorf("根拠が無いのに readiness_path を書いている:\n%s", ky)
+	}
+}
