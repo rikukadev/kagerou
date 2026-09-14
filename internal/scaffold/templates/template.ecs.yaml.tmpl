@@ -5,7 +5,7 @@ Description: >
   are read via SSM dynamic references, so nothing has to be wired by hand.
 
 # アプリに届けたい値は Env<Key>(kagerou CONTRACT §4)。共有 ALB 側の値は
-# ベースが書いた SSM(/kagerou/base/_shared-alb/*)を {{"{{"}}resolve:ssm{{"}}"}} で読む。
+# ベースが書いた SSM(/kagerou/base/{{.Project}}/alb_*)を {{"{{"}}resolve:ssm{{"}}"}} で読む。
 Parameters:
   EnvKagerouEnv:
     Type: String
@@ -140,7 +140,7 @@ Resources:
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      VpcId: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/vpc_id{{"}}"}}"
+      VpcId: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_vpc_id{{"}}"}}"
       Port: {{if .Port}}{{.Port}}{{else}}8080{{end}}
       Protocol: HTTP
       TargetType: ip
@@ -157,7 +157,7 @@ Resources:
   ListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
-      ListenerArn: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/listener_arn{{"}}"}}"
+      ListenerArn: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_listener_arn{{"}}"}}"
       Priority: !Ref EnvRulePriority
       Conditions:
         - Field: host-header
@@ -171,7 +171,7 @@ Resources:
     Type: AWS::ECS::Service
     DependsOn: ListenerRule
     Properties:
-      Cluster: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/cluster{{"}}"}}"
+      Cluster: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_cluster{{"}}"}}"
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: 1
       LaunchType: FARGATE
@@ -179,9 +179,9 @@ Resources:
         AwsvpcConfiguration:
           # ベースの判断に従う: 既定は公開サブネット + public IP(NAT を立てない)。
           # alb-base に TaskSubnetIds(プライベート)を渡した運用なら DISABLED になる
-          AssignPublicIp: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/assign_public_ip{{"}}"}}"
-          Subnets: !Split [",", "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/subnets{{"}}"}}"]
-          SecurityGroups: ["{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/task_security_group{{"}}"}}"]
+          AssignPublicIp: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_assign_public_ip{{"}}"}}"
+          Subnets: !Split [",", "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_subnets{{"}}"}}"]
+          SecurityGroups: ["{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_task_security_group{{"}}"}}"]
       LoadBalancers:
         - ContainerName: app
           ContainerPort: {{if .Port}}{{.Port}}{{else}}8080{{end}}

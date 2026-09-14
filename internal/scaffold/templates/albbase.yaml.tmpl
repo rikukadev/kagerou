@@ -1,14 +1,28 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  kagerou ALB base — shared load balancer for container preview environments.
-  Deploy ONCE per account/VPC (in the app's region, unlike the CloudFront base).
-  ALB has a fixed monthly cost, so it must be shared: environments only add a
-  listener rule and a target group (both free).
+  kagerou ALB base — the entrypoint for one app's preview environments.
+  Deploy ONCE per app (project), in the app's region (unlike the CloudFront base,
+  which lives in us-east-1). Environments only add a listener rule and a target
+  group (both free); the ALB itself carries the fixed monthly cost.
+
+  per-app なのは、チームごとに使うから 1 本では足りなくなるため(リスナールールは
+  既定 100 本、証明書は 25 枚の上限もある)。1 本を全アプリで共有したい場合は
+  Project に _shared-alb を渡せば、その名前空間に SSM が書かれる(DESIGN §11.3)。
+
+  デプロイ(アプリごとに 1 回、アプリのリージョンで):
+    aws cloudformation deploy --stack-name kagerou-alb-base-<project> \\
+      --template-file deploy/alb-base.yaml \\
+      --parameter-overrides Project=<project> DomainName=<project>.example.com \\
+        HostedZoneId=<zone> VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>
 
 Parameters:
+  Project:
+    Type: String
+    AllowedPattern: "[a-z_]([a-z0-9_-]*[a-z0-9])?"
+    Description: kagerou project name; namespaces the SSM contract and every resource
   DomainName:
     Type: String
-    Description: Wildcard domain for previews, e.g. ecs.example.com (URLs become pr-42.ecs.example.com)
+    Description: This app's preview domain, e.g. todo.example.com (URLs become pr-42.todo.example.com)
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
   VpcId:
@@ -94,7 +108,7 @@ Resources:
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: kagerou-preview
+      ClusterName: !Sub "kagerou-preview-${Project}"
 
   WildcardRecord:
     Type: AWS::Route53::RecordSet
@@ -110,38 +124,38 @@ Resources:
   SsmDomain:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/domain
+      Name: !Sub "/kagerou/base/${Project}/domain"
       Type: String
       Value: !Ref DomainName
   SsmListener:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/listener_arn
+      Name: !Sub "/kagerou/base/${Project}/alb_listener_arn"
       Type: String
       Value: !Ref Listener
   SsmCluster:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/cluster
+      Name: !Sub "/kagerou/base/${Project}/alb_cluster"
       Type: String
       Value: !Ref Cluster
   SsmVpc:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/vpc_id
+      Name: !Sub "/kagerou/base/${Project}/alb_vpc_id"
       Type: String
       Value: !Ref VpcId
   SsmSubnets:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/subnets
+      Name: !Sub "/kagerou/base/${Project}/alb_subnets"
       Type: StringList
       # タスクが使うサブネット。TaskSubnetIds があればそちら(プライベート運用)
       Value: !If [HasTaskSubnets, !Ref TaskSubnetIds, !Join [",", !Ref SubnetIds]]
   SsmAssignPublicIp:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/assign_public_ip
+      Name: !Sub "/kagerou/base/${Project}/alb_assign_public_ip"
       Type: String
       # プライベートサブネットなら public IP を付けない(付けても意味がなく、
       # 組織ポリシーで禁止されていることも多い)
@@ -149,7 +163,7 @@ Resources:
   SsmTaskSg:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /kagerou/base/_shared-alb/task_security_group
+      Name: !Sub "/kagerou/base/${Project}/alb_task_security_group"
       Type: String
       Value: !Ref TaskSecurityGroup
 

@@ -354,12 +354,12 @@ func TestScaffoldComputeECS(t *testing.T) {
 	}
 	tp := read(t, dir, "template.yaml")
 	for _, want := range []string{
-		"resolve:ssm:/kagerou/base/_shared-alb/listener_arn",
-		"resolve:ssm:/kagerou/base/_shared-alb/cluster",
-		"resolve:ssm:/kagerou/base/_shared-alb/vpc_id",
-		"resolve:ssm:/kagerou/base/_shared-alb/subnets",
-		"resolve:ssm:/kagerou/base/_shared-alb/task_security_group",
-		"resolve:ssm:/kagerou/base/_shared-alb/assign_public_ip", // ベースの判断に追従
+		"resolve:ssm:/kagerou/base/relay/alb_listener_arn",
+		"resolve:ssm:/kagerou/base/relay/alb_cluster",
+		"resolve:ssm:/kagerou/base/relay/alb_vpc_id",
+		"resolve:ssm:/kagerou/base/relay/alb_subnets",
+		"resolve:ssm:/kagerou/base/relay/alb_task_security_group",
+		"resolve:ssm:/kagerou/base/relay/alb_assign_public_ip", // ベースの判断に追従
 		"AWS::ElasticLoadBalancingV2::ListenerRule",
 		"AWS::ECS::Service", "FARGATE",
 		"EnvImageUri:", "EnvRulePriority:",
@@ -378,7 +378,7 @@ func TestScaffoldComputeECS(t *testing.T) {
 	// 共有 ALB base が同梱される
 	ab := read(t, dir, "deploy/alb-base.yaml")
 	for _, want := range []string{
-		"/kagerou/base/_shared-alb/listener_arn",
+		"alb_listener_arn",
 		"TaskSubnetIds",  // 既存プライベートサブネットに乗るノブ
 		"HasTaskSubnets", // 指定時のみ DISABLED に切り替わる
 		"assign_public_ip",
@@ -465,7 +465,7 @@ func TestScaffoldLambdaOnALB(t *testing.T) {
 	for _, want := range []string{
 		"TargetType: lambda",
 		"AlbInvokePermission", "elasticloadbalancing.amazonaws.com",
-		"AlbListenerRule", "resolve:ssm:/kagerou/base/_shared-alb/listener_arn",
+		"AlbListenerRule", "resolve:ssm:/kagerou/base/web/alb_listener_arn",
 		"EnvRulePriority", "EnvKagerouUrl",
 		"AWS::Serverless::Function", // LWA で包むのは変わらない
 	} {
@@ -480,7 +480,7 @@ func TestScaffoldLambdaOnALB(t *testing.T) {
 		}
 	}
 	// 共有 ALB ベースが同梱され、URL は独自ドメイン
-	if !strings.Contains(read(t, dir, "deploy/alb-base.yaml"), "_shared-alb/listener_arn") {
+	if !strings.Contains(read(t, dir, "deploy/alb-base.yaml"), "alb_listener_arn") {
 		t.Error("alb-base should be scaffolded for lambda+alb")
 	}
 	ky := read(t, dir, "kagerou.yaml")
@@ -569,5 +569,39 @@ func TestScaffoldSingleServiceUnaffected(t *testing.T) {
 	}
 	if !strings.Contains(read(t, dir, "kagerou.yaml"), `url_template: "https://{name}.web.example.com"`) {
 		t.Error("単一サービスの URL にサービス名は付けない")
+	}
+}
+
+func TestAlbBaseIsPerApp(t *testing.T) {
+	// ALB も per-app(CloudFront base と同じ思想)。チームごとに使うので 1 本では
+	// 足りなくなる + リスナールール/証明書の上限もある。
+	dir := t.TempDir()
+	p := Params{Project: "todo", Region: "r", Compute: "ecs", Domain: "todo.example.com"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	ab := read(t, dir, "deploy/alb-base.yaml")
+	for _, want := range []string{
+		"Project:", // project をパラメータに取る
+		"/kagerou/base/${Project}/domain",
+		"/kagerou/base/${Project}/alb_listener_arn",
+		"kagerou-preview-${Project}", // クラスタ名も衝突しない
+	} {
+		if !strings.Contains(ab, want) {
+			t.Errorf("alb-base missing %q", want)
+		}
+	}
+	// キーは名前空間つき。共有(_shared-alb)は Project に渡したときだけ
+	// = テンプレートにハードコードされていないこと
+	if strings.Contains(ab, "Name: /kagerou/base/_shared-alb") {
+		t.Error("既定では共有名前空間に書かない(共有はオプトイン)")
+	}
+	// 環境テンプレは自分の project のキーだけを読む
+	tp := read(t, dir, "template.yaml")
+	if !strings.Contains(tp, "resolve:ssm:/kagerou/base/todo/alb_listener_arn") {
+		t.Errorf("env template should read its own project's keys:\n%s", tp)
+	}
+	if strings.Contains(tp, "_shared-alb") {
+		t.Error("env template が共有名前空間を読んでいる")
 	}
 }
