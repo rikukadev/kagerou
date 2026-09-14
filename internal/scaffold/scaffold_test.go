@@ -640,3 +640,22 @@ func TestScaffoldBaseDomainPlaceholder(t *testing.T) {
 		})
 	}
 }
+
+// #133: ALB ベースが作る証明書は regional。ARN を公開していないと、
+// API Gateway のカスタムドメインを使いたい人が 2 枚目を立てることになる
+// (preview base のものは us-east-1 固定で受け付けられない)。
+func TestAlbBasePublishesRegionalCertificate(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "todo", Region: "r", Compute: "ecs", Domain: "todo.example.com"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	ab := read(t, dir, "deploy/alb-base.yaml")
+	if !strings.Contains(ab, "/kagerou/base/${Project}/regional_certificate_arn") {
+		t.Error("regional 証明書の ARN を SSM に公開していない")
+	}
+	// ALB 専用ではないので alb_ 接頭辞は付けない(契約 §9)
+	if strings.Contains(ab, "alb_certificate") {
+		t.Error("alb_ 接頭辞が付いている(ALB 専用の値ではない)")
+	}
+}

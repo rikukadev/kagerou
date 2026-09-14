@@ -127,6 +127,16 @@ Resources:
       Name: !Sub "/kagerou/base/${Project}/domain"
       Type: String
       Value: !Ref DomainName
+  # regional な証明書。**ALB 専用ではない**ので alb_ を付けていない(#133)。
+  # preview base(CloudFront)の証明書は us-east-1 固定で、API Gateway の
+  # カスタムドメイン・ALB・AppSync はどれも受け付けない。同じ *.<domain> を
+  # 覆うので、regional な入口が要るときは 2 枚目を立てずにこれを使う。
+  SsmRegionalCertificate:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/regional_certificate_arn"
+      Type: String
+      Value: !Ref Certificate
   SsmListener:
     Type: AWS::SSM::Parameter
     Properties:

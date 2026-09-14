@@ -276,7 +276,17 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 /kagerou/base/<project>/alb_subnets              # タスクを置くサブネット(カンマ区切り)
 /kagerou/base/<project>/alb_task_security_group
 /kagerou/base/<project>/alb_assign_public_ip     # ENABLED | DISABLED
+
+# ALB ベースが作る **regional** な ACM 証明書(*.<domain>)。ALB 専用ではないので
+# alb_ を付けない。API Gateway のカスタムドメイン・AppSync もこれを使う
+/kagerou/base/<project>/regional_certificate_arn
 ```
+
+**証明書はリージョンで用途が分かれる。** CloudFront は us-east-1 の証明書しか
+受けず、API Gateway のカスタムドメイン(regional)・ALB・AppSync は逆に
+us-east-1 のものを受けない。preview base が作るのは前者、ALB ベースが作るのは
+後者で、どちらも同じ `*.<domain>` を覆う(ワイルドカードは 1 ラベル分)。
+**regional な入口が要るとき、2 枚目を立てる必要はない**(#133)。
 
 **ALB も per-app が既定**(CloudFront ベースと同じ)。チームごとに使うので 1 本では
 足りなくなるうえ、リスナールール(既定 100)と証明書(25)の上限もある。

@@ -54,6 +54,9 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # **CloudFront 専用**。CloudFront は us-east-1 の証明書しか受けず、逆に
+  # API Gateway のカスタムドメイン(regional)・ALB・AppSync は us-east-1 の
+  # ものを受けない。それらには alb-base が書く regional_certificate_arn を使う(#133)
   Certificate:
     Type: AWS::CertificateManager::Certificate
     Properties:
