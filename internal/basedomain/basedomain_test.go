@@ -102,3 +102,48 @@ func TestResolveNotFoundListsKeys(t *testing.T) {
 		}
 	}
 }
+
+// ALB ベースは **アプリのリージョン** に /kagerou/base/<project>/domain を書く
+// (CloudFront ベースだけが us-east-1)。#131 以降 ALB が既定の入口なので、
+// us-east-1 しか見ないと既定構成の {base_domain} が必ず失敗する。
+func TestResolveProjectKeyInAppRegion(t *testing.T) {
+	stub(t, map[string]string{
+		"ap-northeast-1 /kagerou/base/todo/domain": "todo.example.com",
+	})
+	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	if err != nil {
+		t.Fatalf("ALB ベースのドメインを解決できていない: %v", err)
+	}
+	if d != "todo.example.com" || k != "/kagerou/base/todo/domain" {
+		t.Errorf("got %q %q", d, k)
+	}
+}
+
+// 両方のベースがある(static は CloudFront、compute は ALB)構成。
+// domain は入口によらず同じ値なので、どちらを採っても結果は変わらない。
+func TestResolveWorksWithBothBases(t *testing.T) {
+	stub(t, map[string]string{
+		"ap-northeast-1 /kagerou/base/todo/domain": "todo.example.com",
+		"us-east-1 /kagerou/base/todo/domain":      "todo.example.com",
+	})
+	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	if err != nil || d != "todo.example.com" {
+		t.Errorf("got %q %v", d, err)
+	}
+}
+
+// region が us-east-1 のときに同じキーを 2 回引きに行かない。
+func TestResolveNoDuplicateLookupInUsEast1(t *testing.T) {
+	var calls int
+	orig := getParameter
+	t.Cleanup(func() { getParameter = orig })
+	getParameter = func(_ context.Context, region, key string) (string, error) {
+		calls++
+		return "", errors.New("ParameterNotFound")
+	}
+	_, _, _ = Resolve(context.Background(), "todo", "us-east-1")
+	// project / _shared / _shared-alb の 3 本だけ
+	if calls != 3 {
+		t.Errorf("引いた回数 = %d (want 3)", calls)
+	}
+}
