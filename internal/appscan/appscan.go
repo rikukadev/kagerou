@@ -61,7 +61,11 @@ type Facts struct {
 	URLShape string
 	Hosts    []string // traefik / nginx に書かれていた実ホスト名(最大 4、参考表示用)
 
-	pathHint, crossHint bool // 走査中の中間信号。URLShape は Scan の最後に確定する
+	// 走査中の中間信号。URLShape は Scan の最後に確定する。
+	//   pathHint     本番のパス分割(next rewrites)。デプロイ後もそう配られる
+	//   crossHint    別オリジン前提の傍証(CORS の依存 / 手書きの CORS ヘッダ / *_API_URL)
+	//   devProxyHint 開発時だけのパス分割(vite server.proxy)。localhost の話でしかない
+	pathHint, crossHint, devProxyHint bool
 }
 
 // Wants は依存関係(package.json / go.mod / compose)から推定した、アプリが
@@ -117,7 +121,12 @@ func Scan(dir string) Facts {
 	// CI の workflow はルートにしか無いので walk の外で読む
 	f.PublishesImage, f.ImageRegistry = scanWorkflows(dir)
 
-	// URL 構成の確定。明示のホスト名 > パス分割の意図 > クロスオリジンの傍証。
+	// URL 構成の確定。証拠が「デプロイ後の形」をどれだけ直接に語るかの順に見る:
+	//   明示のホスト名 > 本番のパス分割 > 別オリジンの傍証 > 開発時だけのパス分割
+	//
+	// vite の server.proxy が最後なのは、あれが localhost の話でしかないため。
+	// SPA + API のリポジトリはほぼ必ず持っているので、これを上に置くと
+	// 「本番は別オリジン、開発だけ同一オリジン」の構成を全部取り違える。
 	switch {
 	case len(f.Hosts) > 0:
 		f.URLShape = "cross"
@@ -125,6 +134,8 @@ func Scan(dir string) Facts {
 		f.URLShape = "path"
 	case f.crossHint:
 		f.URLShape = "cross"
+	case f.devProxyHint:
+		f.URLShape = "path"
 	}
 	return f
 }
@@ -256,10 +267,25 @@ func serviceCount(dir string) int {
 	if m := cmdMainCount(dir); m > n {
 		n = m
 	}
-	if n == 0 && exists(filepath.Join(dir, "Dockerfile")) {
+	if n == 0 && (exists(filepath.Join(dir, "Dockerfile")) || goModuleMain(dir)) {
 		n = 1
 	}
 	return n
+}
+
+var packageMainRe = regexp.MustCompile(`(?m)^package\s+main\b`)
+
+// goModuleMain は「go.mod の直下に package main がある」= コンテナ化されていない
+// Go のサーバか。cmd/<name>/ に分けず main.go を直置きする構成は普通にあり、
+// Dockerfile も compose も無い(zip Lambda 等)とサービス数が 0 に見えてしまう。
+// go.mod を要求するのは、サービスではない main.go(生成スクリプト等)を
+// 数えないため。
+func goModuleMain(dir string) bool {
+	if !exists(filepath.Join(dir, "go.mod")) {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "main.go"))
+	return err == nil && packageMainRe.Match(b)
 }
 
 var composeServiceEntryRe = regexp.MustCompile(`(?m)^  ([a-zA-Z0-9_.-]+):\s*$`)
@@ -711,7 +737,20 @@ var (
 	apiURLEnvRe   = regexp.MustCompile(`(?m)[A-Z][A-Z0-9_]*(API|BACKEND)[A-Z0-9_]*URL\s*[:=]`)
 )
 
-// scanURLShape は設定ファイルから URL 構成の信号を拾う(コードは読まない)。
+// corsFiles は「CORS を自前で実装している」ことが名前から分かるファイル。
+// 依存の CORS ミドルウェアを使わず手で書く構成は普通にあり(net/http に
+// ヘッダを足すだけで済む)、依存だけ見ていると素通りする。
+//
+// 走査は **この名前のファイルだけ** に限る。全ソースを grep すると走査量が
+// 跳ね上がり、「ファイルしか読まない・ベストエフォート」の釣り合いが崩れる。
+var corsFiles = []string{
+	"cors.go", "cors.ts", "cors.js", "cors.mjs", "cors.py", "cors.rb",
+	"middleware/cors.go", "middleware/cors.ts", "middleware/cors.js",
+}
+
+// scanURLShape は設定ファイルから URL 構成の信号を拾う。
+// コードのリテラル(URL など)は読まない。読むのは CORS ヘッダ名という
+// 固定文字列だけで、これはノイズにならず信号が強い。
 func scanURLShape(dir string, f *Facts) {
 	// 依存の CORS ミドルウェア = クロスオリジン前提の傍証
 	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
@@ -725,14 +764,26 @@ func scanURLShape(dir string, f *Facts) {
 			f.crossHint = true
 		}
 	}
-	// vite の dev proxy / next の rewrites = 同一オリジン・パス分割の意図
-	for _, name := range []string{"vite.config.ts", "vite.config.js", "vite.config.mjs"} {
-		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
-			if s := string(b); strings.Contains(s, "proxy") && strings.Contains(s, "/api") {
-				f.pathHint = true
+	// 手書きの CORS。名前で当たりを付けてから中身で確認する(cors.go という
+	// 名前だけで決めると、CORS を「無効にする」コードまで cross と読んでしまう)
+	if !f.crossHint {
+		for _, name := range corsFiles {
+			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(name)))
+			if err == nil && strings.Contains(string(b), "Access-Control-Allow-Origin") {
+				f.crossHint = true
+				break
 			}
 		}
 	}
+	// vite の dev proxy = 開発時だけのパス分割。本番の形は何も語らない
+	for _, name := range []string{"vite.config.ts", "vite.config.js", "vite.config.mjs"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			if s := string(b); strings.Contains(s, "proxy") && strings.Contains(s, "/api") {
+				f.devProxyHint = true
+			}
+		}
+	}
+	// next の rewrites = 本番でもパスで分ける意図
 	for _, name := range []string{"next.config.js", "next.config.mjs", "next.config.ts"} {
 		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
 			if strings.Contains(string(b), "rewrites") {

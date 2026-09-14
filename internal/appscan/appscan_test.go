@@ -230,6 +230,47 @@ volumes:
 		t.Fatal("realtime を誤検知している")
 	}
 }
+func TestScanServicesGoModuleMain(t *testing.T) {
+	// 3tier 型のうち、Dockerfile も compose も cmd/ も無い構成(zip Lambda)。
+	// go.mod の直下に main.go を置く Go サーバをサービスに数えないと、
+	// recommend が compute 無しと見て「サーバが見つからない」と誤判定する。
+	dir := t.TempDir()
+	for _, d := range []string{"api", "web"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, dir, "api/go.mod", "module m\nrequire github.com/go-sql-driver/mysql v1.10.0\n")
+	write(t, dir, "api/main.go", "package main\n\nfunc main() {}\n")
+	write(t, dir, "web/package.json", `{"dependencies":{"react":"19"}}`)
+
+	f := Scan(dir)
+	if f.Services != 1 {
+		t.Fatalf("Services = %d, want 1 (go.mod 直下の main)", f.Services)
+	}
+	if f.HasDockerfile {
+		t.Error("Dockerfile は無い")
+	}
+
+	// go.mod の無い main.go(生成スクリプト等)はサービスに数えない
+	dir2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir2, "gen"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir2, "gen/main.go", "package main\n\nfunc main() {}\n")
+	if got := Scan(dir2).Services; got != 0 {
+		t.Fatalf("Services = %d, want 0 (go.mod が無い main.go)", got)
+	}
+
+	// package main でなければ数えない
+	dir3 := t.TempDir()
+	write(t, dir3, "go.mod", "module m\n")
+	write(t, dir3, "main.go", "package app\n")
+	if got := Scan(dir3).Services; got != 0 {
+		t.Fatalf("Services = %d, want 0 (package main ではない)", got)
+	}
+}
+
 func TestURLShapeCrossFromTraefik(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "compose.yaml", "services:\n  web:\n    labels:\n      - traefik.http.routers.web.rule=Host(`app.example.com`)\n  api:\n    labels:\n      - traefik.http.routers.api.rule=Host(`api.example.com`)\n")
@@ -258,6 +299,44 @@ func TestURLShapeCrossFromNginxAndCors(t *testing.T) {
 	write(t, dir3, "go.mod", "module m\nrequire github.com/rs/cors v1.11.0\n")
 	if f := Scan(dir3); f.URLShape != "cross" {
 		t.Fatalf("rs/cors should hint cross: %q", f.URLShape)
+	}
+}
+
+func TestURLShapeCrossFromHandwrittenCORS(t *testing.T) {
+	// 3tier-demo 型: CORS ミドルウェアの依存を持たず、api/cors.go に手で書く。
+	// 依存だけ見ていると別オリジン構成を素通りする
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "api/go.mod", "module m\n")
+	write(t, dir, "api/cors.go", `package main
+
+func withCORS(next http.Handler) http.Handler {
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+}
+`)
+	if f := Scan(dir); f.URLShape != "cross" {
+		t.Fatalf("手書き CORS を cross として拾えていない: %q", f.URLShape)
+	}
+
+	// vite の dev proxy が同居していても cross のまま。あれは localhost の
+	// 話でしかなく、本番のヘッダを上書きする証拠にはならない(3tier-demo の形)
+	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "web/package.json", `{"dependencies":{"react":"19"}}`)
+	write(t, dir, "web/vite.config.ts", `export default { server: { proxy: { "/api": "http://127.0.0.1:8080" } } }`)
+	if f := Scan(dir); f.URLShape != "cross" {
+		t.Fatalf("dev proxy が本番の CORS を上書きしている: %q", f.URLShape)
+	}
+
+	// 名前だけでは決めない(CORS ヘッダを書いていなければ信号にしない)
+	dir2 := t.TempDir()
+	write(t, dir2, "go.mod", "module m\n")
+	write(t, dir2, "cors.go", "package main\n\n// CORS は使わない\n")
+	if f := Scan(dir2); f.URLShape != "" {
+		t.Fatalf("ファイル名だけで cross にしている: %q", f.URLShape)
 	}
 }
 
