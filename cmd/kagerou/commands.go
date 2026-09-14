@@ -635,8 +635,17 @@ func cmdReap(args []string, out *os.File) error {
 // loadTemplateFacts はテンプレートを読んで TemplateFacts を返す(#71)。
 // kagerou.yaml の template(既定 packaged.yaml は CI 生成物なので無いことがある)
 // が読めなければ素の template.yaml に落ち、どちらも無ければ nil(フラグ挙動)。
-func loadTemplateFacts(templatePath string) *iampolicy.TemplateFacts {
-	for _, p := range []string{templatePath, "template.yaml"} {
+//
+// 落ち先は **設定ファイルの隣**を先に見る。カレント直下の template.yaml だけを
+// 見ていると、設定を別ディレクトリに置いた構成(e2e/aws/<構成>/kagerou.yaml が
+// それ)で素のテンプレートを見つけられず、権限を静かに取りこぼす。
+func loadTemplateFacts(templatePath, cfgPath string) *iampolicy.TemplateFacts {
+	candidates := []string{templatePath}
+	if d := filepath.Dir(cfgPath); d != "" && d != "." {
+		candidates = append(candidates, filepath.Join(d, "template.yaml"))
+	}
+	candidates = append(candidates, "template.yaml")
+	for _, p := range candidates {
 		if p == "" {
 			continue
 		}
@@ -737,14 +746,14 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		// それ)。その場合アタッチされているのは和集合なので、生成側も
 		// 和集合にしないと「他構成のための権限」が過剰権限として出て、
 		// 本当に見たい missing が埋もれる(#135)
-		build := func(c config.Config) (iampolicy.Policy, error) {
+		build := func(c config.Config, path string) (iampolicy.Policy, error) {
 			ecrRepoName := *ecrRepo
 			if ecrRepoName == "" {
 				ecrRepoName = c.Project
 			}
 			// テンプレートが読めれば「テンプレートが作るもの」はそこから導出する(#71)。
 			// packaged.yaml(CI 生成物)が無ければ素の template.yaml に落ちる。
-			facts := loadTemplateFacts(c.Template)
+			facts := loadTemplateFacts(c.Template, path)
 			if facts != nil {
 				for _, u := range facts.Unknown {
 					fmt.Fprintf(os.Stderr, "kagerou iam-policy: no permission mapping for %s — the generated policy does NOT cover it; add statements by hand\n", u)
@@ -779,7 +788,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			})
 		}
 		pols := make([]iampolicy.Policy, 0, 1+len(alsoCfg))
-		first, err := build(cfg)
+		first, err := build(cfg, *cfgPath)
 		if err != nil {
 			return err
 		}
@@ -789,7 +798,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			if err != nil {
 				return fmt.Errorf("--also-config %s: %w", path, err)
 			}
-			p, err := build(c)
+			p, err := build(c, path)
 			if err != nil {
 				return fmt.Errorf("--also-config %s: %w", path, err)
 			}

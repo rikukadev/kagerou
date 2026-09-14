@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestKVFlag(t *testing.T) {
 	f := kvFlag{}
@@ -51,5 +55,28 @@ func TestParseUpFlagsAndConfigMerge(t *testing.T) {
 	}
 	if cfg.Template != "template.yaml" {
 		t.Fatalf("default template expected: %+v", cfg)
+	}
+}
+
+// 設定を別ディレクトリに置き、template が CI 生成物(手元には無い)を指す構成。
+// 落ち先がカレント直下の template.yaml 固定だと素のテンプレートを見つけられず、
+// 権限を静かに取りこぼす(CI だけ落ちる形で実際に踏んだ)。
+func TestLoadTemplateFactsFallsBackNextToConfig(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "e2e", "ssr")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := "Resources:\n  Fn:\n    Type: AWS::Serverless::Function\n    Properties:\n      PackageType: Image\n"
+	if err := os.WriteFile(filepath.Join(sub, "template.yaml"), []byte(tmpl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// packaged.yaml は存在しない(CI で作られる)
+	facts := loadTemplateFacts(filepath.Join(dir, "packaged.yaml"), filepath.Join(sub, "kagerou.yaml"))
+	if facts == nil {
+		t.Fatal("設定の隣の template.yaml に落ちていない")
+	}
+	if !facts.HasContainerImage {
+		t.Error("落ちた先のテンプレートを読めていない")
 	}
 }
