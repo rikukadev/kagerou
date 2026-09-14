@@ -421,6 +421,11 @@ type TrustOptions struct {
 	Repo    string // owner/name(必須)。OIDC の sub を repo:owner/name:... に固定する
 	Account string // AWS アカウント ID。空なら AccountPlaceholder を埋める
 	Branch  string // 既定ブランチ(schedule の reap 等が assume する)。空なら main
+	// OwnerID / RepoID は immutable subject(新しい org の既定)の sub 形式
+	//   repo:<owner>@<ownerID>/<repo>@<repoID>:<context>
+	// を組むための数値 id。両方そろったときだけ、その形式も許可に加える(#118)。
+	OwnerID string
+	RepoID  string
 }
 
 // BuildTrust は GitHub Actions OIDC 用の trust policy を組む。
@@ -440,9 +445,22 @@ func BuildTrust(o TrustOptions) (TrustPolicy, error) {
 		branch = "main"
 	}
 	providerArn := fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", acct, githubOIDCHost)
-	subs := []string{
-		fmt.Sprintf("repo:%s:pull_request", o.Repo),              // preview は pull_request イベント
-		fmt.Sprintf("repo:%s:ref:refs/heads/%s", o.Repo, branch), // reap の schedule / 手動実行
+	// 許す context は 2 つ(preview の pull_request と、reap の schedule / 手動実行)。
+	// immutable subject が有効なリポジトリではトークンの sub が id 入りの形で来るので、
+	// 両方の形式を並べる。**古典形式だけだと StringEquals は一生マッチせず**、
+	// 症状は sts:AssumeRoleWithWebIdentity の Not authorized — trust の JSON は
+	// 正しく見えるので原因が遠い
+	contexts := []string{"pull_request", "ref:refs/heads/" + branch}
+	repos := []string{o.Repo}
+	if o.OwnerID != "" && o.RepoID != "" {
+		owner, name, _ := strings.Cut(o.Repo, "/")
+		repos = append(repos, fmt.Sprintf("%s@%s/%s@%s", owner, o.OwnerID, name, o.RepoID))
+	}
+	var subs []string
+	for _, r := range repos {
+		for _, c := range contexts {
+			subs = append(subs, fmt.Sprintf("repo:%s:%s", r, c))
+		}
 	}
 	return TrustPolicy{
 		Version: "2012-10-17",

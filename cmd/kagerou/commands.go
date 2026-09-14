@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -716,6 +717,8 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	repo := fs.String("repo", "", "owner/name for the OIDC trust policy (--doc trust)")
 	account := fs.String("account", "", "AWS account ID for ARNs in --doc trust / boundary (default: placeholder)")
 	branch := fs.String("branch", "", "default branch allowed to assume (--doc trust, default main)")
+	ownerID := fs.String("owner-id", "", "numeric owner id for the immutable-subject sub form (--doc trust; looked up with gh when omitted)")
+	repoID := fs.String("repo-id", "", "numeric repo id for the immutable-subject sub form (--doc trust; looked up with gh when omitted)")
 	regions := fs.String("regions", "", "comma-separated regions for --doc boundary (default: region in kagerou.yaml)")
 	boundaryArn := fs.String("boundary-arn", "", "ARN of this boundary policy (--doc boundary, default derived from --account)")
 	// --doc execution 用 / drift 検出
@@ -818,7 +821,28 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		})
 		note = "attach as the Lambda execution (runtime) role; declare app ARNs with --allow"
 	case "trust":
-		tp, terr := iampolicy.BuildTrust(iampolicy.TrustOptions{Repo: *repo, Account: *account, Branch: *branch})
+		// immutable subject(新しい org の既定)ではトークンの sub に数値 id が入る。
+		// 明示されなければ gh で引く — 手で調べさせると、忘れたときの症状が
+		// 「Not authorized」だけで原因に辿り着けない(#118)
+		oid, rid := *ownerID, *repoID
+		if (oid == "" || rid == "") && *repo != "" {
+			if o, r, ok := lookupRepoIDs(*repo); ok {
+				if oid == "" {
+					oid = o
+				}
+				if rid == "" {
+					rid = r
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "kagerou iam-policy: could not look up the numeric ids for %s with gh — "+
+					"emitting the classic sub form only. If the repository has immutable subjects enabled "+
+					"(the default for newer orgs), AssumeRoleWithWebIdentity will be denied; "+
+					"pass --owner-id and --repo-id (gh api repos/%s --jq '.owner.id, .id')\n", *repo, *repo)
+			}
+		}
+		tp, terr := iampolicy.BuildTrust(iampolicy.TrustOptions{
+			Repo: *repo, Account: *account, Branch: *branch, OwnerID: oid, RepoID: rid,
+		})
 		if terr != nil {
 			return terr
 		}
@@ -1005,4 +1029,18 @@ func printEnvironmentState(out *os.File, format, name string, info *stack.Info, 
 	state, _ := env["state"].(string)
 	_, err := fmt.Fprintf(out, "%s\t%s\t%s\n", name, state, u)
 	return err
+}
+
+// lookupRepoIDs は gh で owner / repo の数値 id を引く。gh が無い・未ログイン・
+// リポジトリが見えない、のいずれでも ok=false を返す(呼び出し側が警告する)。
+var lookupRepoIDs = func(repo string) (ownerID, repoID string, ok bool) {
+	out, err := exec.Command("gh", "api", "repos/"+repo, "--jq", "[.owner.id, .id] | @tsv").Output()
+	if err != nil {
+		return "", "", false
+	}
+	o, r, found := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if !found || o == "" || r == "" {
+		return "", "", false
+	}
+	return o, r, true
 }
