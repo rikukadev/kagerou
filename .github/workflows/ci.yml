@@ -16,6 +16,26 @@ jobs:
       - run: go test -race ./...
       - run: go build ./...
 
+  # E2E の CI ロールに手で足した権限を、生成器が知らないまま放置しない(#135)。
+  # 4 構成は同じロールを assume するので、生成側も和集合にして突き合わせる。
+  # AWS には触らない(ローカル生成 + ファイル比較だけ)。
+  iam-policy-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # missing が出たら「アタッチ済みポリシーに足りない = デプロイが 403 で落ちる」、
+      # extra が出たら「手で足したものを生成器が知らない = 次の人がまた踏む」
+      - run: |
+          go run ./cmd/kagerou iam-policy \
+            --config e2e/aws/3tier/kagerou.yaml \
+            --also-config e2e/aws/ssr/kagerou.yaml \
+            --also-config e2e/aws/multi/kagerou.yaml \
+            --also-config e2e/aws/worker/kagerou.yaml \
+            --check e2e/aws/ci-policy.json
+
   lint:
     runs-on: ubuntu-latest
     steps:

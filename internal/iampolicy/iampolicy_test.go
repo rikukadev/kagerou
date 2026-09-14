@@ -349,3 +349,73 @@ func findSid(t *testing.T, p Policy, sid string) Statement {
 	t.Fatalf("statement %q が無い", sid)
 	return Statement{}
 }
+
+func TestUnionMergesBySid(t *testing.T) {
+	// 同じ CI ロールを 2 構成が共有する状況。片方にしか無い権限も、
+	// 両方に在って ARN だけ違う権限も、1 本にまとまる必要がある
+	a := Policy{Statement: []Statement{
+		{Sid: "X", Effect: "Allow", Action: []string{"s3:GetObject"}, Resource: "arn:a"},
+		{Sid: "OnlyA", Effect: "Allow", Action: []string{"ecr:PutImage"}, Resource: "*"},
+	}}
+	b := Policy{Statement: []Statement{
+		{Sid: "X", Effect: "Allow", Action: []string{"s3:PutObject", "s3:GetObject"}, Resource: "arn:b"},
+	}}
+	u := Union(a, b)
+	x := findSid(t, u, "X")
+	if got := strings.Join(x.Action, ","); got != "s3:GetObject,s3:PutObject" {
+		t.Errorf("Action が和集合・ソート済みでない: %q", got)
+	}
+	rs, ok := x.Resource.([]string)
+	if !ok || len(rs) != 2 || rs[0] != "arn:a" || rs[1] != "arn:b" {
+		t.Errorf("Resource が和集合でない: %#v", x.Resource)
+	}
+	// 片方にしか無い statement が落ちると、その構成のデプロイが 403 になる
+	findSid(t, u, "OnlyA")
+}
+
+func TestUnionKeepsDifferentConditionsApart(t *testing.T) {
+	// 条件の違う statement を 1 本に潰すと、緩い方に飲まれて権限が広がる
+	a := Policy{Statement: []Statement{{
+		Sid: "T", Effect: "Allow", Action: []string{"ssm:SendCommand"}, Resource: "*",
+		Condition: map[string]any{"StringEquals": map[string]string{"ssm:resourceTag/Role": "a"}},
+	}}}
+	b := Policy{Statement: []Statement{{
+		Sid: "T", Effect: "Allow", Action: []string{"ssm:SendCommand"}, Resource: "*",
+		Condition: map[string]any{"StringEquals": map[string]string{"ssm:resourceTag/Role": "b"}},
+	}}}
+	if n := len(Union(a, b).Statement); n != 2 {
+		t.Errorf("条件違いは別 statement のまま残すはず: %d 本", n)
+	}
+}
+
+func TestContainerImageImpliesECR(t *testing.T) {
+	// PackageType: Image は sam が ECR に push する。リソース型には現れないので
+	// 型を数えるだけでは見えない(SAM 展開由来と同じ 種類の穴)
+	f, err := ScanTemplate([]byte(`
+Resources:
+  Fn:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.HasContainerImage {
+		t.Fatal("PackageType: Image を検出できていない")
+	}
+}
+
+func TestDynamoDBHandlerReads(t *testing.T) {
+	// テンプレートが PITR / TTL を設定していなくてもハンドラが読みに行く
+	f, err := ScanTemplate([]byte("Resources:\n  T:\n    Type: AWS::DynamoDB::Table\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := mustJSON(t, Options{Prefix: "p-", Template: &f})
+	for _, want := range []string{"dynamodb:DescribeContinuousBackups", "dynamodb:DescribeTimeToLive"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}

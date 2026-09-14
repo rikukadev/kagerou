@@ -21,6 +21,7 @@ type TemplateFacts struct {
 	HasEventSourceMapping bool // Events の SQS 等、または明示の EventSourceMapping
 	HasRoute53            bool // 明示の RecordSet、または Api の Domain.Route53
 	HasCustomDomain       bool // 明示の DomainName、または Api の Domain
+	HasContainerImage     bool // PackageType: Image の関数(= sam build が ECR に push する)
 }
 
 // knownTypes は Build が権限を導出できる(または既存 statement でカバー済みの)型。
@@ -86,6 +87,11 @@ func ScanTemplate(body []byte) (TemplateFacts, error) {
 			}
 			if usesEventSourceMapping(&r.Properties) {
 				f.HasEventSourceMapping = true
+			}
+			// コンテナイメージの関数は sam が ECR に push する。ECR 権限は
+			// テンプレートのリソース型には現れないが、ここから導ける
+			if t := childNode(&r.Properties, "PackageType"); t != nil && t.Value == "Image" {
+				f.HasContainerImage = true
 			}
 		case "AWS::Serverless::Api", "AWS::Serverless::HttpApi":
 			// Domain は DomainName + ApiMapping に、Domain.Route53 は

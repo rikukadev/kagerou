@@ -684,6 +684,8 @@ func splitCSV(s string) []string {
 func cmdIamPolicy(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("iam-policy", flag.ContinueOnError)
 	cfgPath := fs.String("config", config.DefaultFile, "config file")
+	var alsoCfg repeatedFlag
+	fs.Var(&alsoCfg, "also-config", "additional config whose needs are merged into the policy (repeatable; for one CI role shared by several configs)")
 	doc := fs.String("doc", "policy", "which document to emit: policy | trust | boundary | execution")
 	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
 	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
@@ -731,39 +733,69 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	var note string
 	switch *doc {
 	case "policy":
-		ecrRepoName := *ecrRepo
-		if ecrRepoName == "" {
-			ecrRepoName = cfg.Project
+		// 1 つの CI ロールを複数の設定が共有することがある(E2E の 4 構成が
+		// それ)。その場合アタッチされているのは和集合なので、生成側も
+		// 和集合にしないと「他構成のための権限」が過剰権限として出て、
+		// 本当に見たい missing が埋もれる(#135)
+		build := func(c config.Config) (iampolicy.Policy, error) {
+			ecrRepoName := *ecrRepo
+			if ecrRepoName == "" {
+				ecrRepoName = c.Project
+			}
+			// テンプレートが読めれば「テンプレートが作るもの」はそこから導出する(#71)。
+			// packaged.yaml(CI 生成物)が無ければ素の template.yaml に落ちる。
+			facts := loadTemplateFacts(c.Template)
+			if facts != nil {
+				for _, u := range facts.Unknown {
+					fmt.Fprintf(os.Stderr, "kagerou iam-policy: no permission mapping for %s — the generated policy does NOT cover it; add statements by hand\n", u)
+				}
+				// テンプレートが真実の源: 導出と食い違うフラグは無視して、その旨を言う
+				if *s3 && facts.Counts["AWS::S3::Bucket"] == 0 {
+					fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-s3 ignored — the template declares no AWS::S3::Bucket (syncing to the shared preview base? use --base-bucket)")
+				}
+				if *vpc && !facts.HasVPC {
+					fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-vpc ignored — no function in the template has VpcConfig")
+				}
+			} else {
+				fmt.Fprintln(os.Stderr, "kagerou iam-policy: template not found — falling back to --with-* flags only (the template is normally the source of truth)")
+			}
+			p := *prefix
+			if p == "" {
+				p = c.NamePrefix
+			}
+			return iampolicy.Build(iampolicy.Options{
+				Prefix:   p,
+				Template: facts,
+				// PackageType: Image なら sam が ECR に push する。フラグ任せだと
+				// 付け忘れて 403 になるので、テンプレートから導く
+				ECR: *ecr || (facts != nil && facts.HasContainerImage), EcrRepo: ecrRepoName,
+				S3: *s3, VPC: *vpc,
+				SashikiSSM: *ssm, InstanceID: *instance, InstanceTag: *instanceTag,
+				// {base_domain} を使う設定なら SSM の読み取り権限も要る。フラグにすると
+				// 付け忘れて 403 になるので、設定から導く
+				BaseDomain: c.UsesBaseDomain(),
+				CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
+				BaseBucket: *baseBucket,
+			})
 		}
-		// テンプレートが読めれば「テンプレートが作るもの」はそこから導出する(#71)。
-		// packaged.yaml(CI 生成物)が無ければ素の template.yaml に落ちる。
-		facts := loadTemplateFacts(cfg.Template)
-		if facts != nil {
-			for _, u := range facts.Unknown {
-				fmt.Fprintf(os.Stderr, "kagerou iam-policy: no permission mapping for %s — the generated policy does NOT cover it; add statements by hand\n", u)
-			}
-			// テンプレートが真実の源: 導出と食い違うフラグは無視して、その旨を言う
-			if *s3 && facts.Counts["AWS::S3::Bucket"] == 0 {
-				fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-s3 ignored — the template declares no AWS::S3::Bucket (syncing to the shared preview base? use --base-bucket)")
-			}
-			if *vpc && !facts.HasVPC {
-				fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-vpc ignored — no function in the template has VpcConfig")
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, "kagerou iam-policy: template not found — falling back to --with-* flags only (the template is normally the source of truth)")
+		pols := make([]iampolicy.Policy, 0, 1+len(alsoCfg))
+		first, err := build(cfg)
+		if err != nil {
+			return err
 		}
-		pol, err = iampolicy.Build(iampolicy.Options{
-			Prefix:   prefixOrCfg(),
-			Template: facts,
-			ECR:      *ecr, EcrRepo: ecrRepoName,
-			S3: *s3, VPC: *vpc,
-			SashikiSSM: *ssm, InstanceID: *instance, InstanceTag: *instanceTag,
-			// {base_domain} を使う設定なら SSM の読み取り権限も要る。フラグにすると
-			// 付け忘れて 403 になるので、設定から導く
-			BaseDomain: cfg.UsesBaseDomain(),
-			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
-			BaseBucket: *baseBucket,
-		})
+		pols = append(pols, first)
+		for _, path := range alsoCfg {
+			c, err := config.LoadOrDefault(path)
+			if err != nil {
+				return fmt.Errorf("--also-config %s: %w", path, err)
+			}
+			p, err := build(c)
+			if err != nil {
+				return fmt.Errorf("--also-config %s: %w", path, err)
+			}
+			pols = append(pols, p)
+		}
+		pol = iampolicy.Union(pols...)
 		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
 	case "boundary":
 		var regs []string
@@ -952,4 +984,17 @@ func printEnvironmentState(out *os.File, format, name string, info *stack.Info, 
 	state, _ := env["state"].(string)
 	_, err := fmt.Fprintf(out, "%s\t%s\t%s\n", name, state, u)
 	return err
+}
+
+// repeatedFlag は繰り返し指定できる文字列フラグ。
+type repeatedFlag []string
+
+func (r *repeatedFlag) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatedFlag) Set(s string) error {
+	if s == "" {
+		return fmt.Errorf("empty path")
+	}
+	*r = append(*r, s)
+	return nil
 }

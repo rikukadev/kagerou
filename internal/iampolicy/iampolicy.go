@@ -211,6 +211,9 @@ func Build(o Options) (Policy, error) {
 			Sid: "DynamoDBTableLifecycle", Effect: "Allow",
 			Action: []string{
 				"dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable", "dynamodb:UpdateTable",
+				// ハンドラが作成・更新のたびに現状を読む(書く前に読む: パッケージ doc 1.)。
+				// テンプレートが PITR / TTL を設定していなくても呼ばれる
+				"dynamodb:DescribeContinuousBackups", "dynamodb:DescribeTimeToLive",
 				"dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource",
 			},
 			Resource: fmt.Sprintf("arn:aws:dynamodb:*:*:table/%s*", p),
@@ -714,4 +717,91 @@ func CheckDrift(generated Policy, attached []byte) (extra, missing []string, err
 	sort.Strings(extra)
 	sort.Strings(missing)
 	return extra, missing, nil
+}
+
+// Union は複数構成のポリシーを 1 本にまとめる(#135)。
+//
+// E2E の 4 構成は **同じ CI ロール**を assume するので、アタッチされているのは
+// 各構成の和集合。単一構成と突き合わせると「他の構成のための権限」が過剰権限として
+// 大量に出て、本当に見たい missing(生成器が知らない = 手で足された権限)が埋もれる。
+//
+// 同じ Sid・同じ Condition の statement は Action と Resource を足して 1 つにする。
+// Condition が違うものは別物として残す(条件の緩い方に飲ませると権限が広がる)。
+func Union(ps ...Policy) Policy {
+	type key struct{ sid, cond string }
+	var order []key
+	merged := map[key]*Statement{}
+	for _, p := range ps {
+		for _, s := range p.Statement {
+			c := ""
+			if s.Condition != nil {
+				b, _ := marshal(s.Condition)
+				c = string(b)
+			}
+			k := key{s.Sid, c}
+			cur, ok := merged[k]
+			if !ok {
+				cp := s
+				cp.Action = append([]string(nil), s.Action...)
+				cp.Resource = resourceList(s.Resource)
+				merged[k] = &cp
+				order = append(order, k)
+				continue
+			}
+			cur.Action = addAll(cur.Action, s.Action)
+			cur.Resource = addAll(resourceList(cur.Resource), resourceList(s.Resource))
+		}
+	}
+	out := Policy{Version: "2012-10-17"}
+	for _, k := range order {
+		s := *merged[k]
+		sort.Strings(s.Action)
+		if rs, ok := s.Resource.([]string); ok {
+			sort.Strings(rs)
+			// 1 本だけなら文字列に戻す(生成器の出力と同じ形に揃える)
+			if len(rs) == 1 {
+				s.Resource = rs[0]
+			} else {
+				s.Resource = rs
+			}
+		}
+		out.Statement = append(out.Statement, s)
+	}
+	return out
+}
+
+// resourceList は Resource(文字列 or 配列)を []string に正規化する。
+func resourceList(r any) []string {
+	switch v := r.(type) {
+	case nil:
+		return nil
+	case string:
+		return []string{v}
+	case []string:
+		return append([]string(nil), v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// addAll は重複を作らずに足す。
+func addAll(dst []string, src []string) []string {
+	seen := map[string]bool{}
+	for _, s := range dst {
+		seen[s] = true
+	}
+	for _, s := range src {
+		if !seen[s] {
+			seen[s] = true
+			dst = append(dst, s)
+		}
+	}
+	return dst
 }
