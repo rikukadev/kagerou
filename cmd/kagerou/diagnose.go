@@ -65,6 +65,7 @@ func cmdDiagnose(args []string, out *os.File) error {
 	auth := fs.Bool("auth", false, "assume previews must be behind login (Google OIDC etc.)")
 	fixed := fs.Bool("allow-fixed-cost", false, "allow entrypoints with a fixed monthly cost (ALB)")
 	existingALB := fs.Bool("existing-alb", false, "assume a shared ALB base already exists")
+	customDomain := fs.Bool("custom-domain", false, "assume previews are served on a custom domain (the entrypoint becomes the shared ALB)")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -75,7 +76,10 @@ func cmdDiagnose(args []string, out *os.File) error {
 		return err
 	}
 	facts := appscan.Scan(abs)
-	opts := recommend.Options{Auth: *auth, AllowFixedCost: *fixed, ExistingALB: *existingALB}
+	opts := recommend.Options{
+		Auth: *auth, AllowFixedCost: *fixed, ExistingALB: *existingALB,
+		CustomDomain: *customDomain,
+	}
 	choice := recommend.Entry(facts, opts)
 
 	d := diagnosis{

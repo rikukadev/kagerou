@@ -157,3 +157,54 @@ func usable(c Choice, e Entrypoint) bool {
 	}
 	return false
 }
+
+// #172: compute の値段と入口の値段は別勘定。#131 以降、独自ドメインがあれば
+// init は共有 ALB を立てるので、「lambda = 固定費ゼロ」と読んだまま init すると
+// 月 $18 の ALB が生える。推薦の時点でそれが読めないといけない。
+func TestCustomDomainSurfacesTheALBCost(t *testing.T) {
+	f := appscan.Facts{HasDockerfile: true, AppPort: "3000", Services: 1}
+
+	plain := Entry(f, Options{})
+	domain := Entry(f, Options{CustomDomain: true})
+
+	// compute の選択は変わらない
+	if plain.Default != Lambda || domain.Default != Lambda {
+		t.Fatalf("compute が変わっている: %q → %q", plain.Default, domain.Default)
+	}
+	// ドメインが無ければ「アイドル $0」は構成全体について本当。そのままでよい
+	if !strings.Contains(plain.Reason(Lambda), "アイドル $0") {
+		t.Errorf("ドメイン無しの説明を変えている: %q", plain.Reason(Lambda))
+	}
+	if plain.EntryNote != "" {
+		t.Errorf("ドメインが無いのに入口の注記が出ている: %q", plain.EntryNote)
+	}
+	// ドメインがあれば、固定費が発生することが読めなければならない
+	if domain.EntryNote == "" {
+		t.Fatal("ドメインがあるのに入口の注記が無い")
+	}
+	for _, want := range []string{"alb", "$18"} {
+		if !strings.Contains(domain.EntryNote, want) {
+			t.Errorf("入口の注記に %q が無い: %q", want, domain.EntryNote)
+		}
+	}
+	// lambda の行が「固定費ゼロ」と読めたままだと、注記があっても誤解が残る
+	if strings.Contains(domain.Reason(Lambda), "アイドル $0 で、環境も") {
+		t.Errorf("入口の固定費を隠したままの説明: %q", domain.Reason(Lambda))
+	}
+	// 固定費を避ける道(生の execute-api)が示されていること
+	if !strings.Contains(domain.EntryNote, "apigateway") {
+		t.Errorf("固定費を避ける選択肢が示されていない: %q", domain.EntryNote)
+	}
+}
+
+// 既存 ALB があるなら固定費は増えない。#156 の文言と矛盾させない。
+func TestExistingALBWinsOverCustomDomainWording(t *testing.T) {
+	f := appscan.Facts{HasDockerfile: true, AppPort: "3000", Services: 1}
+	c := Entry(f, Options{CustomDomain: true, ExistingALB: true})
+	if strings.Contains(c.EntryNote, "$18") {
+		t.Errorf("既にある ALB について固定費が増えると言っている: %q", c.EntryNote)
+	}
+	if !strings.Contains(c.EntryNote, "増えない") {
+		t.Errorf("相乗りであることが読めない: %q", c.EntryNote)
+	}
+}

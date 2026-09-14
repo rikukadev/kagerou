@@ -37,6 +37,10 @@ type Options struct {
 	Auth bool
 	// ExistingALB は共有 ALB ベースが既にあるか(あれば相乗りが安い)。
 	ExistingALB bool
+	// CustomDomain は独自ドメインで配るか。#131 以降、ドメインがあれば init の
+	// 入口は共有 ALB になる = **固定費が 1 本乗る**。compute(lambda)のアイドル
+	// $0 とは別勘定なので、ここを知らないと推薦の理由と生成物が食い違う(#172)。
+	CustomDomain bool
 	// AllowFixedCost が false なら、固定費のある入口(ALB)を既定にしない。
 	// 既に ALB がある場合は固定費が増えないので、この指定に関わらず相乗りできる。
 	AllowFixedCost bool
@@ -138,9 +142,11 @@ func Entry(f appscan.Facts, o Options) Choice {
 		)
 
 	default:
-		if o.ExistingALB {
-			// compute の選択は変わらない(単一コンテナ = lambda)。変わるのは入口で、
-			// ALB を落とす理由だった固定費が、相乗りなら発生しない
+		// compute の選択はどの枝でも lambda(単一コンテナ)。変わるのは入口と、
+		// **入口にかかる金**。compute のアイドル $0 と入口の固定費は別勘定なので、
+		// 1 行にまとめない(まとめていたのが #172 の食い違い)
+		switch {
+		case o.ExistingALB:
 			c := choice(Lambda,
 				cand(Lambda, true, "単一コンテナ。アイドル $0 で、環境も 1 スタックで済む"),
 				cand(ALB, true, "共有 ALB が既にある。相乗りなら固定費は増えず、独自ドメインで出せる"),
@@ -148,12 +154,29 @@ func Entry(f appscan.Facts, o Options) Choice {
 			)
 			c.EntryNote = "alb — 共有 ALB に相乗り(固定費は増えない)。Function URL で出すなら entrypoint: apigateway"
 			return c
+
+		case o.CustomDomain:
+			// ドメインがあれば init は ALB を入口にする(#131)。共有 ALB が
+			// まだ無いので、**ここで 1 本立つ** = 固定費が発生する。
+			// 「lambda = 固定費ゼロ」と読んだまま init すると話が違う
+			c := choice(Lambda,
+				cand(Lambda, true, "単一コンテナ。compute はアイドル $0(入口の固定費は別)"),
+				cand(ALB, true, "独自ドメインで配るなら共有 ALB を 1 本立てる。月 $18 前後を全環境で共有する"),
+				cand(APIGateway, false, "生の execute-api URL でよければ固定費ゼロ(独自ドメインは付けられない)"),
+			)
+			c.EntryNote = "alb — 共有 ALB を 1 本立てる(deploy/alb-base.yaml、月 $18 前後・全環境で共有)。" +
+				"固定費を避けるなら entrypoint: apigateway = 生の execute-api URL"
+			return c
+
+		default:
+			// ドメインが無ければ入口は生の execute-api / Function URL。
+			// このときだけ「アイドル $0」が構成全体について本当になる
+			return choice(Lambda,
+				cand(Lambda, true, "単一コンテナ。アイドル $0 で、環境も 1 スタックで済む"),
+				cand(APIGateway, false, "複数サービスではないので ECS を持ち出す必要がない"),
+				cand(ALB, false, "同上。固定費もかかる"),
+			)
 		}
-		return choice(Lambda,
-			cand(Lambda, true, "単一コンテナ。アイドル $0 で、環境も 1 スタックで済む"),
-			cand(APIGateway, false, "複数サービスではないので ECS を持ち出す必要がない"),
-			cand(ALB, false, "同上。固定費もかかる"),
-		)
 	}
 }
 
