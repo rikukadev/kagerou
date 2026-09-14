@@ -237,6 +237,12 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
   `repo:<owner>/<name>:pull_request`(preview)と `repo:<owner>/<name>:ref:refs/heads/<branch>`
   (schedule の reap)だけに固定する。**fork の PR は sub が一致せず assume できない**
   (GitHub も fork PR の workflow に OIDC トークンを既定で渡さない)。`aud` は `sts.amazonaws.com` に固定。
+  **immutable subject**(新しい org の既定)のリポジトリではトークンの `sub` が
+  `repo:<owner>@<ownerID>/<name>@<repoID>:<context>` の形で来るため、同じ 2 つの
+  context について **その形式も併記**する(context は増やさない)。数値 id は
+  `--owner-id` / `--repo-id`、省略時は `gh` で引く。**引けなければ警告する** —
+  古典形式だけの trust は `StringEquals` が一生一致せず、症状は
+  `Not authorized to perform sts:AssumeRoleWithWebIdentity` だけで原因が遠い。
 - **権限ポリシーは `name_prefix`(= `kagerou:name` の接頭辞)で ARN をスコープ**する。
   CloudFormation スタック・Lambda・ロール・ロググループは `<name_prefix>*` に限定。
   ARN で絞れないアクション(`apigateway:*`、ENI 系、`cloudfront:CreateInvalidation` 等)は

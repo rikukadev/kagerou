@@ -416,3 +416,55 @@ func TestDynamoDBLifecycleIncludesDescribeCalls(t *testing.T) {
 		}
 	}
 }
+
+// #118: immutable subject(新しい org の既定)のトークンは sub に数値 id を含む。
+// 古典形式だけを StringEquals に並べると一生マッチせず、症状は
+// AssumeRoleWithWebIdentity の Not authorized だけ。
+func TestBuildTrustImmutableSubject(t *testing.T) {
+	tp, err := BuildTrust(TrustOptions{
+		Repo: "rikukadev/todo", Account: "123456789012",
+		OwnerID: "328009292", RepoID: "1368452126",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := tp.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		// 古典形式(immutable subject を切っているリポジトリ)
+		"repo:rikukadev/todo:pull_request",
+		"repo:rikukadev/todo:ref:refs/heads/main",
+		// id 形式(既定の新しい org)
+		"repo:rikukadev@328009292/todo@1368452126:pull_request",
+		"repo:rikukadev@328009292/todo@1368452126:ref:refs/heads/main",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("trust policy missing sub %q", want)
+		}
+	}
+	// 許す context は増やさない。* に広げると他の workflow も assume できる
+	if strings.Contains(s, `"repo:rikukadev/todo:*"`) {
+		t.Error("context をワイルドカードに広げている")
+	}
+}
+
+func TestBuildTrustWithoutIDsStaysClassic(t *testing.T) {
+	// id が引けなかったときに中途半端な sub を作らない(片方だけでは形が作れない)
+	for _, o := range []TrustOptions{
+		{Repo: "a/b", OwnerID: "1"},
+		{Repo: "a/b", RepoID: "2"},
+		{Repo: "a/b"},
+	} {
+		tp, err := BuildTrust(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := tp.JSON()
+		if strings.Contains(string(b), "@") {
+			t.Errorf("id が揃っていないのに id 形式を出した: %+v", o)
+		}
+	}
+}
