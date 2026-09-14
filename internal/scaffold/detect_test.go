@@ -260,6 +260,10 @@ func TestBaseForResolutionOrder(t *testing.T) {
 // ALB ベースはアプリのリージョンに SSM を書く(CloudFront ベースだけ us-east-1)。
 // us-east-1 しか走査しないと、入口が alb のアプリのベースを検出できない。
 func TestDetectBaseInAppRegion(t *testing.T) {
+	// execCommand はモックしているが、region の解決は env も見る。
+	// AWS_REGION がシェルに設定されている環境だと、そちらが勝って
+	// 走査リージョンが変わり落ちる(外部から報告のあった失敗)
+	t.Setenv("AWS_REGION", "")
 	orig := execCommand
 	defer func() { execCommand = orig }()
 	var scanned []string
