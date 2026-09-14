@@ -5,7 +5,9 @@ package iampolicy
 // テンプレートから導き、対応を知らない型には黙らず警告する。
 
 import (
+	"regexp"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +26,16 @@ type TemplateFacts struct {
 	HasEventSourceMapping bool // Events の SQS 等、または明示の EventSourceMapping
 	HasRoute53            bool // 明示の RecordSet、または Api の Domain.Route53
 	HasCustomDomain       bool // 明示の DomainName、または Api の Domain
+
+	// SSMParams は {{resolve:ssm:<path>}} で読まれる SSM パラメータのパス
+	// (ソート済み・重複なし)。CloudFormation は動的参照を **デプロイロールの
+	// 資格情報で** 解決するので ssm:GetParameters が要る。
+	//
+	// これはプロパティの **値** なのでリソース型の数え上げには現れず、Unknown
+	// にも入らない。つまり拾わないと「警告も出ないまま足りないポリシー」になる。
+	SSMParams []string
+	// HasSecureSSM は {{resolve:ssm-secure:…}} を使っているか(kms:Decrypt が要る)。
+	HasSecureSSM bool
 }
 
 // knownTypes は Build が権限を導出できる(または既存 statement でカバー済みの)型。
@@ -55,6 +67,34 @@ var knownTypes = map[string]bool{
 	"AWS::Route53::RecordSetGroup":     true,
 	"AWS::ApiGateway::DomainName":      true,
 	"AWS::ApiGateway::BasePathMapping": true,
+	// 共有 ALB 入口(#131 以降は compute: lambda の既定でもある)と compute: ecs。
+	// どちらも kagerou init が生成する一次対応の構成なので、権限を手書きさせない
+	"AWS::ElasticLoadBalancingV2::TargetGroup":  true,
+	"AWS::ElasticLoadBalancingV2::ListenerRule": true,
+	"AWS::ECS::TaskDefinition":                  true,
+	"AWS::ECS::Service":                         true,
+}
+
+// ssmRefRe は CloudFormation の動的参照 {{resolve:ssm:<path>}} / {{resolve:ssm-secure:<path>}}。
+// path の後ろにバージョン指定(:1)が付くことがあるので、そこは落とす。
+var ssmRefRe = regexp.MustCompile(`\{\{resolve:(ssm|ssm-secure):([^}:]+)(?::\d+)?\}\}`)
+
+// scanDynamicRefs はテンプレート本文から SSM の動的参照を拾う。
+//
+// YAML を解析せず本文を直接見るのは、動的参照が**どのプロパティにも**書けるため。
+// 構造をたどると拾い漏れるし、拾うべき場所を列挙し続けることになる。
+func scanDynamicRefs(body []byte, f *TemplateFacts) {
+	seen := map[string]bool{}
+	for _, m := range ssmRefRe.FindAllStringSubmatch(string(body), -1) {
+		if m[1] == "ssm-secure" {
+			f.HasSecureSSM = true
+		}
+		if p := strings.TrimSpace(m[2]); p != "" && !seen[p] {
+			seen[p] = true
+			f.SSMParams = append(f.SSMParams, p)
+		}
+	}
+	sort.Strings(f.SSMParams)
 }
 
 // tmplResource は検査に必要な部分だけ読む。CFN の独自タグ(!Ref / !Sub 等)を
@@ -115,6 +155,7 @@ func ScanTemplate(body []byte) (TemplateFacts, error) {
 		f.Unknown = append(f.Unknown, k)
 	}
 	sort.Strings(f.Unknown)
+	scanDynamicRefs(body, &f)
 	return f, nil
 }
 

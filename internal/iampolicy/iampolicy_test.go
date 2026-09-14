@@ -468,3 +468,96 @@ func TestBuildTrustWithoutIDsStaysClassic(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCoversAlbEcsAndDynamicRefs(t *testing.T) {
+	// 既定構成(lambda × 共有 ALB)と compute: ecs は kagerou init が生成する
+	// 一次対応の形。警告を出して手書きさせるのではなく、権限を出す(#170)
+	tf, err := ScanTemplate([]byte(`
+Resources:
+  Fn:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+  Tg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  Rule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: "{{resolve:ssm:/kagerou/base/relay/alb_listener_arn}}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(Options{Prefix: "relay-", Template: &tf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]Statement{}
+	for _, s := range p.Statement {
+		byID[s.Sid] = s
+	}
+
+	alb, ok := byID["SharedAlbEntrypoint"]
+	if !ok {
+		t.Fatal("ALB 入口の statement が無い")
+	}
+	for _, want := range []string{
+		"elasticloadbalancing:CreateTargetGroup",
+		"elasticloadbalancing:CreateRule",
+		"elasticloadbalancing:RegisterTargets", // lambda ターゲットでも要る
+		"elasticloadbalancing:DescribeRules",
+	} {
+		if !hasAction(alb, want) {
+			t.Errorf("ALB statement missing %q", want)
+		}
+	}
+
+	// 動的参照は読むパスまで絞る
+	ssm, ok := byID["ResolveSsmDynamicReferences"]
+	if !ok {
+		t.Fatal("ssm:GetParameters が無い(警告も出ないまま足りないポリシーになる)")
+	}
+	if got := ssm.Resource; got != "arn:aws:ssm:*:*:parameter/kagerou/base/relay/alb_listener_arn" {
+		t.Fatalf("Resource = %v(読むパスに絞るべき)", got)
+	}
+	if _, ok := byID["DecryptSecureSsm"]; ok {
+		t.Error("ssm-secure を使っていないのに kms:Decrypt を出している")
+	}
+	if _, ok := byID["EcsService"]; ok {
+		t.Error("ECS を使っていないのに ECS の権限を出している")
+	}
+}
+
+func TestBuildEcsService(t *testing.T) {
+	tf, err := ScanTemplate([]byte("Resources:\n  S:\n    Type: AWS::ECS::Service\n  T:\n    Type: AWS::ECS::TaskDefinition\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(Options{Prefix: "relay-", Template: &tf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ecs *Statement
+	for i, s := range p.Statement {
+		if s.Sid == "EcsService" {
+			ecs = &p.Statement[i]
+		}
+	}
+	if ecs == nil {
+		t.Fatal("ECS の statement が無い")
+	}
+	for _, want := range []string{"ecs:RegisterTaskDefinition", "ecs:CreateService", "ecs:DeleteService"} {
+		if !hasAction(*ecs, want) {
+			t.Errorf("ECS statement missing %q", want)
+		}
+	}
+}
+
+func hasAction(s Statement, want string) bool {
+	for _, a := range s.Action {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
