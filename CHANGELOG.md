@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.12.0](https://github.com/rikukadev/kagerou/compare/v0.11.0...v0.12.0) (2026-09-14)
+
+
+### Features
+
+* **appscan:** detect the health check path and whether CI already publishes an image ([#166](https://github.com/rikukadev/kagerou/issues/166)) ([b12daf4](https://github.com/rikukadev/kagerou/commit/b12daf48f30b00865607f95702ecfb5ee5cf8c69))
+* **capacity:** report how many more environments fit on the shared ALB ([#164](https://github.com/rikukadev/kagerou/issues/164)) ([146a93b](https://github.com/rikukadev/kagerou/commit/146a93bb93c0779cb3d7c49f7f20ef9b31b8be10))
+* diagnose に構成図と生成ファイル一覧を出し、推薦する 5 入口すべてに生成物を用意する ([#169](https://github.com/rikukadev/kagerou/issues/169)) ([68b1bce](https://github.com/rikukadev/kagerou/commit/68b1bce61b59f9fd71c98fbcc60f52043f979515))
+
+
+### Bug Fixes
+
+* **iam-policy:** 既定の ALB 入口と compute: ecs をカバーし、動的参照の SSM を拾う ([#170](https://github.com/rikukadev/kagerou/issues/170)) ([#171](https://github.com/rikukadev/kagerou/issues/171)) ([c662e2f](https://github.com/rikukadev/kagerou/commit/c662e2f8633fa2722132d00570e7ed6bbe1a087b))
+* **init:** -region の明示指定が既定値と同じでも効くようにする ([#161](https://github.com/rikukadev/kagerou/issues/161)) ([#168](https://github.com/rikukadev/kagerou/issues/168)) ([2962adf](https://github.com/rikukadev/kagerou/commit/2962adf78ec24c249b817ac3d6e82f7431baa3c2))
+* **init:** 検出した Dockerfile をそのまま生成物に使う ([#160](https://github.com/rikukadev/kagerou/issues/160)) ([#167](https://github.com/rikukadev/kagerou/issues/167)) ([374847a](https://github.com/rikukadev/kagerou/commit/374847a5d64378556bd7bb8ee9db81e2a0013b24))
+* **preflight:** check that the setup can be removed, not just created ([#159](https://github.com/rikukadev/kagerou/issues/159)) ([8e53b50](https://github.com/rikukadev/kagerou/commit/8e53b5040f5570384ba2e36ecf555ea8a118bee1))
+* **recommend:** stop calling lambda idle-$0 when the entrypoint costs money ([#173](https://github.com/rikukadev/kagerou/issues/173)) ([e7994fe](https://github.com/rikukadev/kagerou/commit/e7994fec44ce365e484fc7884048562ce57b4cbb))
+
 ## [0.11.0](https://github.com/rikukadev/kagerou/compare/v0.10.0...v0.11.0) (2026-09-14)
 
 
