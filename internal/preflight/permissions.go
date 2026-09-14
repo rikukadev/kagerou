@@ -37,6 +37,10 @@ type Check struct {
 	Allowed bool
 	Unknown bool
 	Why     string // 何のために要るか(人間向け)
+	// Teardown は「壊すために要る」権限であることを示す(#158)。
+	// 作れるが消せない権限セット(PowerUser 等)は実在し、そのときの被害は
+	// 「作った後に down / reap が落ち続けて課金が残る」— 作る前に分けて言う
+	Teardown bool
 }
 
 // Report は事前検査の結果。
@@ -58,6 +62,30 @@ func (r Report) Denied() []Check {
 	return out
 }
 
+// DeniedTeardown は拒否のうち「壊す側」だけを返す。
+// 作る側が全部通っていてここだけ落ちている状態が一番危ない
+// (環境は作れてしまい、消せないことは TTL 切れまで表に出ない)。
+func (r Report) DeniedTeardown() []Check {
+	var out []Check
+	for _, c := range r.Denied() {
+		if c.Teardown {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// DeniedSetup は拒否のうち「作る側」だけを返す。
+func (r Report) DeniedSetup() []Check {
+	var out []Check
+	for _, c := range r.Denied() {
+		if !c.Teardown {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Plan は選択した構成で setup が必要とするアクション。
 type Plan struct {
 	Role       bool // OIDC ロールを作る
@@ -69,6 +97,12 @@ type Plan struct {
 // actionsFor は構成から必要アクションを組む。過不足があると
 // 「通ると言われたのに落ちる/落ちると言われたのに通る」になるので、
 // setup スクリプトが実際に叩くものだけを列挙する。
+//
+// **作る側と壊す側を両方入れる(#158)。** 見るのは setup 自身が作るもの
+// (ロール / ECR / base)の撤収で、環境スタックの削除は CI ロールの権限=
+// iam-policy の担当。「作れるが消せない」権限セットは実在し、そのときの被害は
+// 作った後にしか出ない — preflight の存在意義は作る前に分かることなので、
+// ここで分けて言う。
 func actionsFor(p Plan) []Check {
 	var cs []Check
 	if p.Role {
@@ -76,10 +110,16 @@ func actionsFor(p Plan) []Check {
 			Check{Action: "iam:CreateRole", Why: "GitHub Actions の OIDC ロール"},
 			Check{Action: "iam:AttachRolePolicy", Why: "ロールへのポリシー付与"},
 			Check{Action: "iam:UpdateAssumeRolePolicy", Why: "信頼ポリシーの更新(再実行時)"},
+			// IAM は「作れるが消せない」が起きやすい代表格(PowerUser 等)
+			Check{Action: "iam:DetachRolePolicy", Why: "撤収時のポリシー剥がし", Teardown: true},
+			Check{Action: "iam:DeleteRole", Why: "撤収時のロール削除", Teardown: true},
 		)
 	}
 	if p.ECR {
-		cs = append(cs, Check{Action: "ecr:CreateRepository", Why: "イメージの push 先"})
+		cs = append(cs,
+			Check{Action: "ecr:CreateRepository", Why: "イメージの push 先"},
+			Check{Action: "ecr:DeleteRepository", Why: "撤収時のリポジトリ削除", Teardown: true},
+		)
 	}
 	if p.Base {
 		cs = append(cs,
@@ -88,12 +128,18 @@ func actionsFor(p Plan) []Check {
 			Check{Action: "route53:ChangeResourceRecordSets", Why: "DNS レコード(証明書検証と alias)"},
 			Check{Action: "cloudfront:CreateDistribution", Why: "共有 CloudFront"},
 			Check{Action: "s3:CreateBucket", Why: "配信元バケット"},
+			Check{Action: "cloudformation:DeleteStack", Why: "撤収時の base 削除", Teardown: true},
+			Check{Action: "cloudfront:DeleteDistribution", Why: "撤収時の base 削除", Teardown: true},
+			Check{Action: "s3:DeleteBucket", Why: "撤収時の base 削除", Teardown: true},
 		)
 	}
 	if p.StaticSync {
 		cs = append(cs,
 			Check{Action: "s3:PutObject", Why: "成果物の配置"},
 			Check{Action: "s3:GetBucketLocation", Why: "バケット region の解決"},
+			// static の down はプレフィックス配下を消す。stack 構成でも
+			// 中身の入ったバケットは DeleteStack が消せないので pre_down で使う
+			Check{Action: "s3:DeleteObject", Why: "環境の削除(プレフィックス / pre_down)", Teardown: true},
 		)
 	}
 	return cs

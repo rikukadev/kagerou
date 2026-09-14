@@ -118,3 +118,61 @@ func TestReportDenied(t *testing.T) {
 		t.Fatalf("Denied() = %+v", d)
 	}
 }
+
+// #158: 使い捨て環境の道具なので「作れる」だけ確かめても検査として足りない。
+// 作れるが消せない権限セット(PowerUser 等)は実在し、そのときの被害は
+// down / reap が落ち続けて課金が残ること — 作った後にしか表に出ない。
+func TestActionsForIncludesTeardown(t *testing.T) {
+	full := actionsFor(Plan{Role: true, ECR: true, Base: true, StaticSync: true})
+	has := func(a string) bool {
+		for _, c := range full {
+			if c.Action == a {
+				return true
+			}
+		}
+		return false
+	}
+	for _, a := range []string{
+		// IAM は「作れるが消せない」の代表格
+		"iam:DeleteRole", "iam:DetachRolePolicy",
+		"ecr:DeleteRepository",
+		"cloudformation:DeleteStack", "cloudfront:DeleteDistribution", "s3:DeleteBucket",
+		"s3:DeleteObject",
+	} {
+		if !has(a) {
+			t.Errorf("撤収に要る %q が検査対象に入っていない", a)
+		}
+	}
+	// 壊す側には印が付いていること(出力で作る側と分けるため)
+	for _, c := range full {
+		wantTeardown := strings.Contains(c.Action, ":Delete") || strings.Contains(c.Action, ":Detach")
+		if c.Teardown != wantTeardown {
+			t.Errorf("%s: Teardown = %v (want %v)", c.Action, c.Teardown, wantTeardown)
+		}
+	}
+}
+
+// 何も選ばなければ検査もしない、は撤収権限を足しても変わらない。
+func TestEmptyPlanStillChecksNothing(t *testing.T) {
+	if got := actionsFor(Plan{}); len(got) != 0 {
+		t.Errorf("Plan{} で %d 件検査している: %+v", len(got), got)
+	}
+}
+
+func TestDeniedSplitByPhase(t *testing.T) {
+	r := Report{Checks: []Check{
+		{Action: "iam:CreateRole", Allowed: true},
+		{Action: "iam:DeleteRole", Teardown: true},                 // 拒否
+		{Action: "ecr:CreateRepository"},                           // 拒否
+		{Action: "s3:DeleteBucket", Teardown: true, Unknown: true}, // 判定不能は混ぜない
+	}}
+	if got := len(r.Denied()); got != 2 {
+		t.Errorf("Denied = %d (want 2)", got)
+	}
+	if got := r.DeniedTeardown(); len(got) != 1 || got[0].Action != "iam:DeleteRole" {
+		t.Errorf("DeniedTeardown = %+v", got)
+	}
+	if got := r.DeniedSetup(); len(got) != 1 || got[0].Action != "ecr:CreateRepository" {
+		t.Errorf("DeniedSetup = %+v", got)
+	}
+}
