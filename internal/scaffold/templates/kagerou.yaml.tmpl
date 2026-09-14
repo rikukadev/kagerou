@@ -27,20 +27,32 @@ ttl: 72h
 # 各サービスは <service>-{name}.{{.Domain}} で出る。url_template は代表サービス:
 #   {{range .ServiceSpecs}}{{.Name}}-{name}.{{$.Domain}}{{if .Primary}} ← 代表{{end}}
 #   {{end}}
+{{- if .DomainFromSSM}}
+url_template: "https://{{.PrimaryService}}-{name}.{base_domain}"
+{{- else}}
 url_template: "https://{{.PrimaryService}}-{name}.{{.Domain}}"
+{{- end}}
 {{- else if and .ALB .Domain}}
 # URL は共有 ALB(deploy/alb-base.yaml)経由の独自ドメイン。ホスト名は
 # この url_template から導かれる(テンプレートの EnvKagerouUrl 参照)
-# ベース側のドメインを変えたらここも直すこと。{base_domain} と書けば
-# ベースが SSM に書いた値を up 時に引くので、二重管理を消せる(CONTRACT §5)
+{{- if .DomainFromSSM}}
+# ドメインはベースが SSM に書いた値({{.Domain}})を up 時に引く。ここに書き写すと
+# ベース側を変えたとき黙って古くなる(CONTRACT §5)
+url_template: "https://{name}.{base_domain}"
+{{- else}}
+# 旧 CFN Exports 由来のベース。SSM のデータ契約(§9)へ移すと {base_domain} が使える
 url_template: "https://{name}.{{.Domain}}"
+{{- end}}
 {{- else if .ECS}}
 # compute: ecs は共有 ALB のホスト名ルーティングに url_template が必須。
 # deploy/alb-base.yaml を作ったドメインに合わせること
 url_template: "" # TODO: https://{name}.<your alb-base domain>
 {{- else if .Domain}}
-# {base_domain} と書けばベースが SSM に書いた値を引く(CONTRACT §5)
+{{- if .DomainFromSSM}}
+url_template: "https://{name}.{base_domain}" # preview base の SSM から解決(§5)
+{{- else}}
 url_template: "https://{name}.{{.Domain}}" # preview base(共有 CloudFront)経由
+{{- end}}
 {{- else if .Static}}
 # driver: static は compute が無く URL を出力できないので url_template が必須。
 # preview base を作ると <name>.<その domain> になる。

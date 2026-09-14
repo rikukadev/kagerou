@@ -47,14 +47,18 @@ type Detection struct {
 type BaseInfo struct {
 	Domain string
 	Bucket string
+	// DomainFromSSM は domain を SSM のデータ契約(§9)から得たことを示す。
+	// 旧 CFN Exports 由来のベースには SSM キーが無いので、{base_domain} を
+	// 書き出すと init 直後の最初の up が落ちる(#139)。
+	DomainFromSSM bool
 }
 
 // applyBaseKV は base 検出の 1 キーを Bases に畳み込む。
-func applyBaseKV(bases map[string]BaseInfo, project, field, value string) {
+func applyBaseKV(bases map[string]BaseInfo, project, field, value string, fromSSM bool) {
 	b := bases[project]
 	switch field {
 	case "domain":
-		b.Domain = value
+		b.Domain, b.DomainFromSSM = value, fromSSM
 	case "bucket":
 		b.Bucket = value
 	}
@@ -181,9 +185,9 @@ func Detect(dir string) Detection {
 				parts := strings.Split(e[0], ":")
 				switch len(parts) {
 				case 2: // 旧: kagerou-preview-base:domain(アカウント単位、key "")
-					applyBaseKV(d.Bases, "", parts[1], e[1])
+					applyBaseKV(d.Bases, "", parts[1], e[1], false)
 				case 3: // per-app: kagerou-preview-base:todo:domain
-					applyBaseKV(d.Bases, parts[1], parts[2], e[1])
+					applyBaseKV(d.Bases, parts[1], parts[2], e[1], false)
 				}
 			}
 		}
@@ -212,7 +216,7 @@ func Detect(dir string) Detection {
 				if len(parts) != 4 || parts[0] != "kagerou" || parts[1] != "base" {
 					continue
 				}
-				applyBaseKV(d.Bases, parts[2], parts[3], e[1])
+				applyBaseKV(d.Bases, parts[2], parts[3], e[1], true)
 			}
 		}
 	}

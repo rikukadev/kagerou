@@ -40,7 +40,11 @@ type Params struct {
 	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
 	BaseBucket string
 	Domain     string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
-	SetupBase  bool   // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+	// DomainFromSSM は Domain が既存ベースの SSM キー(§9)由来であることを示す。
+	// このときだけ kagerou.yaml に {base_domain} を書ける — 書いた先が実在する
+	// と分かっているため(#139)。
+	DomainFromSSM bool
+	SetupBase     bool // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
 	Routing string

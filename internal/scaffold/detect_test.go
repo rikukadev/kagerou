@@ -146,6 +146,17 @@ func TestDetectZonesAndBase(t *testing.T) {
 	if b, ok := d.Base("shop"); !ok || b.Domain != "preview.rikuka.dev" {
 		t.Fatalf("legacy fallback broken: %+v", d.Bases)
 	}
+	// #139: ドメインの出所を覚えておく。SSM 由来のときだけ kagerou.yaml に
+	// {base_domain} を書ける(Exports 由来には SSM キーが無く、解決できない)
+	if b, _ := d.Base("todo"); !b.DomainFromSSM {
+		t.Error("SSM が勝ったのに DomainFromSSM が false")
+	}
+	if b, _ := d.Base("tf"); !b.DomainFromSSM {
+		t.Error("SSM のみのベースが DomainFromSSM=false")
+	}
+	if b, _ := d.Base("shop"); b.DomainFromSSM {
+		t.Error("Exports 由来を SSM 由来と誤認している")
+	}
 }
 
 var errNoCmd = os.ErrNotExist
