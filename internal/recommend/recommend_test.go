@@ -105,3 +105,55 @@ func TestReasonLookup(t *testing.T) {
 		t.Fatal("未知の入口には空を返すべき")
 	}
 }
+
+// #152: ExistingALB を読んでいたのは認証ありの経路だけで、認証なしの既定経路
+// (単一コンテナ)には届いていなかった。フラグを付けても出力が 1 文字も
+// 変わらないので、効いていないのか効いた上で同じ結論なのかが読めなかった。
+func TestExistingALBChangesNonAuthPath(t *testing.T) {
+	f := appscan.Facts{HasDockerfile: true, AppPort: "3000", Services: 1}
+
+	plain := Entry(f, Options{})
+	withALB := Entry(f, Options{ExistingALB: true})
+
+	// compute の選択は変わらない(単一コンテナ = lambda)
+	if plain.Default != Lambda || withALB.Default != Lambda {
+		t.Fatalf("compute が変わっている: %q → %q", plain.Default, withALB.Default)
+	}
+	// 変わるのは入口
+	if withALB.EntryNote == "" {
+		t.Error("共有 ALB があるのに入口の注記が出ていない")
+	}
+	if plain.EntryNote != "" {
+		t.Error("ALB が無いのに入口の注記が出ている")
+	}
+	// ALB を落とす理由だった固定費が、相乗りなら発生しない
+	if !usable(withALB, ALB) {
+		t.Error("既存 ALB があるのに alb が使えない扱いのまま")
+	}
+	if usable(plain, ALB) {
+		t.Error("ALB が無いのに使える扱いになっている")
+	}
+	if strings.Contains(withALB.Reason(ALB), "固定費もかかる") {
+		t.Errorf("固定費の理由が残っている: %q", withALB.Reason(ALB))
+	}
+}
+
+// 複数サービスは ALB があるなら ALB が勝つ。30 秒上限を背負う理由が無くなる。
+func TestExistingALBWinsForMultiService(t *testing.T) {
+	f := appscan.Facts{HasDockerfile: true, Services: 3}
+	if got := Entry(f, Options{}).Default; got != APIGateway {
+		t.Errorf("ALB 無しでは apigateway のはず: %q", got)
+	}
+	if got := Entry(f, Options{ExistingALB: true}).Default; got != ALB {
+		t.Errorf("ALB があれば alb のはず: %q", got)
+	}
+}
+
+func usable(c Choice, e Entrypoint) bool {
+	for _, x := range c.Candidates {
+		if x.Entrypoint == e {
+			return x.Usable
+		}
+	}
+	return false
+}
