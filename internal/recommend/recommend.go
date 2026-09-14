@@ -15,12 +15,16 @@ const (
 	// Static は S3 + CloudFront。compute を持たない(SSG / CSR の SPA)。
 	Static Entrypoint = "static"
 	// Lambda は Lambda + Web Adapter。単一コンテナ、アイドル $0。
+	// 入口は Function URL か共有 ALB(ドメインがあれば後者が既定。EntryNote 参照)。
 	Lambda Entrypoint = "lambda"
 	// APIGateway は HTTP API + VPC Link + ECS。固定費ゼロだがリクエスト 30 秒上限で、
 	// ブラウザのログインリダイレクトができない(認証ありでは選べない)。
 	APIGateway Entrypoint = "apigateway"
-	// ALB は共有 ALB + ECS。固定費(月 18 ドル前後、共有)と引き換えに
-	// authenticate-oidc がコード 0 行、WebSocket と長い処理に耐える。
+	// ALB は共有 ALB。後ろは ECS でも Lambda でもよい(#131 以降、独自ドメインで
+	// 配るなら lambda + ALB が init の既定)。固定費(月 18 ドル前後、共有)と
+	// 引き換えに authenticate-oidc がコード 0 行、WebSocket と長い処理に耐える。
+	// **既に ALB があるなら固定費は増えない** — 環境が足すのはリスナールールと
+	// ターゲットグループだけで、どちらも無料。
 	ALB Entrypoint = "alb"
 	// EdgeAuth は CloudFront + Lambda@Edge。固定費ゼロで static も守れるが、
 	// 認証は自前実装で、オリジン応答は ~60 秒が上限。
@@ -49,6 +53,10 @@ type Candidate struct {
 type Choice struct {
 	Default    Entrypoint
 	Candidates []Candidate
+	// EntryNote は compute の選択とは別に決まる「入口」の注記(#152)。
+	// Default は compute の軸で選ぶので、共有 ALB の相乗りのように
+	// **compute を変えずに入口だけ変わる**話はここに出す。空なら注記なし。
+	EntryNote string
 }
 
 // Entry は Facts と Options から入口を推薦する。
@@ -114,6 +122,15 @@ func Entry(f appscan.Facts, o Options) Choice {
 		)
 
 	case multi:
+		if o.ExistingALB {
+			// 固定費が増えないなら ALB の唯一の欠点が消える。複数サービスは
+			// ホストで分けられる(#137)ので、30 秒上限も背負わずに済む
+			return choice(ALB,
+				cand(ALB, true, "共有 ALB が既にある。相乗りなら固定費は増えず、サービスをホストで分けられる"),
+				cand(APIGateway, false, "固定費ゼロだが、リクエストは 30 秒まで"),
+				cand(Lambda, false, "単一コンテナ向け(複数サービスを検出)"),
+			)
+		}
 		return choice(APIGateway,
 			cand(APIGateway, true, "複数サービスを固定費ゼロで動かせる(リクエストは 30 秒まで)"),
 			cand(ALB, false, "上限は無いが、月 18 ドル前後の固定費がかかる"),
@@ -121,6 +138,17 @@ func Entry(f appscan.Facts, o Options) Choice {
 		)
 
 	default:
+		if o.ExistingALB {
+			// compute の選択は変わらない(単一コンテナ = lambda)。変わるのは入口で、
+			// ALB を落とす理由だった固定費が、相乗りなら発生しない
+			c := choice(Lambda,
+				cand(Lambda, true, "単一コンテナ。アイドル $0 で、環境も 1 スタックで済む"),
+				cand(ALB, true, "共有 ALB が既にある。相乗りなら固定費は増えず、独自ドメインで出せる"),
+				cand(APIGateway, false, "複数サービスではないので ECS を持ち出す必要がない"),
+			)
+			c.EntryNote = "alb — 共有 ALB に相乗り(固定費は増えない)。Function URL で出すなら entrypoint: apigateway"
+			return c
+		}
 		return choice(Lambda,
 			cand(Lambda, true, "単一コンテナ。アイドル $0 で、環境も 1 スタックで済む"),
 			cand(APIGateway, false, "複数サービスではないので ECS を持ち出す必要がない"),

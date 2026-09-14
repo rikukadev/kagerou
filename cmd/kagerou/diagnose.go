@@ -18,11 +18,13 @@ import (
 
 // diagnosis は --json の出力形。フィールドの追加のみ互換。
 type diagnosis struct {
-	Dir       string            `json:"dir"`
-	Repo      string            `json:"repo,omitempty"`
-	Facts     diagnosisFacts    `json:"facts"`
-	Assumed   diagnosisAssumed  `json:"assumed"`
-	Recommend string            `json:"recommend"`
+	Dir       string           `json:"dir"`
+	Repo      string           `json:"repo,omitempty"`
+	Facts     diagnosisFacts   `json:"facts"`
+	Assumed   diagnosisAssumed `json:"assumed"`
+	Recommend string           `json:"recommend"`
+	// EntryNote は compute とは別に決まる入口の注記(#152)。
+	EntryNote string            `json:"entrypoint_note,omitempty"`
 	Reasons   []diagnosisReason `json:"reasons"`
 }
 
@@ -71,6 +73,7 @@ func cmdDiagnose(args []string, out *os.File) error {
 	d := diagnosis{
 		Dir:       abs,
 		Recommend: string(choice.Default),
+		EntryNote: choice.EntryNote,
 		Assumed:   diagnosisAssumed{Auth: opts.Auth, AllowFixedCost: opts.AllowFixedCost, ExistingALB: opts.ExistingALB},
 		Facts: diagnosisFacts{
 			Framework: facts.Framework, Services: facts.Services, DBDriver: facts.DBDriver,
@@ -148,6 +151,10 @@ func writeDiagnosis(out *os.File, d diagnosis) error {
 			mark = "❯ "
 		}
 		fmt.Fprintf(&b, "%s%-11s %s\n", mark, r.Entrypoint, r.Reason)
+	}
+	if d.EntryNote != "" {
+		// compute(上の ❯)とは別の軸。同じ列に並べると選択肢に見えるので字下げを変える
+		fmt.Fprintf(&b, "\n  entrypoint  %s\n", d.EntryNote)
 	}
 	b.WriteString("\nno files were written and no AWS calls were made.\n")
 	b.WriteString("run `kagerou init` in this repository to generate the setup.\n")
