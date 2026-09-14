@@ -371,3 +371,47 @@ func TestScanPHPAppWithJSAssets(t *testing.T) {
 		t.Fatalf("framework = %q, want yii", f.Framework)
 	}
 }
+
+// #151: Dockerfile(ECS / 本番)と Dockerfile.lambda を分けている構成。
+// 素の Dockerfile しか見ないと「LWA 未導入」と誤判定し、init が
+// **用途の違うイメージ定義のほうに**注入してしまう。
+func TestScanFindsLWAInDockerfileVariant(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "Dockerfile", "FROM node:22-alpine\nEXPOSE 3000\n")
+	write(t, dir, "Dockerfile.lambda",
+		"FROM node:22-alpine\n"+
+			"COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter\n"+
+			"EXPOSE 3000\n")
+	f := Scan(dir)
+	if !f.HasLWA {
+		t.Error("Dockerfile.lambda の LWA を見落としている")
+	}
+	// 注入先は「既に入っているほう」。素の Dockerfile を書き換えさせない
+	if f.DockerfileName != "Dockerfile.lambda" {
+		t.Errorf("DockerfileName = %q (want Dockerfile.lambda)", f.DockerfileName)
+	}
+	want := []string{"Dockerfile", "Dockerfile.lambda"}
+	if len(f.Dockerfiles) != 2 || f.Dockerfiles[0] != want[0] || f.Dockerfiles[1] != want[1] {
+		t.Errorf("Dockerfiles = %v (want %v)", f.Dockerfiles, want)
+	}
+}
+
+func TestScanPlainDockerfileUnchanged(t *testing.T) {
+	// 既存の「ルート直下 Dockerfile だけ」の構成は挙動を変えない
+	dir := t.TempDir()
+	write(t, dir, "Dockerfile", "FROM node:22\nEXPOSE 8080\n")
+	f := Scan(dir)
+	if !f.HasDockerfile || f.HasLWA || f.DockerfileName != "Dockerfile" || f.AppPort != "8080" {
+		t.Errorf("%+v", f)
+	}
+}
+
+func TestScanLambdaOnlyDockerfile(t *testing.T) {
+	// 素の Dockerfile が無く、Dockerfile.lambda だけの構成でも検出する
+	dir := t.TempDir()
+	write(t, dir, "Dockerfile.lambda", "FROM node:22\nEXPOSE 3000\n")
+	f := Scan(dir)
+	if !f.HasDockerfile || f.DockerfileName != "Dockerfile.lambda" {
+		t.Errorf("%+v", f)
+	}
+}

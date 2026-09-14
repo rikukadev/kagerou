@@ -56,7 +56,7 @@ COPY --from=build /app /app
 EXPOSE 8080
 CMD ["/app"]
 `)
-	changed, err := InjectLWA(dir)
+	changed, err := InjectLWA(dir, "")
 	if err != nil || !changed {
 		t.Fatalf("inject: changed=%v err=%v", changed, err)
 	}
@@ -70,7 +70,7 @@ CMD ["/app"]
 		t.Fatal("LWA injected into the wrong stage")
 	}
 	// 冪等
-	changed2, err := InjectLWA(dir)
+	changed2, err := InjectLWA(dir, "")
 	if err != nil || changed2 {
 		t.Fatalf("second inject should be no-op: changed=%v err=%v", changed2, err)
 	}
@@ -83,7 +83,7 @@ CMD ["/app"]
 func TestInjectLWANoFrom(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "Dockerfile", "# empty\n")
-	if _, err := InjectLWA(dir); err == nil {
+	if _, err := InjectLWA(dir, ""); err == nil {
 		t.Fatal("no FROM should be an error")
 	}
 }
