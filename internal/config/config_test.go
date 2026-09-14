@@ -262,3 +262,40 @@ func TestPeerConfig(t *testing.T) {
 		t.Error("project 無しの fallback は拒否のはず")
 	}
 }
+
+func TestBaseDomainPlaceholder(t *testing.T) {
+	c := Config{
+		Project:     "todo",
+		URLTemplate: "https://{name}.{base_domain}",
+		Env:         map[string]string{"API_HOST": "api.{base_domain}", "PLAIN": "x"},
+		Hooks:       Hooks{PostUp: `curl https://{name}.{base_domain}/health`},
+	}
+	if !c.UsesBaseDomain() {
+		t.Fatal("url_template / env / hooks の {base_domain} を検出できていない")
+	}
+	got := c.ExpandBaseDomain("example.com")
+	if got.URLTemplate != "https://{name}.example.com" {
+		t.Errorf("url_template: %q", got.URLTemplate)
+	}
+	if got.Env["API_HOST"] != "api.example.com" {
+		t.Errorf("env: %q", got.Env["API_HOST"])
+	}
+	if got.Env["PLAIN"] != "x" {
+		t.Errorf("無関係の env を壊している: %q", got.Env["PLAIN"])
+	}
+	if got.Hooks.PostUp != "curl https://{name}.example.com/health" {
+		t.Errorf("hooks: %q", got.Hooks.PostUp)
+	}
+	// 元は変えない(ExpandName と同じく複製を返す)
+	if c.URLTemplate != "https://{name}.{base_domain}" {
+		t.Error("レシーバを書き換えている")
+	}
+}
+
+func TestUsesBaseDomainFalse(t *testing.T) {
+	// 使っていない構成では SSM を読みに行かせない(権限要求を増やさない)
+	c := Config{URLTemplate: "https://{name}.example.com", Env: map[string]string{"A": "b"}}
+	if c.UsesBaseDomain() {
+		t.Error("{base_domain} が無いのに true")
+	}
+}

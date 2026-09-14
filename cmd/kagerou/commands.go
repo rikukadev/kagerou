@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rikukadev/kagerou/internal/basedomain"
 	"github.com/rikukadev/kagerou/internal/config"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
 	staticdrv "github.com/rikukadev/kagerou/internal/driver/static"
@@ -84,7 +85,18 @@ func loadConfigFor(f upFlags) (config.Config, error) {
 	if err := config.ValidateName(f.name); err != nil {
 		return config.Config{}, err
 	}
-	return cfg.ExpandName(f.name), nil
+	cfg = cfg.ExpandName(f.name)
+	// {base_domain} は SSM の preview base 契約から引く(#136)。使っていなければ
+	// 読みに行かない — 既存の構成に SSM の権限を要求しないため
+	if cfg.UsesBaseDomain() {
+		domain, key, err := basedomain.Resolve(context.Background(), cfg.Project, cfg.Region)
+		if err != nil {
+			return config.Config{}, err
+		}
+		fmt.Fprintf(os.Stderr, "kagerou: base domain %s (from %s)\n", domain, key)
+		cfg = cfg.ExpandBaseDomain(domain)
+	}
+	return cfg, nil
 }
 
 func newDriver(cfg config.Config) (*stack.Driver, context.Context, error) {
@@ -727,6 +739,9 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			ECR:      *ecr, EcrRepo: ecrRepoName,
 			S3: *s3, VPC: *vpc,
 			SashikiSSM: *ssm, InstanceID: *instance, InstanceTag: *instanceTag,
+			// {base_domain} を使う設定なら SSM の読み取り権限も要る。フラグにすると
+			// 付け忘れて 403 になるので、設定から導く
+			BaseDomain: cfg.UsesBaseDomain(),
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
 			BaseBucket: *baseBucket,
 		})

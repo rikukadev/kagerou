@@ -267,28 +267,58 @@ func NormalizeName(raw string) string {
 	return string(b)
 }
 
+// BaseDomainPlaceholder は preview base のドメイン(CONTRACT §9)に解決される
+// プレースホルダ。ドメインをここに書き写さず SSM の契約を真実の源にするため(#136)。
+const BaseDomainPlaceholder = "{base_domain}"
+
+// expandable は {name} 等の展開対象になる値をまとめて走査/差し替えする。
+// 対象を値側(url_template / env の値 / hooks 本文)に限るのは、キーまで
+// 動的になると追えなくなるため。
+func (c Config) expandable(fn func(string) string) Config {
+	out := c
+	if c.Env != nil {
+		out.Env = make(map[string]string, len(c.Env))
+		for k, v := range c.Env {
+			out.Env[k] = fn(v)
+		}
+	}
+	out.URLTemplate = fn(c.URLTemplate)
+	out.Hooks.PreUp = fn(c.Hooks.PreUp)
+	out.Hooks.PostUp = fn(c.Hooks.PostUp)
+	out.Hooks.PreDown = fn(c.Hooks.PreDown)
+	out.Hooks.PostDown = fn(c.Hooks.PostDown)
+	return out
+}
+
+// UsesBaseDomain は {base_domain} がどこかで使われているかを返す。
+// 使っていなければ SSM を一切読まない(既存の挙動と必要権限のまま)。
+func (c Config) UsesBaseDomain() bool {
+	used := false
+	c.expandable(func(s string) string {
+		if strings.Contains(s, BaseDomainPlaceholder) {
+			used = true
+		}
+		return s
+	})
+	return used
+}
+
+// ExpandBaseDomain は {base_domain} を解決済みのドメインに置き換えた複製を返す。
+func (c Config) ExpandBaseDomain(domain string) Config {
+	return c.expandable(func(s string) string {
+		return strings.ReplaceAll(s, BaseDomainPlaceholder, domain)
+	})
+}
+
 // ExpandName は env 値と hooks 内の {name} を展開した複製を返す。
 // 展開対象を値側に限るのは、キーまで動的になると追えなくなるため。
 func (c Config) ExpandName(name string) Config {
 	// {project} は共有 base(1 ドメインを複数アプリで使う)の URL 規約
 	// <project>--<name>.<domain> を書けるようにするため
-	expand := func(s string) string {
+	return c.expandable(func(s string) string {
 		s = strings.ReplaceAll(s, "{name}", name)
 		return strings.ReplaceAll(s, "{project}", c.Project)
-	}
-	out := c
-	if c.Env != nil {
-		out.Env = make(map[string]string, len(c.Env))
-		for k, v := range c.Env {
-			out.Env[k] = expand(v)
-		}
-	}
-	out.URLTemplate = expand(c.URLTemplate)
-	out.Hooks.PreUp = expand(c.Hooks.PreUp)
-	out.Hooks.PostUp = expand(c.Hooks.PostUp)
-	out.Hooks.PreDown = expand(c.Hooks.PreDown)
-	out.Hooks.PostDown = expand(c.Hooks.PostDown)
-	return out
+	})
 }
 
 // StackName は driver が作るスタック名(name_prefix + 環境名)。

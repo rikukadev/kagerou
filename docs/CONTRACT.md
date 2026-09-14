@@ -135,6 +135,19 @@ static:
 `url_template` の URL に実際にトラフィックを到達させる仕組み(共有 CloudFront +
 サブドメイン等)は利用者側のインフラの責務(kagerou#32 で共通化を検討中)。
 
+展開できるプレースホルダは `{name}` / `{project}` / **`{base_domain}`**。
+`{base_domain}` はベースが SSM に書いたドメイン(§9)に up 時に解決される:
+
+```yaml
+url_template: "https://{name}.{base_domain}"
+```
+
+ドメインを kagerou.yaml に書き写すと、ベース側を変えたときに黙って古くなる
+(`url_template` の値はそのまま `kagerou:url` タグになり、Output と突き合わされない
+= **どこにも到達しない URL のまま緑になる**)。`{base_domain}` はその二重管理を消す。
+**引けなければ up は失敗する** — 空文字で `https://pr-42..` を作らない。
+`{name}` / `{project}` と同じく `env` の値と hooks 本文でも使える。
+
 ## 6. 読み取り口(`kagerou serve`)
 
 Backstage 等からの読み取りは `kagerou serve` が提供する**読み取り専用 HTTP**。
@@ -269,6 +282,17 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 `compute: ecs` と、独自ドメインで配る `compute: lambda`(入口 = 共有 ALB)の
 環境テンプレートは、`_shared-alb` のキーを CloudFormation の動的参照
 (`{{resolve:ssm:…}}`)で読む — パラメータの手渡しは要らない。
+
+テンプレートの外(Go 側で URL を組み立てる `url_template` など)からは動的参照が
+使えないので、`{base_domain}`(§5)が同じキーを up 時に引く。解決順:
+
+1. `/kagerou/base/<project>/domain`(us-east-1)
+2. `/kagerou/base/_shared/domain`(us-east-1)
+3. `/kagerou/base/_shared-alb/domain`(ALB と同じリージョン = `region`)
+
+どれも無ければ up は**失敗する**(探したキーを region つきで表示する)。
+`{base_domain}` を使う設定では `kagerou iam-policy` が `ssm:GetParameter`
+(`/kagerou/base/*`)を自動で足す — フラグにすると付け忘れて 403 になるため。
 
 ### 入口(entrypoint)
 

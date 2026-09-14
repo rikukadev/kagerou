@@ -70,6 +70,7 @@ type Options struct {
 	Route53      bool   // カスタムドメインのレコード操作
 	HostedZoneID string // --with-route53 のゾーン
 	BaseBucket   string // 共有 preview base バケットへの成果物 sync(post_up の aws s3 sync)
+	BaseDomain   bool   // url_template 等で {base_domain} を使う(SSM 契約からドメインを引く)
 
 	// Template == nil のときだけ効く従来フラグ(テンプレートがあれば導出が勝つ)。
 	S3  bool // S3 静的配信つき(3 層など)
@@ -342,6 +343,15 @@ func Build(o Options) (Policy, error) {
 				Sid: "SashikiReadCommandResult", Effect: "Allow",
 				Action: []string{"ssm:GetCommandInvocation"}, Resource: "*",
 			})
+	}
+	if o.BaseDomain {
+		sts = append(sts, Statement{
+			// {base_domain} の解決(CONTRACT §9)。ベースが書いたキーを読むだけ。
+			// 書き込みは含めない — ベースは別スタックの持ち物
+			Sid: "BaseDomainLookup", Effect: "Allow",
+			Action:   []string{"ssm:GetParameter"},
+			Resource: "arn:aws:ssm:*:*:parameter/kagerou/base/*",
+		})
 	}
 	if o.CloudFront {
 		sts = append(sts, Statement{
