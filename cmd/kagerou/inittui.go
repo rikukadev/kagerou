@@ -114,7 +114,7 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 	rec := recommend.Entry(det.Facts, recommend.Options{
 		ExistingALB:    det.HasSharedALB(),
 		AllowFixedCost: det.HasSharedALB(), // 既にあるなら固定費は増えない
-		CustomDomain:   len(det.Zones) > 0 || det.Bases != nil && len(det.Bases) > 0,
+		CustomDomain:   len(det.Zones) > 0 || len(det.Bases) > 0,
 	})
 	computeDefault := 0
 	if rec.Default != recommend.Lambda && rec.Default != recommend.Static {
