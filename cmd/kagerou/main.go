@@ -37,6 +37,8 @@ func run(args []string, out *os.File) error {
 		return cmdIamPolicy(args[1:], out)
 	case "diagnose":
 		return cmdDiagnose(args[1:], out)
+	case "capacity":
+		return cmdCapacity(args[1:], out)
 	case "validate":
 		return cmdValidate(args[1:], out)
 	case "list":
@@ -64,6 +66,7 @@ Usage:
   kagerou iam-policy --doc boundary  generate the self-serve permissions boundary
   kagerou iam-policy --doc execution generate the Lambda execution role policy (--allow)
   kagerou iam-policy --check <file>  report drift of an attached policy vs the minimal set
+  kagerou capacity [--json]           how many more environments fit on the shared ALB
   kagerou up --name <name> [flags]   create/update an environment (idempotent)
   kagerou down --name <name>         delete an environment (idempotent)
   kagerou list                       list environments

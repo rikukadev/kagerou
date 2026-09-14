@@ -300,6 +300,11 @@ us-east-1 のものを受けない。preview base が作るのは前者、ALB �
 後者で、どちらも同じ `*.<domain>` を覆う(ワイルドカードは 1 ラベル分)。
 **regional な入口が要るとき、2 枚目を立てる必要はない**(#133)。
 
+`kagerou capacity` はこの `alb_listener_arn` を読み、**あと何面置けるか**を出す。
+上限は Service Quotas ではなく `elbv2 DescribeAccountLimits` から取る(引き上げ済みの
+実効値が返り、quota コードを覚えなくてよい)。読み取りだけで、届かなければ
+判定不能として続行する — ゲートにはしない。
+
 **ALB も per-app が既定**(CloudFront ベースと同じ)。チームごとに使うので 1 本では
 足りなくなるうえ、リスナールール(既定 100)と証明書(25)の上限もある。
 1 本を全アプリで共有したい場合は、alb-base の `Project` に `_shared-alb` を渡して
