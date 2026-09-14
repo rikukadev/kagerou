@@ -268,16 +268,24 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 
 /kagerou/base/_shared/…                # 1 ドメインを複数アプリで共有するベース
 
-# compute: ecs の共有 ALB ベース(deploy/alb-base.yaml。ALB は固定費があるので
-# アカウント/VPC で 1 つを共有)。こちらは ALB と同じリージョンに書く
-/kagerou/base/_shared-alb/domain
-/kagerou/base/_shared-alb/listener_arn
-/kagerou/base/_shared-alb/cluster
-/kagerou/base/_shared-alb/vpc_id
-/kagerou/base/_shared-alb/subnets              # タスクを置くサブネット(カンマ区切り)
-/kagerou/base/_shared-alb/task_security_group
-/kagerou/base/_shared-alb/assign_public_ip     # ENABLED | DISABLED
+# ALB ベース(deploy/alb-base.yaml。入口 = alb のとき)。**per-app**。
+# CloudFront ベースと違い、ALB と同じ **アプリのリージョン** に書く
+/kagerou/base/<project>/alb_listener_arn
+/kagerou/base/<project>/alb_cluster
+/kagerou/base/<project>/alb_vpc_id
+/kagerou/base/<project>/alb_subnets              # タスクを置くサブネット(カンマ区切り)
+/kagerou/base/<project>/alb_task_security_group
+/kagerou/base/<project>/alb_assign_public_ip     # ENABLED | DISABLED
 ```
+
+**ALB も per-app が既定**(CloudFront ベースと同じ)。チームごとに使うので 1 本では
+足りなくなるうえ、リスナールール(既定 100)と証明書(25)の上限もある。
+1 本を全アプリで共有したい場合は、alb-base の `Project` に `_shared-alb` を渡して
+共有名前空間に書く(オプトイン。DESIGN §11.3 と同じ考え方)。
+
+`domain` は入口によらず「このアプリのプレビュードメイン」の意味で共通。
+ALB 固有の値だけ `alb_` を接頭辞にしてあるので、1 つのアプリが static(CloudFront)と
+ecs/lambda(ALB)を併用しても衝突しない。
 
 `compute: ecs` と、独自ドメインで配る `compute: lambda`(入口 = 共有 ALB)の
 環境テンプレートは、`_shared-alb` のキーを CloudFormation の動的参照

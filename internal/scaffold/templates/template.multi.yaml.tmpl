@@ -6,7 +6,7 @@ Description: >
   (DESIGN §13: host-based, not path-based — the app's URL structure stays put).
 
 # アプリに届けたい値は Env<Key>(CONTRACT §4)。共有 ALB の値はベースが書いた
-# SSM({{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/*{{"}}"}})を動的参照で読む。
+# SSM({{"{{"}}resolve:ssm:/kagerou/base/{{$.Project}}/alb_*{{"}}"}})を動的参照で読む。
 Parameters:
   EnvKagerouEnv:
     Type: String
@@ -120,7 +120,7 @@ Resources:
   {{.Logical}}ListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
-      ListenerArn: "{{"{{"}}resolve:ssm:/kagerou/base/_shared-alb/listener_arn{{"}}"}}"
+      ListenerArn: "{{"{{"}}resolve:ssm:/kagerou/base/{{$.Project}}/alb_listener_arn{{"}}"}}"
       # base 優先度 + サービスの枝番(CFN に算術が無いので文字列で連結する)
       Priority: !Sub "${EnvRulePriority}{{.Index}}"
       Conditions:
