@@ -2,7 +2,7 @@
 project: kagerou-e2e
 driver: stack
 # sam package の出力(ImageUri が書き換わったもの)を使う。
-template: packaged-ssr.yaml
+template: e2e/aws/ssr/template.yaml
 region: ap-northeast-1
 name_prefix: kge2e-
 ttl: 2h

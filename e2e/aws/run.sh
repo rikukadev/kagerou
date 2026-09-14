@@ -16,6 +16,11 @@ set -euo pipefail
 KAGEROU=${1:?usage: run.sh <kagerou> <config> <name>}
 CONFIG=${2:?usage: run.sh <kagerou> <config> <name>}
 NAME=${3:?usage: run.sh <kagerou> <config> <name>}
+# sam package の成果物のように、リポジトリに無いテンプレートを使う構成向け。
+# kagerou.yaml 側は**リポジトリにある**テンプレートを指しておき(offline で
+# iam-policy / validate が回せるように)、CI だけがここで差し替える(#135)。
+template_args=()
+[ -n "${KAGEROU_TEMPLATE:-}" ] && template_args=(--template "$KAGEROU_TEMPLATE")
 
 fail() { echo "E2E FAILED: $*" >&2; exit 1; }
 log()  { echo; echo "=== $* ==="; }
@@ -48,7 +53,7 @@ cleanup() {
 trap cleanup EXIT
 
 log "up: $NAME"
-up_json=$("$KAGEROU" up --name "$NAME" --config "$CONFIG" --output json) \
+up_json=$("$KAGEROU" up --name "$NAME" --config "$CONFIG" "${template_args[@]+"${template_args[@]}"}" --output json) \
   || fail "up が失敗した"
 echo "$up_json"
 

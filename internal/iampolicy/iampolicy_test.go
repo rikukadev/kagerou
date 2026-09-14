@@ -349,3 +349,70 @@ func findSid(t *testing.T, p Policy, sid string) Statement {
 	t.Fatalf("statement %q が無い", sid)
 	return Statement{}
 }
+
+// 1 本のデプロイロールを複数構成で共有している場合、単独の構成と突き合わせると
+// 「他の構成にだけ要る権限」が全部 extra になって使えない。和集合で見る(#135)。
+func TestCheckDriftActionsUnion(t *testing.T) {
+	withQueue := Policy{Statement: []Statement{
+		{Effect: "Allow", Action: []string{"sqs:CreateQueue", "cloudformation:CreateStack"}},
+	}}
+	withBucket := Policy{Statement: []Statement{
+		{Effect: "Allow", Action: []string{"s3:PutObject", "cloudformation:CreateStack"}},
+	}}
+	attached := []byte(`{"Statement":[{"Effect":"Allow","Action":["sqs:CreateQueue","s3:PutObject","cloudformation:CreateStack"]}]}`)
+
+	// 単独で見ると、もう片方の構成に要る権限が over-permission に見える
+	extra, _, err := CheckDrift(withQueue, attached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(extra) == 0 {
+		t.Fatal("前提が崩れている: 単独比較では extra が出るはず")
+	}
+
+	gen := PolicyAllowActions(withQueue)
+	for a := range PolicyAllowActions(withBucket) {
+		gen[a] = true
+	}
+	extra, missing, err := CheckDriftActions(gen, attached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(extra) != 0 || len(missing) != 0 {
+		t.Errorf("和集合ならノイズゼロのはず: extra=%v missing=%v", extra, missing)
+	}
+}
+
+// 手で足した権限(生成器が知らない)は和集合にしても extra として出る。
+// これを検出できることが #135 の目的。
+func TestCheckDriftActionsFindsHandAddedAction(t *testing.T) {
+	gen := PolicyAllowActions(Policy{Statement: []Statement{
+		{Effect: "Allow", Action: []string{"cloudformation:CreateStack"}},
+	}})
+	attached := []byte(`{"Statement":[{"Effect":"Allow","Action":["cloudformation:CreateStack","iam:PassRole"]}]}`)
+	extra, missing, err := CheckDriftActions(gen, attached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(extra) != 1 || extra[0] != "iam:PassRole" {
+		t.Errorf("手で足した iam:PassRole を検出していない: %v", extra)
+	}
+	if len(missing) != 0 {
+		t.Errorf("missing は空のはず: %v", missing)
+	}
+}
+
+// DynamoDB テーブルを作るだけで CFN が読む 2 つ。欠けると CreateStack が 403 で落ちる。
+func TestDynamoDBLifecycleIncludesDescribeCalls(t *testing.T) {
+	facts := TemplateFacts{Counts: map[string]int{"AWS::DynamoDB::Table": 1}}
+	pol, err := Build(Options{Prefix: "kge2e-", Template: &facts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := PolicyAllowActions(pol)
+	for _, want := range []string{"dynamodb:DescribeContinuousBackups", "dynamodb:DescribeTimeToLive"} {
+		if !got[want] {
+			t.Errorf("%s が生成されていない", want)
+		}
+	}
+}

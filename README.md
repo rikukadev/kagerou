@@ -60,7 +60,22 @@ recommended
 
 ```bash
 kagerou validate          # 契約(CONTRACT)をデプロイ前に検査
-kagerou iam-policy --with-ecr > ci-policy.json   # CI ロールの最小権限を構成別に生成
+kagerou iam-policy > ci-policy.json   # CI ロールの最小権限をテンプレートから生成
+```
+
+権限は**テンプレートが真実の源**で、コンテナイメージ(`PackageType: Image`)や
+SAM の `Events` からも導出する。手で足した権限が生成器に無いままにならないよう、
+attach 済みのポリシーとの差分を見張れる:
+
+```bash
+kagerou iam-policy --check attached.json   # 過不足を報告(ずれていたら非ゼロで終わる)
+```
+
+1 本のロールを複数構成で共有しているなら `--config` を並べる。生成側を和集合で
+見ないと、他構成にだけ要る権限が全部 over-permission として出てしまう:
+
+```bash
+kagerou iam-policy --config a/kagerou.yaml --config b/kagerou.yaml --check attached.json
 ```
 
 ## 手元から

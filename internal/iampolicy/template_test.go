@@ -125,3 +125,27 @@ func TestBuildBaseBucketSync(t *testing.T) {
 		t.Fatalf("sync resources = %v", sync.Resource)
 	}
 }
+
+// コンテナイメージで配る Function は ECR が要る。--with-ecr を付け忘れても
+// 足りないポリシーを出さないよう、テンプレートから導出する(#71/#135)。
+func TestScanTemplateDetectsImagePackaging(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"PackageType: Image", "Resources:\n  F:\n    Type: AWS::Serverless::Function\n    Properties:\n      PackageType: Image\n", true},
+		{"sam package 後の ImageUri", "Resources:\n  F:\n    Type: AWS::Serverless::Function\n    Properties:\n      ImageUri: 1.dkr.ecr.ap-northeast-1.amazonaws.com/x:y\n", true},
+		{"zip", "Resources:\n  F:\n    Type: AWS::Serverless::Function\n    Properties:\n      Handler: index.handler\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := ScanTemplate([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.HasImage != tc.want {
+				t.Errorf("HasImage = %v, want %v", f.HasImage, tc.want)
+			}
+		})
+	}
+}

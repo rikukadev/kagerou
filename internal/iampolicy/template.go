@@ -12,9 +12,12 @@ import (
 
 // TemplateFacts はポリシー生成に必要なテンプレートの事実。
 type TemplateFacts struct {
-	Counts  map[string]int // リソース Type → 個数
-	HasVPC  bool           // いずれかの Function が VpcConfig を持つ
-	Unknown []string       // 対応する権限を知らない型(ソート済み)。cmd が警告する
+	Counts map[string]int // リソース Type → 個数
+	HasVPC bool           // いずれかの Function が VpcConfig を持つ
+	// HasImage はいずれかの Function がコンテナイメージで配られる(ECR が要る)。
+	// --with-ecr を付け忘れても足りないポリシーを出さないため(#135)。
+	HasImage bool
+	Unknown  []string // 対応する権限を知らない型(ソート済み)。cmd が警告する
 
 	// 以下は「SAM が展開して初めて現れる」リソース。型を数えるだけでは
 	// 永久に見えないので、元になるプロパティから導く。
@@ -83,6 +86,10 @@ func ScanTemplate(body []byte) (TemplateFacts, error) {
 		case "AWS::Serverless::Function", "AWS::Lambda::Function":
 			if hasKey(&r.Properties, "VpcConfig") {
 				f.HasVPC = true
+			}
+			// sam package の前は PackageType、後は ImageUri で現れる
+			if nodeValue(&r.Properties, "PackageType") == "Image" || hasKey(&r.Properties, "ImageUri") {
+				f.HasImage = true
 			}
 			if usesEventSourceMapping(&r.Properties) {
 				f.HasEventSourceMapping = true
@@ -170,4 +177,17 @@ func hasKey(n *yaml.Node, key string) bool {
 		}
 	}
 	return false
+}
+
+// nodeValue はマッピングの key に対応するスカラ値を返す(無ければ "")。
+func nodeValue(n *yaml.Node, key string) string {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1].Value
+		}
+	}
+	return ""
 }
