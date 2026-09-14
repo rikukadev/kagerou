@@ -73,10 +73,11 @@ func TestWizardChoicesDriveGeneration(t *testing.T) {
 
 	m = step(t, m, enter)    // Q1 DB: 既定(sashiki)
 	m = step(t, m, enter)    // Q2 compute: 既定(lambda)
-	m = step(t, m, enter)    // Q3 template: 既定(雛形生成)
-	m = step(t, m, key('j')) // Q4 workflows: preview のみへ
+	m = step(t, m, enter)    // Q3 auth: 既定(誰でも開ける)
+	m = step(t, m, enter)    // Q4 template: 既定(雛形生成)
+	m = step(t, m, key('j')) // Q5 workflows: preview のみへ
 	m = step(t, m, enter)
-	m = step(t, m, enter) // Q5 setup(skip 固定)→ summary
+	m = step(t, m, enter) // Q6 setup(skip 固定)→ summary
 	if m.phase != phaseSummary {
 		t.Fatalf("phase = %d, want summary", m.phase)
 	}
@@ -328,17 +329,18 @@ func TestComputeDefaultFollowsRecommendation(t *testing.T) {
 		t.Fatalf("single service: compute = %d, want 0 (lambda)", got)
 	}
 
-	// 複数サービス → ecs 側が既定
+	// 複数サービス → apigateway が既定。ALB と同じコンテナを動かせて
+	// 固定費が無いので、ecs より先に来る(recommend の判断と揃える)
 	multi := scaffold.Detection{
 		VarsSet: map[string]bool{},
 		Facts:   appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 3},
 	}
 	m2 := newInitModel(t.TempDir(), base, multi, false)
-	if got := answerOf(m2, "compute"); got != 1 {
-		t.Fatalf("multi service: compute = %d, want 1 (ecs)", got)
+	if got := answerOf(m2, "compute"); got != 2 {
+		t.Fatalf("multi service: compute = %d, want 2 (apigateway)", got)
 	}
 
-	// WebSocket → ecs 側が既定になり、理由が表示に出る
+	// WebSocket → 応答時間に上限のない ecs(共有 ALB)が既定になり、理由が表示に出る
 	ws := scaffold.Detection{
 		VarsSet: map[string]bool{},
 		Facts:   appscan.Facts{HasDockerfile: true, AppPort: "8080", Services: 1, Realtime: true},
@@ -347,7 +349,7 @@ func TestComputeDefaultFollowsRecommendation(t *testing.T) {
 	if got := answerOf(m3, "compute"); got != 1 {
 		t.Fatalf("realtime: compute = %d, want 1 (ecs)", got)
 	}
-	// Q1 を送って compute 質問を表示させ、理由が出ているか見る
+	// Q1(DB)を送って compute 質問を表示させ、理由が出ているか見る
 	m3 = step(t, m3, enter)
 	if v := m3.View(); !strings.Contains(v, "WebSocket") {
 		t.Fatalf("realtime の理由が表示されていない:\n%s", v)

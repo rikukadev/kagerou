@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  kagerou API Gateway base — shared VPC Link and Cloud Map namespace for container
+  preview environments. Deploy ONCE per account/VPC (in the app's region).
+  Unlike the ALB base this has no hourly charge: HTTP API VPC Links are free and
+  the environments themselves are pay-per-request.
+
+# なぜ ALB ベースと別に要るのか:
+#   ALB は 1 本で月 $18 前後の固定費がかかる。環境が 3 個でも 30 個でも同じ額で、
+#   「プレビューを開いていない月」にも請求が立つ。HTTP API + VPC Link には
+#   その固定費が無い代わりに、リクエストは 30 秒で切れる(recommend の判断材料)。
+#
+# 共有するもの / しないもの:
+#   ここ(1 回だけ)  VPC Link・Cloud Map 名前空間・ECS クラスタ・証明書・SG
+#   環境ごと         タスク・サービス・Cloud Map サービス・HTTP API・ドメイン
+# どれも作成/削除が無料なので、環境側に置いても固定費は増えない。
+
+Parameters:
+  Project:
+    Type: String
+    AllowedPattern: "[a-z]([a-z0-9-]*[a-z0-9])?"
+    Description: kagerou project name; namespaces the SSM contract and the cluster
+  DomainName:
+    Type: String
+    Description: Wildcard domain for previews, e.g. api.example.com (URLs become pr-42.api.example.com)
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >
+      Subnets for the VPC Link and the tasks (at least two AZs). Private subnets
+      need NAT or VPC endpoints for ECR/Logs; public subnets work as-is.
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: >
+      ENABLED lets tasks in public subnets pull from ECR without NAT (the cheap
+      default). Set DISABLED when SubnetIds are private subnets behind NAT.
+
+Resources:
+  # HTTP API のカスタムドメインは **アプリのリージョン** の証明書を使う
+  # (CloudFront ベースと違い us-east-1 ではない)。
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "*.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  # VPC Link は「HTTP API から VPC の中に入る口」。ENI を張るだけで時間課金は無い。
+  VpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou shared VPC Link (API Gateway side)
+      VpcId: !Ref VpcId
+
+  # 環境のタスクはこの SG を付ける。VPC Link からのみ到達でき、環境同士は繋がらない
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou preview tasks (from the shared VPC Link only)
+      VpcId: !Ref VpcId
+
+  TaskIngressFromVpcLink:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref VpcLinkSecurityGroup
+
+  VpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "kagerou-preview-${Project}"
+      SubnetIds: !Ref SubnetIds
+      SecurityGroupIds: [!Ref VpcLinkSecurityGroup]
+
+  # 環境のタスクは起動のたびに IP が変わる。ALB のターゲットグループの代わりに
+  # Cloud Map に登録し、HTTP API はサービス名で引く。
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub "${Project}.kagerou.internal"
+      Vpc: !Ref VpcId
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "kagerou-preview-apigw-${Project}"
+
+  # ベース↔環境のデータ契約(CONTRACT §9 の compute 版)
+  SsmDomain:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_domain"
+      Type: String
+      Value: !Ref DomainName
+  SsmHostedZone:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_hosted_zone_id"
+      Type: String
+      Value: !Ref HostedZoneId
+  SsmCertificate:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/regional_certificate_arn"
+      Type: String
+      Value: !Ref Certificate
+  SsmVpcLink:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_vpc_link_id"
+      Type: String
+      Value: !Ref VpcLink
+  SsmNamespace:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_namespace_id"
+      Type: String
+      Value: !GetAtt Namespace.Id
+  SsmCluster:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_cluster"
+      Type: String
+      Value: !Ref Cluster
+  SsmVpc:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_vpc_id"
+      Type: String
+      Value: !Ref VpcId
+  SsmSubnets:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_subnets"
+      Type: StringList
+      Value: !Join [",", !Ref SubnetIds]
+  SsmAssignPublicIp:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_assign_public_ip"
+      Type: String
+      Value: !Ref AssignPublicIp
+  SsmTaskSg:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_task_security_group"
+      Type: String
+      Value: !Ref TaskSecurityGroup
+
+Outputs:
+  Domain:
+    Value: !Ref DomainName
+  VpcLinkId:
+    Value: !Ref VpcLink
+  NamespaceId:
+    Value: !GetAtt Namespace.Id
+  ClusterName:
+    Value: !Ref Cluster
+  TaskSecurityGroup:
+    Value: !Ref TaskSecurityGroup
+  CertificateArn:
+    Value: !Ref Certificate

@@ -116,9 +116,14 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		AllowFixedCost: det.HasSharedALB(), // 既にあるなら固定費は増えない
 		CustomDomain:   len(det.Zones) > 0 || len(det.Bases) > 0,
 	})
+	// 推薦した入口をそのまま既定に据える。ecs は入口が 2 通りあるので別項目にする
+	// (動くものは同じで、ALB の固定費を取るか 30 秒上限を取るかの違い)。
 	computeDefault := 0
-	if rec.Default != recommend.Lambda && rec.Default != recommend.Static {
+	switch rec.Default {
+	case recommend.ALB:
 		computeDefault = 1
+	case recommend.APIGateway:
+		computeDefault = 2
 	}
 	qs = append(qs, question{
 		key:   "compute",
@@ -126,8 +131,21 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		options: []option{
 			{"lambda", computeReason(rec, recommend.Lambda, "wrap the container with LWA; idle costs $0, TTL 72h")},
 			{"ecs (Fargate + shared ALB)", computeReason(rec, recommend.ALB, "real long-running containers; billed while up, TTL 24h")},
+			{"ecs (Fargate + shared VPC Link)", computeReason(rec, recommend.APIGateway, "same containers with no fixed monthly cost; requests capped at 30s")},
 		},
 		selected: computeDefault,
+	})
+
+	// プレビューを誰でも開けるか。ALB の authenticate-oidc は S3 を守れないので、
+	// 共有ベースは CloudFront + Lambda@Edge の形(deploy/edge-base.yaml)になる。
+	qs = append(qs, question{
+		key:   "auth",
+		title: "Who can open a preview?",
+		options: []option{
+			{"anyone with the URL", "no login; the URL is unguessable but public"},
+			{"only signed-in users (OIDC)", "CloudFront + Lambda@Edge; you add the client secret to SSM afterwards"},
+		},
+		selected: 0,
 	})
 
 	if det.HasDockerfile && !det.HasLWA {
@@ -217,14 +235,19 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	// driver を先に決める。既存 kagerou.yaml があればそれが最優先なので、
 	// init を二度叩いて構成が入れ替わることはない(#81)。
 	p.Driver = scaffold.DriverFor(m.det)
-	if m.answer("compute") == 1 {
-		p.Compute = "ecs"
-	} else {
-		p.Compute = "lambda"
-	}
+	p.Auth = m.answer("auth") == 1
 	// 入口は独自ドメイン(共有 ALB)が既定。ドメインが取れないときだけ
 	// 生の execute-api URL に落ちる(Params.ALB が Domain も見て判断する)。
 	p.Entrypoint = "alb"
+	switch m.answer("compute") {
+	case 1:
+		p.Compute = "ecs"
+	case 2:
+		// 同じ Fargate を、固定費のある ALB ではなく HTTP API + VPC Link で公開する
+		p.Compute, p.Entrypoint = "ecs", "apigateway"
+	default:
+		p.Compute = "lambda"
+	}
 	p.Services = m.det.Facts.ServiceNames
 	// routing は preview base から配るときにだけ意味がある(#86)。
 	// compute がルーティングを持つ構成で渡すと、設定と実際がずれる。
@@ -349,7 +372,9 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseResult
 				return m, tea.Quit
 			}
-			if m.answer("docker") == 0 {
+			// LWA が要るのは Lambda 形だけ。ecs は素のコンテナをそのまま
+			// 動かすので、注入しても意味のない 1 行が残るだけになる
+			if m.answer("docker") == 0 && !p.ECS() && !p.Static() {
 				if changed, err := scaffold.InjectLWA(filepath.Join(m.dir, m.det.DockerfileDir), m.det.DockerfileName); err != nil {
 					m.runErr = err
 					m.phase = phaseResult

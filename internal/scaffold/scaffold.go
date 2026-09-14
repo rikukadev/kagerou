@@ -35,8 +35,13 @@ type Params struct {
 	// または "ecs"(Fargate + 共有 ALB。常駐プロセスやサイドカーが要るアプリ向け)。
 	Compute string
 	// Entrypoint は環境を公開する入口。"alb"(既定: 共有 ALB。独自ドメインで
-	// 配る)または "apigateway"(生の execute-api URL。ドメインが無いときの
-	// フォールバック)。compute: ecs は常に ALB。
+	// 配る)または "apigateway"。
+	//
+	// apigateway の中身は compute で変わる:
+	//   lambda … 生の execute-api URL(ドメインが無いときのフォールバック)
+	//   ecs    … HTTP API + VPC Link + Cloud Map(固定費ゼロの ALB 代替)
+	// どちらも「HTTP API から公開する」という点で同じで、ALB の固定費を
+	// 持たない代わりにリクエストが 30 秒で切れる。
 	Entrypoint string
 	// Services は appscan が見つけたサービス名(cmd/<name>/main.go 等)。
 	// ALB 入口では 1 環境の中で **ホストで分ける**(<service>-<env>.<domain>)。
@@ -56,6 +61,10 @@ type Params struct {
 	// アプリでは誤判定する。**検出できたときだけ** readiness_path に書く。
 	HealthPath string
 	SetupBase  bool // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+	// Auth はプレビューにログインを必須にするか。ALB の authenticate-oidc は
+	// S3 を守れないので、共有ベースは CloudFront + Lambda@Edge の形
+	// (deploy/preview-base.yaml の代わりに deploy/edge-base.yaml)になる。
+	Auth bool
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
 	Routing string
@@ -114,29 +123,7 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		}
 	}
 
-	files := []struct {
-		enabled   bool
-		path      string
-		tmpl      string
-		overwrite bool // force 時に上書きしてよいか
-	}{
-		{sel.KagerouYaml, "kagerou.yaml", "kagerou.yaml.tmpl", true},
-		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true},
-		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true},
-		// static には compute が無いので template.yaml も Dockerfile も要らない。
-		// ここで落とさないと「消してから手で workflow を書く」ことになる(#81)。
-		{sel.Template && !p.Static() && !p.ECS() && !p.MultiService(), "template.yaml", "template.yaml.tmpl", false},
-		// 複数サービスの環境は ALB のホストで分ける(1 環境 = 複数ホスト。DESIGN §13)
-		{sel.Template && p.MultiService(), "template.yaml", "template.multi.yaml.tmpl", false},
-		// compute: ecs は Lambda/LWA で包まず、Fargate + 共有 ALB のテンプレートを出す。
-		// ALB は固定費があるので共有ベース(deploy/alb-base.yaml)が持ち、環境は
-		// リスナールールとターゲットグループだけ足す。
-		{sel.Template && p.ECS(), "template.yaml", "template.ecs.yaml.tmpl", false},
-		// 共有 ALB を入口にするなら(ecs / lambda どちらでも)ベースを同梱する
-		{p.ALB(), filepath.Join("deploy", "alb-base.yaml"), "albbase.yaml.tmpl", true},
-		{p.SetupBase, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true},
-	}
-	for _, f := range files {
+	for _, f := range fileSpecs(p, sel) {
 		if !f.enabled {
 			continue
 		}
@@ -174,6 +161,93 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		}
 	}
 	return res, nil
+}
+
+// fileSpec は init が書き出すファイル 1 件。
+//
+// Run(実際に書く)と PlannedFiles(名前だけ列挙する)が同じ表を引く。別々に
+// 持つと「diagnose が予告したファイル」と「init が書いたファイル」が静かにずれる。
+type fileSpec struct {
+	enabled   bool
+	path      string
+	tmpl      string
+	overwrite bool   // force 時に上書きしてよいか
+	note      string // 何のためのファイルか(1 行)
+}
+
+func fileSpecs(p Params, sel Targets) []fileSpec {
+	return []fileSpec{
+		{sel.KagerouYaml, "kagerou.yaml", "kagerou.yaml.tmpl", true,
+			"環境の設定(driver / TTL / URL / hooks)"},
+		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true,
+			"PR を開くと環境が生え、閉じると消える"},
+		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true,
+			"TTL を過ぎた環境を回収する(削除の取りこぼし対策)"},
+		// static には compute が無いので template.yaml も Dockerfile も要らない。
+		// ここで落とさないと「消してから手で workflow を書く」ことになる(#81)。
+		{sel.Template && !p.Static() && !p.ECS() && !p.MultiService(), "template.yaml", "template.yaml.tmpl", false,
+			"環境 1 個ぶんの CloudFormation(Lambda)"},
+		// 複数サービスの環境は ALB のホストで分ける(1 環境 = 複数ホスト。DESIGN §13)
+		{sel.Template && p.MultiService(), "template.yaml", "template.multi.yaml.tmpl", false,
+			"環境 1 個ぶんの CloudFormation(サービスごとにホストを分ける)"},
+		// compute: ecs は Lambda/LWA で包まず Fargate を動かす。入口は 2 通り:
+		// 共有 ALB(固定費あり・上限なし)か HTTP API + VPC Link(固定費なし・30 秒)。
+		{sel.Template && p.ECS() && !p.APIGatewayVPCLink(), "template.yaml", "template.ecs.yaml.tmpl", false,
+			"環境 1 個ぶんの CloudFormation(共有 ALB + Fargate)"},
+		{sel.Template && p.APIGatewayVPCLink(), "template.yaml", "template.apigw.yaml.tmpl", false,
+			"環境 1 個ぶんの CloudFormation(HTTP API + VPC Link + Fargate)"},
+		// 共有 ALB を入口にするなら(ecs / lambda どちらでも)ベースを同梱する
+		{p.ALB(), filepath.Join("deploy", "alb-base.yaml"), "albbase.yaml.tmpl", true,
+			"共有 ALB + ECS クラスタ。一度だけ deploy する(既にあれば不要)"},
+		{p.APIGatewayVPCLink(), filepath.Join("deploy", "apigw-base.yaml"), "apigwbase.yaml.tmpl", true,
+			"共有 VPC Link + Cloud Map + ECS クラスタ。一度だけ deploy する(固定費なし)"},
+		{p.SetupBase && !p.Auth, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true,
+			"共有 CloudFront + S3。一度だけ deploy する(既にあれば不要)"},
+		// 認証ありの共有ベース。preview base と同じ SSM キーを書くので、環境側から
+		// 見た契約は変わらない(入口に認証が挟まるだけ)。
+		//
+		// preview base と違い SetupBase で条件しない: 認証を求めた時点でこの 2 つが
+		// 無いと認証が成立しないので、「既にあるかも」で省いてよいものではない。
+		{p.Auth, filepath.Join("deploy", "edge-base.yaml"), "edgebase.yaml.tmpl", true,
+			"共有 CloudFront + Lambda@Edge 認証。us-east-1 に一度だけ deploy する"},
+		{p.Auth, filepath.Join("deploy", "edge-auth", "index.mjs"), "edgeauth.mjs.tmpl", true,
+			"Lambda@Edge の認証本体(OIDC。client_secret は SSM に置く)"},
+	}
+}
+
+// PlannedFile は init が書き出す(または書き換える)ファイル 1 件。
+type PlannedFile struct {
+	Path string `json:"path"`
+	Note string `json:"note,omitempty"`
+}
+
+// PlannedFiles は init の生成物を **1 つも書かずに** 列挙する。diagnose(他人の
+// リポジトリでも走らせる読み取り専用の診断)が「何が生えるのか」を出すために使う。
+//
+// Dockerfile の扱いだけ Run と判断材料が違う: Run はディスクを stat するが、
+// ここは走査も書き込みもしない立場なので Params.HasDockerfile を信じる。
+func PlannedFiles(p Params, sel Targets) []PlannedFile {
+	var out []PlannedFile
+	for _, f := range fileSpecs(p, sel) {
+		if f.enabled {
+			out = append(out, PlannedFile{Path: filepath.ToSlash(f.path), Note: f.note})
+		}
+	}
+	// Dockerfile。既存があれば init は上書きしない。Lambda 形のときだけ
+	// LWA の 1 行を足す(ecs は素のコンテナをそのまま動かす)。
+	if sel.Dockerfile && !p.Static() {
+		if _, ok := dockerfileVariant(p.Framework); ok {
+			note := p.Framework + " 向けの雛形を新規生成する"
+			switch {
+			case p.HasDockerfile && p.ECS():
+				note = "既存をそのまま使う(生成も変更もしない)"
+			case p.HasDockerfile:
+				note = "既存。Lambda Web Adapter の 1 行だけ足す(上書きしない)"
+			}
+			out = append(out, PlannedFile{Path: "Dockerfile", Note: note})
+		}
+	}
+	return out
 }
 
 // dockerfileVariant は検出フレームワークを雛形テンプレート名に割り当てる。
@@ -399,10 +473,17 @@ func (p Params) ALB() bool {
 		return false
 	}
 	if p.ECS() {
-		return true
+		// ecs も入口を選べる。apigateway なら固定費のある ALB は要らない
+		return p.Entrypoint != "apigateway"
 	}
 	return p.Entrypoint == "alb" && p.Domain != ""
 }
+
+// APIGatewayVPCLink は compute: ecs を HTTP API + VPC Link で公開する構成か。
+// 動かすコンテナは ALB 版と同じで、違うのは入口だけ(固定費が消える代わりに
+// リクエストが 30 秒で切れる)。lambda の apigateway は生の execute-api なので
+// ここには含めない。
+func (p Params) APIGatewayVPCLink() bool { return p.ECS() && p.Entrypoint == "apigateway" }
 
 // LambdaALB は「lambda を共有 ALB に載せる」構成か(API Gateway を作らない)。
 func (p Params) LambdaALB() bool { return p.ALB() && !p.ECS() }
