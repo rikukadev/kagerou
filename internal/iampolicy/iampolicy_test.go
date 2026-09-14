@@ -593,7 +593,7 @@ Resources:
 	}
 	// タスク定義の登録はリソース単位の権限に対応していない。ARN で絞ると
 	// 「絞ったつもりで 403」になる(EventSourceMapping と同じ穴)
-	td := findSid(t, p, "EcsTaskDefinition")
+	td := findSid(t, p, "EcsService")
 	if got, ok := td.Resource.(string); !ok || got != "*" {
 		t.Errorf("RegisterTaskDefinition は Resource:* のはず: %#v", td.Resource)
 	}
@@ -602,10 +602,32 @@ Resources:
 	if !strings.Contains(strings.Join(cm.Action, ","), "servicediscovery:GetOperation") {
 		t.Error("非同期完了待ちの GetOperation が無い")
 	}
+	// タグは本体と別 ARN で評価される。**タスク定義の ARN が抜けていると
+	// CreateTaskDefinition は通るのに直後のタグで落ちる**(実際に CI で踏んだ)
+	tags := findSid(t, p, "EcsTags")
+	trs, ok := tags.Resource.([]string)
+	if !ok {
+		t.Fatalf("EcsTags の Resource: %#v", tags.Resource)
+	}
+	var hasTD bool
+	for _, r := range trs {
+		if strings.Contains(r, ":task-definition/") {
+			hasTD = true
+		}
+	}
+	if !hasTD {
+		t.Errorf("タグの対象に task-definition が無い: %v", trs)
+	}
+	// **型からは見えない**権限。PrivateDnsNamespace の実体は Route53 の
+	// プライベートホストゾーンで、servicediscovery を全部与えても通らない
+	// (CI で踏んだ: route53:CreateHostedZone が無くて NotStabilized)
+	zone := findSid(t, p, "CloudMapPrivateZone")
+	if !strings.Contains(strings.Join(zone.Action, ","), "route53:CreateHostedZone") {
+		t.Error("プライベートゾーンの作成権限が無い")
+	}
 	// クラスタとサービスは prefix で絞れる(絞れるものは絞る)
-	cs := findSid(t, p, "EcsClusterAndService")
-	rs, ok := cs.Resource.([]string)
-	if !ok || len(rs) == 0 || !strings.Contains(rs[0], "p-") {
+	cs := findSid(t, p, "EcsCluster")
+	if got, _ := cs.Resource.(string); !strings.Contains(got, "p-") {
 		t.Errorf("prefix でスコープしていない: %#v", cs.Resource)
 	}
 	// コンテナのログは Lambda の /aws/lambda/… とは別の名前空間

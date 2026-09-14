@@ -361,8 +361,9 @@ func Build(o Options) (Policy, error) {
 				Resource: "arn:aws:lambda:*:*:event-source-mapping:*",
 			})
 	}
-	if o.Template != nil && o.Template.has("AWS::ECS::Cluster", "AWS::ECS::Service", "AWS::ECS::TaskDefinition") {
-		sts = append(sts, ecsStatements(p)...)
+	if o.Template != nil && o.Template.has("AWS::ECS::Cluster",
+		"AWS::ServiceDiscovery::PrivateDnsNamespace", "AWS::ServiceDiscovery::Service") {
+		sts = append(sts, cloudMapStatements(p)...)
 	}
 	if wantS3 {
 		sts = append(sts, Statement{
@@ -820,35 +821,40 @@ func CheckDriftActions(gen map[string]bool, attached []byte) (extra, missing []s
 	return extra, missing, nil
 }
 
-// ecsStatements は compute: ecs / apigw 構成の権限(#105 / #169)。
+// cloudMapStatements は Cloud Map 経由の apigw 構成に足りるぶん(#105)。
 //
-// パッケージ冒頭の 3 パターンのうち 2 つがここに集中している:
-//   - タスク定義の登録・解除は **Resource: * でしか評価されない**(ARN で絞ると
-//     絞ったつもりで 403 になる。EventSourceMapping と同じ)
+// main の EcsService(#170)はクラスタと Cloud Map を**共有ベースの持ち物**として
+// 扱う。E2E fixture と、ベースをまだ作っていない構成は自前で作るので、その差を
+// ここで埋める。EcsService と重ならない範囲だけを持つ。
+//
+// パッケージ冒頭の 3 パターンのうち 2 つがここに出る:
 //   - 名前空間の作成は非同期で、CFN は GetOperation で完了を待つ(書く前後に読む)
-func ecsStatements(p string) []Statement {
+//   - タグは本体と別の ARN で評価される。**タスク定義にも打たれる** —
+//     CI で実際に踏んだ(CreateTaskDefinition は通るのに直後のタグで 403)
+//
+// もう 1 つ、型からは見えない形がある: **リソースが別サービスを連れてくる**。
+// PrivateDnsNamespace の実体は Route53 のプライベートホストゾーンで、作成には
+// route53:CreateHostedZone が要る。servicediscovery の権限を全部与えても通らない。
+func cloudMapStatements(p string) []Statement {
 	return []Statement{
 		{
-			Sid: "EcsClusterAndService", Effect: "Allow",
+			// クラスタ。共有ベースを使う構成では要らないが、作る構成では要る
+			Sid: "EcsCluster", Effect: "Allow",
 			Action: []string{
 				"ecs:CreateCluster", "ecs:DeleteCluster", "ecs:DescribeClusters",
-				"ecs:CreateService", "ecs:DeleteService", "ecs:UpdateService", "ecs:DescribeServices",
-				"ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource",
 			},
+			Resource: fmt.Sprintf("arn:aws:ecs:*:*:cluster/%s*", p),
+		},
+		{
+			// タグの対象にタスク定義を含める。EcsService 側は Resource:* なので
+			// 通るが、将来そこを絞ったときにここが抜けないよう明示しておく
+			Sid: "EcsTags", Effect: "Allow",
+			Action: []string{"ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource"},
 			Resource: []string{
 				fmt.Sprintf("arn:aws:ecs:*:*:cluster/%s*", p),
 				fmt.Sprintf("arn:aws:ecs:*:*:service/%s*/*", p),
+				fmt.Sprintf("arn:aws:ecs:*:*:task-definition/%s*:*", p),
 			},
-		},
-		{
-			// RegisterTaskDefinition はリソース単位の権限に対応していない。
-			// task-definition の ARN で絞ると通らない(登録前なので当然だが、
-			// Deregister も同じ扱いになる)
-			Sid: "EcsTaskDefinition", Effect: "Allow",
-			Action: []string{
-				"ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition",
-			},
-			Resource: "*",
 		},
 		{
 			// Cloud Map。作成系は ARN で絞れず、名前空間の作成は非同期なので
@@ -865,8 +871,22 @@ func ecsStatements(p string) []Statement {
 			Resource: "*",
 		},
 		{
-			// タスクとインターフェースのセキュリティグループ。作成時点では
-			// ARN が無いので絞れない(作った後のタグで絞る運用は CFN と噛み合わない)
+			// PrivateDnsNamespace は **Route53 のプライベートホストゾーンを作る**。
+			// リソース型は ServiceDiscovery なので、型を見ているだけでは絶対に
+			// 出てこない権限。ゾーンは作る前なので ARN で絞れない
+			Sid: "CloudMapPrivateZone", Effect: "Allow",
+			Action: []string{
+				"route53:CreateHostedZone", "route53:DeleteHostedZone", "route53:GetHostedZone",
+				"route53:ListHostedZonesByName", "route53:ListHostedZones",
+				"route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets",
+				"route53:GetChange", "route53:ChangeTagsForResource",
+				// 名前空間の削除時に健全性チェックの後始末が走ることがある
+				"route53:CreateHealthCheck", "route53:DeleteHealthCheck", "route53:GetHealthCheck",
+			},
+			Resource: "*",
+		},
+		{
+			// タスクと VPC Link のセキュリティグループ。作成時点では ARN が無い
 			Sid: "TaskNetworking", Effect: "Allow",
 			Action: []string{
 				"ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup", "ec2:DescribeSecurityGroups",

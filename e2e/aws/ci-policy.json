@@ -240,34 +240,45 @@
       "Resource": "arn:aws:lambda:*:*:event-source-mapping:*"
     },
     {
-      "Sid": "EcsClusterAndService",
+      "Sid": "EcsService",
       "Effect": "Allow",
       "Action": [
-        "ecs:CreateCluster",
         "ecs:CreateService",
-        "ecs:DeleteCluster",
         "ecs:DeleteService",
-        "ecs:DescribeClusters",
+        "ecs:DeregisterTaskDefinition",
         "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
         "ecs:ListTagsForResource",
+        "ecs:RegisterTaskDefinition",
         "ecs:TagResource",
         "ecs:UntagResource",
         "ecs:UpdateService"
       ],
-      "Resource": [
-        "arn:aws:ecs:*:*:cluster/kge2e-*",
-        "arn:aws:ecs:*:*:service/kge2e-*/*"
-      ]
+      "Resource": "*"
     },
     {
-      "Sid": "EcsTaskDefinition",
+      "Sid": "EcsCluster",
       "Effect": "Allow",
       "Action": [
-        "ecs:DeregisterTaskDefinition",
-        "ecs:DescribeTaskDefinition",
-        "ecs:RegisterTaskDefinition"
+        "ecs:CreateCluster",
+        "ecs:DeleteCluster",
+        "ecs:DescribeClusters"
       ],
-      "Resource": "*"
+      "Resource": "arn:aws:ecs:*:*:cluster/kge2e-*"
+    },
+    {
+      "Sid": "EcsTags",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:ListTagsForResource",
+        "ecs:TagResource",
+        "ecs:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:ecs:*:*:cluster/kge2e-*",
+        "arn:aws:ecs:*:*:service/kge2e-*/*",
+        "arn:aws:ecs:*:*:task-definition/kge2e-*:*"
+      ]
     },
     {
       "Sid": "CloudMapDiscovery",
@@ -286,6 +297,25 @@
         "servicediscovery:ListTagsForResource",
         "servicediscovery:TagResource",
         "servicediscovery:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudMapPrivateZone",
+      "Effect": "Allow",
+      "Action": [
+        "route53:ChangeResourceRecordSets",
+        "route53:ChangeTagsForResource",
+        "route53:CreateHealthCheck",
+        "route53:CreateHostedZone",
+        "route53:DeleteHealthCheck",
+        "route53:DeleteHostedZone",
+        "route53:GetChange",
+        "route53:GetHealthCheck",
+        "route53:GetHostedZone",
+        "route53:ListHostedZones",
+        "route53:ListHostedZonesByName",
+        "route53:ListResourceRecordSets"
       ],
       "Resource": "*"
     },
