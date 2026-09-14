@@ -41,6 +41,10 @@ type diagnosisFacts struct {
 	LWAFile     string   `json:"lambda_web_adapter_file,omitempty"`
 	Realtime    bool     `json:"realtime"`
 	Wants       []string `json:"wants,omitempty"`
+	// HealthPath / PublishesImage は導入の判断が変わる事実(#165)。
+	HealthPath     string `json:"health_path,omitempty"`
+	PublishesImage bool   `json:"ci_publishes_image"`
+	ImageRegistry  string `json:"image_registry,omitempty"`
 }
 
 type diagnosisAssumed struct {
@@ -84,6 +88,8 @@ func cmdDiagnose(args []string, out *os.File) error {
 			AppPort: facts.AppPort, Dockerfile: facts.HasDockerfile,
 			Dockerfiles: facts.Dockerfiles, LWA: facts.HasLWA, LWAFile: lwaFile(facts),
 			Realtime: facts.Realtime, Wants: wantsList(facts.Wants),
+			HealthPath: facts.HealthPath, PublishesImage: facts.PublishesImage,
+			ImageRegistry: facts.ImageRegistry,
 		},
 	}
 	if facts.Owner != "" {
@@ -133,6 +139,18 @@ func writeDiagnosis(out *os.File, d diagnosis) error {
 	}
 	if d.Facts.Realtime {
 		line("realtime", "WebSocket / SSE")
+	}
+	if d.Facts.HealthPath != "" {
+		// readiness の既定 "/" を上書きする根拠。重い SSR やリダイレクトを避ける
+		line("health path", d.Facts.HealthPath)
+	}
+	if d.Facts.PublishesImage {
+		v := "yes"
+		if d.Facts.ImageRegistry != "" {
+			v += " (" + d.Facts.ImageRegistry + ")"
+		}
+		// 既にイメージがあるなら sam build で作り直すのは二度手間かもしれない
+		line("ci image", v)
 	}
 	if len(d.Facts.Wants) > 0 {
 		line("uses", strings.Join(d.Facts.Wants, ", "))

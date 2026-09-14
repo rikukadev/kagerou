@@ -43,7 +43,15 @@ type Facts struct {
 	Services     int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
 	ServiceNames []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
 	Realtime     bool     // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
-	Wants        Wants    // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
+	// HealthPath は アプリのヘルスチェック用パス(#165)。LWA の readiness 設定 /
+	// Dockerfile の HEALTHCHECK / compose の healthcheck から拾う。
+	// 空なら見つからなかった("/" しか無い場合も空 = 既定と同じで言う価値がない)
+	HealthPath string
+	// PublishesImage は CI が既にイメージを作って公開していること。
+	// ImageRegistry は分かれば "ghcr.io" / "ecr"。
+	PublishesImage bool
+	ImageRegistry  string
+	Wants          Wants // 依存から推定した「アプリが使うもの」(全ディレクトリの OR)
 
 	// URLShape は設定ファイルから推定した URL 構成(kagerou#109 v1):
 	//   "cross" = フロントと API が別オリジン(traefik Host ラベル / nginx
@@ -105,6 +113,9 @@ func Scan(dir string) Facts {
 	f.HasTemplate = exists(filepath.Join(dir, "template.yaml"))
 	visited := 0
 	walk(dir, "", 0, &f, &visited)
+
+	// CI の workflow はルートにしか無いので walk の外で読む
+	f.PublishesImage, f.ImageRegistry = scanWorkflows(dir)
 
 	// URL 構成の確定。明示のホスト名 > パス分割の意図 > クロスオリジンの傍証。
 	switch {
@@ -210,10 +221,16 @@ func scanDir(dir, rel string, f *Facts) {
 			if f.DockerfileName == "" {
 				f.DockerfileName = names[0]
 			}
+			if f.HealthPath == "" {
+				f.HealthPath = healthcheckPath(dir, names)
+			}
 		}
 	}
 	if f.AppPort == "" {
 		f.AppPort = composePort(dir)
+	}
+	if f.HealthPath == "" {
+		f.HealthPath = healthcheckPath(dir, nil)
 	}
 	if n := serviceCount(dir); n > f.Services {
 		f.Services = n
@@ -793,4 +810,159 @@ func dockerfilesIn(dir string) []string {
 		return append([]string{"Dockerfile"}, rest...)
 	}
 	return rest
+}
+
+// --- ヘルスチェックのパス(#165)------------------------------------------
+//
+// readiness の既定は "/" だが、ルートが重い SSR では無駄に遅く、ルートが
+// リダイレクトするアプリでは誤判定する。アプリが専用のパスを持っている事実は
+// 複数の場所にファイルとして書かれているので、それを拾う。
+
+// healthPathRe は URL か、パスだけの記述からパス部分を取る。
+// クエリは落とす(readiness は素のパスを叩く)。
+var healthPathRe = regexp.MustCompile(`https?://[^\s"']*?(/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*)|(?:^|\s)(/[A-Za-z0-9._~%!$&'()*+,;=:@/-]+)`)
+
+// lwaHealthRe は LWA の readiness パス(Dockerfile の ENV)。
+var lwaHealthRe = regexp.MustCompile(`(?i)AWS_LWA_READINESS_CHECK_PATH[=\s]+["']?([^\s"']+)`)
+
+// healthcheckPath は dir から ヘルスチェック用のパスを探す。
+// 優先順は「kagerou と同じ土俵のもの」から:
+//  1. LWA の readiness パス(Lambda で実際に使われる値)
+//  2. Dockerfile の HEALTHCHECK
+//  3. compose の healthcheck
+//
+// "/" しか出てこなければ空を返す(既定と同じなので言う価値がない)。
+func healthcheckPath(dir string, dockerfiles []string) string {
+	for _, name := range dockerfiles {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		src := string(b)
+		if m := lwaHealthRe.FindStringSubmatch(src); len(m) > 1 {
+			if p := cleanHealthPath(m[1]); p != "" {
+				return p
+			}
+		}
+		if p := healthPathIn(src, "HEALTHCHECK"); p != "" {
+			return p
+		}
+	}
+	for _, name := range composeFiles {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if p := healthPathIn(string(b), "healthcheck"); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// healthPathIn は marker を含む行(と続く数行)からパスらしきものを拾う。
+// compose の healthcheck は test: が次の行に来るので、少し先まで見る。
+func healthPathIn(src, marker string) string {
+	lines := strings.Split(src, "\n")
+	for i, l := range lines {
+		if !strings.Contains(l, marker) {
+			continue
+		}
+		end := i + 4
+		if end > len(lines) {
+			end = len(lines)
+		}
+		for _, cand := range lines[i:end] {
+			// 別のトップレベルキーに入ったら打ち切る(compose の取り違え防止)
+			if cand != lines[i] && healthBlockEnded(cand, marker) {
+				break
+			}
+			for _, m := range healthPathRe.FindAllStringSubmatch(cand, -1) {
+				for _, g := range m[1:] {
+					if p := cleanHealthPath(g); p != "" {
+						return p
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// healthBlockEnded は compose で healthcheck ブロックを抜けたかを見る。
+// Dockerfile(marker が大文字)では行をまたがないので常に打ち切る。
+func healthBlockEnded(line, marker string) bool {
+	if marker == "HEALTHCHECK" {
+		return !strings.HasSuffix(strings.TrimSpace(line), "\\")
+	}
+	t := strings.TrimSpace(line)
+	return t != "" && !strings.HasPrefix(t, "-") && strings.HasSuffix(strings.SplitN(t, " ", 2)[0], ":") &&
+		!strings.HasPrefix(t, "test:") && !strings.HasPrefix(t, "interval:") &&
+		!strings.HasPrefix(t, "timeout:") && !strings.HasPrefix(t, "retries:")
+}
+
+// cleanHealthPath はクエリ・フラグメントを落とし、"/" だけなら空にする。
+func cleanHealthPath(p string) string {
+	p = strings.TrimSpace(p)
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	p = strings.TrimSuffix(p, "\\")
+	p = strings.TrimRight(p, `"',`)
+	if p == "" || p == "/" || !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	return p
+}
+
+// --- CI がイメージを公開しているか(#165)---------------------------------
+//
+// 既にイメージを作って公開しているリポジトリに対して、kagerou の雛形は
+// `sam build` で作り直す前提で workflow を出す。二度手間になっていないか、
+// 既存レジストリを使えないかは、導入時に判断すべき点なので事実として出す。
+
+// imagePushMarkers は「イメージを push している」と読める痕跡。
+// 実行するのは CI なので .github/workflows だけを見る(compose の build は別物)。
+var imagePushMarkers = []struct {
+	marker   string
+	registry string
+}{
+	{"ghcr.io", "ghcr.io"},
+	{"docker/build-push-action", ""},
+	{"amazon-ecr-login", "ecr"},
+	{"docker push", ""},
+}
+
+// scanWorkflows は .github/workflows/*.yml を読み、イメージ公開の痕跡を返す。
+// registry は分かれば("ghcr.io" / "ecr")、分からなければ空。
+func scanWorkflows(dir string) (pushes bool, registry string) {
+	wf := filepath.Join(dir, ".github", "workflows")
+	ents, err := os.ReadDir(wf)
+	if err != nil {
+		return false, ""
+	}
+	for _, e := range ents {
+		n := e.Name()
+		if e.IsDir() || (!strings.HasSuffix(n, ".yml") && !strings.HasSuffix(n, ".yaml")) {
+			continue
+		}
+		// kagerou 自身が出した workflow は「既存の CI」ではない
+		if strings.HasPrefix(n, "kagerou-") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(wf, n))
+		if err != nil {
+			continue
+		}
+		src := string(b)
+		for _, m := range imagePushMarkers {
+			if strings.Contains(src, m.marker) {
+				pushes = true
+				if registry == "" {
+					registry = m.registry
+				}
+			}
+		}
+	}
+	return pushes, registry
 }

@@ -8,7 +8,13 @@ import (
 
 func write(t *testing.T, dir, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+	path := filepath.Join(dir, name)
+	if d := filepath.Dir(path); d != dir {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -412,6 +418,77 @@ func TestScanLambdaOnlyDockerfile(t *testing.T) {
 	write(t, dir, "Dockerfile.lambda", "FROM node:22\nEXPOSE 3000\n")
 	f := Scan(dir)
 	if !f.HasDockerfile || f.DockerfileName != "Dockerfile.lambda" {
+		t.Errorf("%+v", f)
+	}
+}
+
+// #165: readiness の既定 "/" はルートが重い SSR で無駄に遅く、リダイレクトする
+// アプリでは誤判定する。アプリが専用のパスを持つ事実はファイルに書かれている。
+func TestScanHealthPath(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"LWA の readiness 設定", map[string]string{
+			"Dockerfile": "FROM node:22\nENV AWS_LWA_READINESS_CHECK_PATH=/healthz\nEXPOSE 3000\n",
+		}, "/healthz"},
+		{"Dockerfile の HEALTHCHECK", map[string]string{
+			"Dockerfile": "FROM node:22\nEXPOSE 3000\nHEALTHCHECK CMD curl -f http://localhost:3000/api/health || exit 1\n",
+		}, "/api/health"},
+		{"compose の healthcheck", map[string]string{
+			"Dockerfile":   "FROM node:22\nEXPOSE 3000\n",
+			"compose.yaml": "services:\n  web:\n    build: .\n    healthcheck:\n      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:3000/-/ready\"]\n",
+		}, "/-/ready"},
+		{"クエリは落とす", map[string]string{
+			"Dockerfile": "FROM node:22\nHEALTHCHECK CMD curl http://localhost/health?deep=1\n",
+		}, "/health"},
+		{"ルートだけなら言わない", map[string]string{
+			"Dockerfile": "FROM node:22\nHEALTHCHECK CMD curl -f http://localhost:3000/\n",
+		}, ""},
+		{"何も無ければ空", map[string]string{
+			"Dockerfile": "FROM node:22\nEXPOSE 3000\n",
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for n, c := range tc.files {
+				write(t, dir, n, c)
+			}
+			if got := Scan(dir).HealthPath; got != tc.want {
+				t.Errorf("HealthPath = %q (want %q)", got, tc.want)
+			}
+		})
+	}
+}
+
+// 既にイメージを作って公開しているリポジトリに sam build の雛形を出すのは
+// 二度手間かもしれない。事実として出すために検出する。
+func TestScanPublishesImage(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".github/workflows/ci.yml",
+		"jobs:\n  build:\n    steps:\n      - uses: docker/build-push-action@v6\n        with:\n          tags: ghcr.io/acme/app:latest\n")
+	f := Scan(dir)
+	if !f.PublishesImage || f.ImageRegistry != "ghcr.io" {
+		t.Errorf("PublishesImage=%v registry=%q", f.PublishesImage, f.ImageRegistry)
+	}
+}
+
+func TestScanIgnoresKagerouOwnWorkflows(t *testing.T) {
+	// kagerou 自身が出した workflow は「既存の CI」ではない。
+	// これを数えると、2 回目の init 以降ずっと「公開している」と言い続ける
+	dir := t.TempDir()
+	write(t, dir, ".github/workflows/kagerou-preview.yml",
+		"jobs:\n  up:\n    steps:\n      - run: docker push ghcr.io/acme/app\n")
+	if f := Scan(dir); f.PublishesImage {
+		t.Error("kagerou 自身の workflow を既存 CI と数えている")
+	}
+}
+
+func TestScanNoWorkflowsIsQuiet(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "Dockerfile", "FROM node:22\n")
+	if f := Scan(dir); f.PublishesImage || f.ImageRegistry != "" {
 		t.Errorf("%+v", f)
 	}
 }
