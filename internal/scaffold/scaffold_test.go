@@ -605,3 +605,38 @@ func TestAlbBaseIsPerApp(t *testing.T) {
 		t.Error("env template が共有名前空間を読んでいる")
 	}
 }
+
+// #139: {base_domain} を書けるのは、ドメインを SSM のデータ契約から得たときだけ。
+// 旧 CFN Exports 由来のベースには SSM キーが無いので、書くと init 直後の
+// 最初の up が「解決できない」で落ちる。
+func TestScaffoldBaseDomainPlaceholder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fromSSM bool
+		want    string
+		notWant string
+	}{
+		{"SSM 由来なら placeholder", true,
+			`url_template: "https://{name}.{base_domain}"`,
+			`url_template: "https://{name}.web.example.com"`},
+		{"Exports 由来ならリテラル", false,
+			`url_template: "https://{name}.web.example.com"`,
+			`{base_domain}"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := Params{Project: "web", Region: "r", Compute: "lambda", Entrypoint: "alb",
+				Domain: "web.example.com", DomainFromSSM: tc.fromSSM, Port: "8080"}
+			if _, err := Run(dir, p, AllTargets(), false); err != nil {
+				t.Fatal(err)
+			}
+			ky := read(t, dir, "kagerou.yaml")
+			if !strings.Contains(ky, tc.want) {
+				t.Errorf("missing %q:\n%s", tc.want, ky)
+			}
+			if strings.Contains(ky, tc.notWant) {
+				t.Errorf("should not contain %q:\n%s", tc.notWant, ky)
+			}
+		})
+	}
+}

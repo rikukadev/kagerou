@@ -235,7 +235,7 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
 	switch base, ok := m.det.Base(p.Project); {
 	case ok: // この project(または旧アカウント単位)の base をそのまま使う
-		p.Domain = base.Domain
+		p.Domain, p.DomainFromSSM = base.Domain, base.DomainFromSSM
 	case len(m.det.Zones) == 1: // ゾーンが 1 つなら自動選択
 		p.Domain, p.SetupBase = p.Project+"."+m.det.Zones[0], true
 	case m.answer("domain") >= 0:

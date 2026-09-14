@@ -441,7 +441,7 @@ func cmdInit(args []string, out *os.File) error {
 		case *domain != "":
 			p.Domain = *domain
 		case ok:
-			p.Domain = base.Domain
+			p.Domain, p.DomainFromSSM = base.Domain, base.DomainFromSSM
 		case len(det.Zones) == 1:
 			p.Domain = p.Project + "." + det.Zones[0]
 		case len(det.Zones) > 1:
