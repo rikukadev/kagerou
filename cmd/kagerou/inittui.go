@@ -109,9 +109,12 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 
 	// 環境の実行形。既定は推薦(internal/recommend)が決める。判定は Facts だけを
 	// 見る純関数なので、ここは「既定に据えて理由を見せる」だけ(#107)。
+	// 独自ドメインで配れるか(ゾーンがある = init が ALB 入口を既定にしうる)。
+	// ALB の固定費は compute の値段と別勘定なので、推薦に渡して言い分けさせる(#172)
 	rec := recommend.Entry(det.Facts, recommend.Options{
 		ExistingALB:    det.HasSharedALB(),
 		AllowFixedCost: det.HasSharedALB(), // 既にあるなら固定費は増えない
+		CustomDomain:   len(det.Zones) > 0 || len(det.Bases) > 0,
 	})
 	computeDefault := 0
 	if rec.Default != recommend.Lambda && rec.Default != recommend.Static {
