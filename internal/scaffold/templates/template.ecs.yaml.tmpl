@@ -7,6 +7,14 @@ Description: >
 # アプリに届けたい値は Env<Key>(kagerou CONTRACT §4)。共有 ALB 側の値は
 # ベースが書いた SSM(/kagerou/base/{{.Project}}/alb_*)を {{"{{"}}resolve:ssm{{"}}"}} で読む。
 Parameters:
+  # サブネットだけは {{"{{"}}resolve:ssm{{"}}"}} で読めない。動的参照は「文字列を書く場所」
+  # でしか展開されず、Fn::Split の中では素の文字列のまま渡ってしまう
+  # (cfn-lint E1018)。リスト型の SSM パラメータとして受け取るのが正解。
+  # Env* ではないので kagerou は値を渡さない(Default の SSM パスから解決される)。
+  BaseSubnets:
+    Type: AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
+    Default: /kagerou/base/{{.Project}}/alb_subnets
+    Description: Task subnets, resolved from the shared ALB base at deploy time
   EnvKagerouEnv:
     Type: String
     Description: 'Environment name. Injected via `KAGEROU_ENV: "{name}"` in kagerou.yaml'
@@ -180,7 +188,7 @@ Resources:
           # ベースの判断に従う: 既定は公開サブネット + public IP(NAT を立てない)。
           # alb-base に TaskSubnetIds(プライベート)を渡した運用なら DISABLED になる
           AssignPublicIp: "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_assign_public_ip{{"}}"}}"
-          Subnets: !Split [",", "{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_subnets{{"}}"}}"]
+          Subnets: !Ref BaseSubnets
           SecurityGroups: ["{{"{{"}}resolve:ssm:/kagerou/base/{{.Project}}/alb_task_security_group{{"}}"}}"]
       LoadBalancers:
         - ContainerName: app

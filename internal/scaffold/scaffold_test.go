@@ -357,7 +357,11 @@ func TestScaffoldComputeECS(t *testing.T) {
 		"resolve:ssm:/kagerou/base/relay/alb_listener_arn",
 		"resolve:ssm:/kagerou/base/relay/alb_cluster",
 		"resolve:ssm:/kagerou/base/relay/alb_vpc_id",
-		"resolve:ssm:/kagerou/base/relay/alb_subnets",
+		// サブネットは動的参照では読めない(Fn::Split の中では展開されない)。
+		// リスト型の SSM パラメータとして受け取る
+		"AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>",
+		"Default: /kagerou/base/relay/alb_subnets",
+		"Subnets: !Ref BaseSubnets",
 		"resolve:ssm:/kagerou/base/relay/alb_task_security_group",
 		"resolve:ssm:/kagerou/base/relay/alb_assign_public_ip", // ベースの判断に追従
 		"AWS::ElasticLoadBalancingV2::ListenerRule",
