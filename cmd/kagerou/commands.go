@@ -636,11 +636,12 @@ func cmdReap(args []string, out *os.File) error {
 // loadTemplateFacts はテンプレートを読んで TemplateFacts を返す(#71)。
 // kagerou.yaml の template(既定 packaged.yaml は CI 生成物なので無いことがある)
 // が読めなければ素の template.yaml に落ち、どちらも無ければ nil(フラグ挙動)。
-func loadTemplateFacts(templatePath string) *iampolicy.TemplateFacts {
-	for _, p := range []string{templatePath, "template.yaml"} {
-		if p == "" {
-			continue
-		}
+//
+// 落ち先は **設定ファイルの隣**を先に見る(#144)。カレント直下だけを見ていると、
+// 設定を別ディレクトリに置いた構成で素のテンプレートに辿り着けず、テンプレート
+// 由来の導出がまるごと効かない = 権限の足りないポリシーを黙って出してしまう。
+func loadTemplateFacts(templatePath, cfgPath string) *iampolicy.TemplateFacts {
+	for _, p := range templateCandidates(templatePath, cfgPath) {
 		body, err := os.ReadFile(p)
 		if err != nil {
 			continue
@@ -653,6 +654,18 @@ func loadTemplateFacts(templatePath string) *iampolicy.TemplateFacts {
 		return &facts
 	}
 	return nil
+}
+
+// templateCandidates は導出に使うテンプレートの探索順。
+func templateCandidates(templatePath, cfgPath string) []string {
+	var out []string
+	if templatePath != "" {
+		out = append(out, templatePath)
+	}
+	if d := filepath.Dir(cfgPath); d != "" && d != "." {
+		out = append(out, filepath.Join(d, "template.yaml"))
+	}
+	return append(out, "template.yaml")
 }
 
 // allowFlag は繰り返し可能な --allow 'actions=resources' を集める(--doc execution)。
@@ -752,7 +765,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 
 	// buildPolicy は 1 つの config から最小ポリシーを作る。--check の和集合モードで
 	// config ごとに呼ぶので、switch の外に出してある(#135)。
-	buildPolicy := func(cfg config.Config) (iampolicy.Policy, error) {
+	buildPolicy := func(cfg config.Config, cfgPath string) (iampolicy.Policy, error) {
 		pfx := *prefix
 		if pfx == "" {
 			pfx = cfg.NamePrefix
@@ -763,7 +776,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		}
 		// テンプレートが読めれば「テンプレートが作るもの」はそこから導出する(#71)。
 		// packaged.yaml(CI 生成物)が無ければ素の template.yaml に落ちる。
-		facts := loadTemplateFacts(cfg.Template)
+		facts := loadTemplateFacts(cfg.Template, cfgPath)
 		if facts != nil {
 			for _, u := range facts.Unknown {
 				fmt.Fprintf(os.Stderr, "kagerou iam-policy: no permission mapping for %s — the generated policy does NOT cover it; add statements by hand\n", u)
@@ -776,7 +789,19 @@ func cmdIamPolicy(args []string, out *os.File) error {
 				fmt.Fprintln(os.Stderr, "kagerou iam-policy: --with-vpc ignored — no function in the template has VpcConfig")
 			}
 		} else {
-			fmt.Fprintln(os.Stderr, "kagerou iam-policy: template not found — falling back to --with-* flags only (the template is normally the source of truth)")
+			// 「フラグに落ちた」ではなく「**このポリシーでは足りない**」と言う。
+			// テンプレート由来の導出(S3 / DynamoDB / SQS / ECR / …)がまるごと
+			// 効いていないので、アタッチしても 403 になるだけ(#144)
+			tried := strings.Join(templateCandidates(cfg.Template, cfgPath), ", ")
+			msg := fmt.Sprintf("no template found (looked for %s) — "+
+				"the generated policy is derived from --with-* flags ONLY and is almost certainly incomplete; "+
+				"point `template` in %s at the CloudFormation template", tried, cfgPath)
+			if *check != "" {
+				// drift 検出は「生成した最小集合」を基準に判定する。その基準が
+				// 壊れていたら結果は無意味なので、報告ではなく失敗にする
+				return iampolicy.Policy{}, fmt.Errorf("%s (refusing to --check against it)", msg)
+			}
+			fmt.Fprintf(os.Stderr, "kagerou iam-policy: warning: %s\n", msg)
 		}
 		return iampolicy.Build(iampolicy.Options{
 			Prefix:   pfx,
@@ -799,7 +824,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	var note string
 	switch *doc {
 	case "policy":
-		pol, err = buildPolicy(cfg)
+		pol, err = buildPolicy(cfg, cfgPaths.first())
 		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
 	case "boundary":
 		var regs []string
@@ -877,7 +902,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			if err != nil {
 				return err
 			}
-			op, err := buildPolicy(other)
+			op, err := buildPolicy(other, path)
 			if err != nil {
 				return err
 			}
