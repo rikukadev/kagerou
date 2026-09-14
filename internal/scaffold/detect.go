@@ -188,10 +188,19 @@ func Detect(dir string) Detection {
 			}
 		}
 	}
-	// SSM は Exports より後に読む = 同じ project では SSM が勝つ(契約が真実の源)
-	if out, err := execCommand(ctx, "aws", "ssm", "get-parameters-by-path", "--path", "/kagerou/base",
-		"--recursive", "--region", "us-east-1",
-		"--query", "Parameters[].[Name,Value]", "--output", "json"); err == nil {
+	// SSM は Exports より後に読む = 同じ project では SSM が勝つ(契約が真実の源)。
+	//
+	// **2 リージョン見る**。CloudFront ベースは us-east-1、ALB ベースは
+	// アプリのリージョンに書く(§9)。us-east-1 だけを見ていると、入口が alb の
+	// アプリ(#131 以降の既定)のベースを 1 つも検出できない。
+	// アプリのリージョンを後に読む = 両方あれば ALB 側が勝つ(入口に近い方)。
+	for _, region := range ssmScanRegions(d.Region) {
+		out, err := execCommand(ctx, "aws", "ssm", "get-parameters-by-path", "--path", "/kagerou/base",
+			"--recursive", "--region", region,
+			"--query", "Parameters[].[Name,Value]", "--output", "json")
+		if err != nil {
+			continue
+		}
 		var kv [][]string
 		if json.Unmarshal(out, &kv) == nil {
 			for _, e := range kv {
@@ -216,4 +225,13 @@ func Detect(dir string) Detection {
 		}
 	}
 	return d
+}
+
+// ssmScanRegions はベース検出で走査するリージョン。us-east-1(CloudFront ベース)
+// が先、アプリのリージョン(ALB ベース)が後。同じなら 1 回だけ。
+func ssmScanRegions(appRegion string) []string {
+	if appRegion == "" || appRegion == "us-east-1" {
+		return []string{"us-east-1"}
+	}
+	return []string{"us-east-1", appRegion}
 }

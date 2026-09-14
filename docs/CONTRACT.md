@@ -287,18 +287,23 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
 ALB 固有の値だけ `alb_` を接頭辞にしてあるので、1 つのアプリが static(CloudFront)と
 ecs/lambda(ALB)を併用しても衝突しない。
 
-`compute: ecs` と、独自ドメインで配る `compute: lambda`(入口 = 共有 ALB)の
-環境テンプレートは、`_shared-alb` のキーを CloudFormation の動的参照
+`compute: ecs` と、独自ドメインで配る `compute: lambda`(入口 = ALB)の
+環境テンプレートは、`alb_` のキーを CloudFormation の動的参照
 (`{{resolve:ssm:…}}`)で読む — パラメータの手渡しは要らない。
 
 テンプレートの外(Go 側で URL を組み立てる `url_template` など)からは動的参照が
-使えないので、`{base_domain}`(§5)が同じキーを up 時に引く。解決順:
+使えないので、`{base_domain}`(§5)が `domain` を up 時に引く。
 
-1. `/kagerou/base/<project>/domain`(us-east-1)
-2. `/kagerou/base/_shared/domain`(us-east-1)
-3. `/kagerou/base/_shared-alb/domain`(ALB と同じリージョン = `region`)
+**同じキーが 2 つのリージョンにありうる**のが要点。`domain` は入口によらず
+同じ意味だが、置き場所はベースの種類で変わる(CloudFront ベース = us-east-1、
+ALB ベース = アプリのリージョン)。解決側は入口を知らないので両方を見る:
+
+1. `/kagerou/base/<project>/domain`(`region` → us-east-1 の順)
+2. `/kagerou/base/_shared/domain`(同上)
+3. `/kagerou/base/_shared-alb/domain`(`region`。ALB を 1 本に共有する運用)
 
 どれも無ければ up は**失敗する**(探したキーを region つきで表示する)。
+`kagerou init` のベース検出も同じ理由で 2 リージョンを走査する。
 `{base_domain}` を使う設定では `kagerou iam-policy` が `ssm:GetParameter`
 (`/kagerou/base/*`)を自動で足す — フラグにすると付け忘れて 403 になるため。
 

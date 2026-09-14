@@ -27,17 +27,34 @@ const Placeholder = config.BaseDomainPlaceholder
 // _shared-alb)をそのまま並べる。
 type source struct {
 	key    string
-	region string // 空なら呼び出し側の region
+	region string
 }
 
-// sources は解決順。preview base のキーは us-east-1 に置く契約で、
-// _shared-alb だけは ALB と同じリージョンにある(§9)。
-func sources(project string) []source {
-	return []source{
-		{key: "/kagerou/base/" + project + "/domain", region: "us-east-1"},
-		{key: "/kagerou/base/_shared/domain", region: "us-east-1"},
-		{key: "/kagerou/base/_shared-alb/domain"},
+// sources は解決順。**同じキーが 2 つのリージョンにありうる**のが要点で、
+// ベースの種類で置き場所が変わる(§9):
+//
+//	CloudFront ベース … us-east-1(CloudFront の証明書がそこにしか置けないため)
+//	ALB ベース        … アプリのリージョン(ALB と同居)
+//
+// `domain` は入口によらず「このアプリのプレビュードメイン」なのでキー名は同じ。
+// 入口が alb かどうかを解決側は知らないので、両方を順に見るしかない。
+// ALB が既定の入口(#131)なのでアプリのリージョンを先に見る。
+func sources(project, region string) []source {
+	var out []source
+	add := func(key string) {
+		if region != "" && region != "us-east-1" {
+			out = append(out, source{key: key, region: region})
+		}
+		out = append(out, source{key: key, region: "us-east-1"})
 	}
+	add("/kagerou/base/" + project + "/domain")
+	add("/kagerou/base/_shared/domain")
+	// ALB を全アプリで 1 本に共有する運用(alb-base の Project に _shared-alb を
+	// 渡すオプトイン)。ALB ベースなのでアプリのリージョンにしか無い
+	if region != "" {
+		out = append(out, source{key: "/kagerou/base/_shared-alb/domain", region: region})
+	}
+	return out
 }
 
 // getParameter は SSM から 1 つ引く。テストで差し替える。
@@ -62,13 +79,9 @@ var getParameter = func(ctx context.Context, region, key string) (string, error)
 // どの段でも見つからなければ、探した順にキーを並べたエラーを返す。
 func Resolve(ctx context.Context, project, region string) (domain, key string, err error) {
 	var tried []string
-	for _, s := range sources(project) {
-		r := s.region
-		if r == "" {
-			r = region
-		}
-		tried = append(tried, fmt.Sprintf("%s (%s)", s.key, r))
-		v, err := getParameter(ctx, r, s.key)
+	for _, s := range sources(project, region) {
+		tried = append(tried, fmt.Sprintf("%s (%s)", s.key, s.region))
+		v, err := getParameter(ctx, s.region, s.key)
 		if err != nil {
 			continue // 権限不足も未作成もここでは同じ「無い」。次の段へ
 		}

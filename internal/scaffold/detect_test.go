@@ -245,3 +245,47 @@ func TestBaseForResolutionOrder(t *testing.T) {
 		t.Fatal("no base should not resolve")
 	}
 }
+
+// ALB ベースはアプリのリージョンに SSM を書く(CloudFront ベースだけ us-east-1)。
+// us-east-1 しか走査しないと、入口が alb のアプリのベースを検出できない。
+func TestDetectBaseInAppRegion(t *testing.T) {
+	orig := execCommand
+	defer func() { execCommand = orig }()
+	var scanned []string
+	execCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "configure get region"):
+			return []byte("ap-northeast-1\n"), nil
+		case strings.Contains(joined, "get-parameters-by-path"):
+			for i, a := range args {
+				if a == "--region" && i+1 < len(args) {
+					scanned = append(scanned, args[i+1])
+					if args[i+1] == "ap-northeast-1" {
+						return []byte(`[["/kagerou/base/todo/domain","todo.example.com"]]`), nil
+					}
+				}
+			}
+			return []byte(`[]`), nil
+		}
+		return nil, errNoCmd
+	}
+	d := Detect(t.TempDir())
+	if len(scanned) != 2 || scanned[0] != "us-east-1" || scanned[1] != "ap-northeast-1" {
+		t.Fatalf("走査したリージョン = %v (us-east-1 → アプリのリージョンの順のはず)", scanned)
+	}
+	b, ok := d.Base("todo")
+	if !ok || b.Domain != "todo.example.com" {
+		t.Fatalf("ALB ベースを検出できていない: %+v", d.Bases)
+	}
+}
+
+func TestSsmScanRegions(t *testing.T) {
+	// 同じリージョンなら 2 回引かない
+	if got := ssmScanRegions("us-east-1"); len(got) != 1 {
+		t.Errorf("us-east-1 は 1 回のはず: %v", got)
+	}
+	if got := ssmScanRegions(""); len(got) != 1 {
+		t.Errorf("region 不明なら us-east-1 だけ: %v", got)
+	}
+}
