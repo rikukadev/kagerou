@@ -16,6 +16,27 @@ jobs:
       - run: go test -race ./...
       - run: go build ./...
 
+  # go.mod が宣言する **最低バージョン**でもビルド/テストが通ることを確かめる。
+  # これが無いと、新しい toolchain で tidy するたび最低要求が黙って上がり、
+  # 古い Go の利用者が go install できなくなる(#153 がそれ)。
+  go-min-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: gomin
+        run: echo "version=$(grep '^go ' go.mod | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.gomin.outputs.version }}
+      # setup-go が入れた toolchain をそのまま使う(GOTOOLCHAIN=local で
+      # 新しいものを勝手に取りに行かせない = 検証にならなくなるため)
+      - env:
+          GOTOOLCHAIN: local
+        run: |
+          go version
+          go build ./...
+          go test ./...
+
   lint:
     runs-on: ubuntu-latest
     steps:
