@@ -561,3 +561,70 @@ func hasAction(s Statement, want string) bool {
 	}
 	return false
 }
+
+// #105: compute が ECS の構成。Lambda 前提の導出では 1 つも出ない。
+func TestECSStatementsDerived(t *testing.T) {
+	f, err := ScanTemplate([]byte(`
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+  Svc:
+    Type: AWS::ECS::Service
+  Task:
+    Type: AWS::ECS::TaskDefinition
+  Ns:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+  Disco:
+    Type: AWS::ServiceDiscovery::Service
+  Sg:
+    Type: AWS::EC2::SecurityGroup
+  Link:
+    Type: AWS::ApiGatewayV2::VpcLink
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Unknown) != 0 {
+		t.Errorf("未知型として警告している: %v", f.Unknown)
+	}
+	p, err := Build(Options{Prefix: "p-", Template: &f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// タスク定義の登録はリソース単位の権限に対応していない。ARN で絞ると
+	// 「絞ったつもりで 403」になる(EventSourceMapping と同じ穴)
+	td := findSid(t, p, "EcsTaskDefinition")
+	if got, ok := td.Resource.(string); !ok || got != "*" {
+		t.Errorf("RegisterTaskDefinition は Resource:* のはず: %#v", td.Resource)
+	}
+	// 名前空間の作成は非同期。GetOperation が無いとスタックが待ち続ける
+	cm := findSid(t, p, "CloudMapDiscovery")
+	if !strings.Contains(strings.Join(cm.Action, ","), "servicediscovery:GetOperation") {
+		t.Error("非同期完了待ちの GetOperation が無い")
+	}
+	// クラスタとサービスは prefix で絞れる(絞れるものは絞る)
+	cs := findSid(t, p, "EcsClusterAndService")
+	rs, ok := cs.Resource.([]string)
+	if !ok || len(rs) == 0 || !strings.Contains(rs[0], "p-") {
+		t.Errorf("prefix でスコープしていない: %#v", cs.Resource)
+	}
+	// コンテナのログは Lambda の /aws/lambda/… とは別の名前空間
+	lg := findSid(t, p, "ContainerLogGroups")
+	if got, _ := lg.Resource.(string); !strings.Contains(got, "/kagerou/") {
+		t.Errorf("ログの名前空間が雛形の規約と違う: %#v", lg.Resource)
+	}
+}
+
+// Lambda だけの構成に ECS 権限を出さない(テンプレートが真実の源)。
+func TestNoECSStatementsWithoutECS(t *testing.T) {
+	f, err := ScanTemplate([]byte("Resources:\n  Fn:\n    Type: AWS::Serverless::Function\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := mustJSON(t, Options{Prefix: "p-", Template: &f})
+	for _, notWant := range []string{"ecs:", "servicediscovery:", "ec2:CreateSecurityGroup"} {
+		if strings.Contains(s, notWant) {
+			t.Errorf("ECS 構成でないのに %q が出ている", notWant)
+		}
+	}
+}

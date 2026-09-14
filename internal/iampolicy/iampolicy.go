@@ -361,6 +361,9 @@ func Build(o Options) (Policy, error) {
 				Resource: "arn:aws:lambda:*:*:event-source-mapping:*",
 			})
 	}
+	if o.Template != nil && o.Template.has("AWS::ECS::Cluster", "AWS::ECS::Service", "AWS::ECS::TaskDefinition") {
+		sts = append(sts, ecsStatements(p)...)
+	}
 	if wantS3 {
 		sts = append(sts, Statement{
 			// SPA 配布バケット。Tagging 系は kagerou がタグで環境を識別するため(CONTRACT §1)
@@ -815,4 +818,159 @@ func CheckDriftActions(gen map[string]bool, attached []byte) (extra, missing []s
 	sort.Strings(extra)
 	sort.Strings(missing)
 	return extra, missing, nil
+}
+
+// ecsStatements は compute: ecs / apigw 構成の権限(#105 / #169)。
+//
+// パッケージ冒頭の 3 パターンのうち 2 つがここに集中している:
+//   - タスク定義の登録・解除は **Resource: * でしか評価されない**(ARN で絞ると
+//     絞ったつもりで 403 になる。EventSourceMapping と同じ)
+//   - 名前空間の作成は非同期で、CFN は GetOperation で完了を待つ(書く前後に読む)
+func ecsStatements(p string) []Statement {
+	return []Statement{
+		{
+			Sid: "EcsClusterAndService", Effect: "Allow",
+			Action: []string{
+				"ecs:CreateCluster", "ecs:DeleteCluster", "ecs:DescribeClusters",
+				"ecs:CreateService", "ecs:DeleteService", "ecs:UpdateService", "ecs:DescribeServices",
+				"ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource",
+			},
+			Resource: []string{
+				fmt.Sprintf("arn:aws:ecs:*:*:cluster/%s*", p),
+				fmt.Sprintf("arn:aws:ecs:*:*:service/%s*/*", p),
+			},
+		},
+		{
+			// RegisterTaskDefinition はリソース単位の権限に対応していない。
+			// task-definition の ARN で絞ると通らない(登録前なので当然だが、
+			// Deregister も同じ扱いになる)
+			Sid: "EcsTaskDefinition", Effect: "Allow",
+			Action: []string{
+				"ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition",
+			},
+			Resource: "*",
+		},
+		{
+			// Cloud Map。作成系は ARN で絞れず、名前空間の作成は非同期なので
+			// GetOperation で待つ。これが無いとスタックが固まる
+			Sid: "CloudMapDiscovery", Effect: "Allow",
+			Action: []string{
+				"servicediscovery:CreatePrivateDnsNamespace", "servicediscovery:DeleteNamespace",
+				"servicediscovery:GetNamespace", "servicediscovery:ListNamespaces",
+				"servicediscovery:CreateService", "servicediscovery:DeleteService",
+				"servicediscovery:GetService", "servicediscovery:ListServices",
+				"servicediscovery:ListInstances", "servicediscovery:GetOperation",
+				"servicediscovery:TagResource", "servicediscovery:UntagResource", "servicediscovery:ListTagsForResource",
+			},
+			Resource: "*",
+		},
+		{
+			// タスクとインターフェースのセキュリティグループ。作成時点では
+			// ARN が無いので絞れない(作った後のタグで絞る運用は CFN と噛み合わない)
+			Sid: "TaskNetworking", Effect: "Allow",
+			Action: []string{
+				"ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup", "ec2:DescribeSecurityGroups",
+				"ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
+				"ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress",
+				"ec2:CreateTags", "ec2:DescribeVpcs", "ec2:DescribeSubnets",
+			},
+			Resource: "*",
+		},
+		{
+			// コンテナのログ。雛形の規約は /kagerou/<env>(Lambda の
+			// /aws/lambda/... とは別の名前空間)
+			Sid: "ContainerLogGroups", Effect: "Allow",
+			Action: []string{
+				"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups",
+				"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
+			},
+			Resource: "arn:aws:logs:*:*:log-group:/kagerou/*",
+		},
+	}
+}
+
+// Union は複数構成のポリシーを 1 本にまとめる。
+//
+// 1 つの CI ロールを複数の構成が共有するとき(E2E の 5 fixture がそれ)、
+// **アタッチするポリシーはその和集合そのもの**。生成できないと結局手で書くことに
+// なり、#135 が止めたかった「手で足して生成器が知らない」に戻る。
+//
+// 同じ Sid・同じ Condition の statement は Action と Resource を足して 1 つにする。
+// Condition が違うものは別物として残す(緩い方に飲ませると権限が広がる)。
+func Union(ps ...Policy) Policy {
+	type key struct{ sid, cond string }
+	var order []key
+	merged := map[key]*Statement{}
+	for _, p := range ps {
+		for _, s := range p.Statement {
+			c := ""
+			if s.Condition != nil {
+				b, _ := marshal(s.Condition)
+				c = string(b)
+			}
+			k := key{s.Sid, c}
+			cur, ok := merged[k]
+			if !ok {
+				cp := s
+				cp.Action = append([]string(nil), s.Action...)
+				cp.Resource = resourceList(s.Resource)
+				merged[k] = &cp
+				order = append(order, k)
+				continue
+			}
+			cur.Action = addAll(cur.Action, s.Action)
+			cur.Resource = addAll(resourceList(cur.Resource), resourceList(s.Resource))
+		}
+	}
+	out := Policy{Version: "2012-10-17"}
+	for _, k := range order {
+		s := *merged[k]
+		sort.Strings(s.Action)
+		if rs, ok := s.Resource.([]string); ok {
+			sort.Strings(rs)
+			if len(rs) == 1 {
+				s.Resource = rs[0] // 1 本なら文字列に戻す(単一構成の出力と揃える)
+			} else {
+				s.Resource = rs
+			}
+		}
+		out.Statement = append(out.Statement, s)
+	}
+	return out
+}
+
+// resourceList は Resource(文字列 or 配列)を []string に正規化する。
+func resourceList(r any) []string {
+	switch v := r.(type) {
+	case nil:
+		return nil
+	case string:
+		return []string{v}
+	case []string:
+		return append([]string(nil), v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// addAll は重複を作らずに足す。
+func addAll(dst, src []string) []string {
+	seen := map[string]bool{}
+	for _, s := range dst {
+		seen[s] = true
+	}
+	for _, s := range src {
+		if !seen[s] {
+			seen[s] = true
+			dst = append(dst, s)
+		}
+	}
+	return dst
 }

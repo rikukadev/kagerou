@@ -5,19 +5,19 @@
       "Sid": "CloudFormationStack",
       "Effect": "Allow",
       "Action": [
+        "cloudformation:CreateChangeSet",
         "cloudformation:CreateStack",
-        "cloudformation:UpdateStack",
+        "cloudformation:DeleteChangeSet",
         "cloudformation:DeleteStack",
-        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeChangeSet",
         "cloudformation:DescribeStackEvents",
         "cloudformation:DescribeStackResources",
-        "cloudformation:ListStackResources",
-        "cloudformation:CreateChangeSet",
-        "cloudformation:DescribeChangeSet",
+        "cloudformation:DescribeStacks",
         "cloudformation:ExecuteChangeSet",
-        "cloudformation:DeleteChangeSet",
+        "cloudformation:ListStackResources",
         "cloudformation:TagResource",
-        "cloudformation:UntagResource"
+        "cloudformation:UntagResource",
+        "cloudformation:UpdateStack"
       ],
       "Resource": "arn:aws:cloudformation:*:*:stack/kge2e-*/*"
     },
@@ -25,9 +25,9 @@
       "Sid": "CloudFormationGlobalReads",
       "Effect": "Allow",
       "Action": [
+        "cloudformation:DescribeStacks",
         "cloudformation:GetTemplateSummary",
-        "cloudformation:ListStacks",
-        "cloudformation:DescribeStacks"
+        "cloudformation:ListStacks"
       ],
       "Resource": "*"
     },
@@ -35,14 +35,14 @@
       "Sid": "SamManagedStack",
       "Effect": "Allow",
       "Action": [
-        "cloudformation:CreateStack",
-        "cloudformation:UpdateStack",
-        "cloudformation:DescribeStacks",
-        "cloudformation:DescribeStackEvents",
         "cloudformation:CreateChangeSet",
+        "cloudformation:CreateStack",
+        "cloudformation:DeleteChangeSet",
         "cloudformation:DescribeChangeSet",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStacks",
         "cloudformation:ExecuteChangeSet",
-        "cloudformation:DeleteChangeSet"
+        "cloudformation:UpdateStack"
       ],
       "Resource": "arn:aws:cloudformation:*:*:stack/aws-sam-cli-managed-default/*"
     },
@@ -60,12 +60,12 @@
       "Action": [
         "s3:CreateBucket",
         "s3:GetBucketLocation",
-        "s3:PutObject",
         "s3:GetObject",
         "s3:ListBucket",
         "s3:PutBucketPolicy",
         "s3:PutBucketVersioning",
-        "s3:PutEncryptionConfiguration"
+        "s3:PutEncryptionConfiguration",
+        "s3:PutObject"
       ],
       "Resource": [
         "arn:aws:s3:::aws-sam-cli-managed-*",
@@ -76,45 +76,37 @@
       "Sid": "LambdaFunction",
       "Effect": "Allow",
       "Action": [
+        "lambda:AddPermission",
         "lambda:CreateFunction",
         "lambda:DeleteFunction",
-        "lambda:UpdateFunctionCode",
-        "lambda:UpdateFunctionConfiguration",
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
         "lambda:GetPolicy",
+        "lambda:ListTags",
         "lambda:ListVersionsByFunction",
-        "lambda:AddPermission",
         "lambda:RemovePermission",
         "lambda:TagResource",
         "lambda:UntagResource",
-        "lambda:ListTags"
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
       ],
       "Resource": "arn:aws:lambda:*:*:function:kge2e-*"
-    },
-    {
-      "Sid": "HttpApiCompromise",
-      "Effect": "Allow",
-      "Action": [
-        "apigateway:*"
-      ],
-      "Resource": "arn:aws:apigateway:*::*"
     },
     {
       "Sid": "ExecutionRole",
       "Effect": "Allow",
       "Action": [
+        "iam:AttachRolePolicy",
         "iam:CreateRole",
         "iam:DeleteRole",
-        "iam:GetRole",
-        "iam:PassRole",
-        "iam:AttachRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:ListAttachedRolePolicies",
-        "iam:PutRolePolicy",
         "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:GetRole",
         "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
         "iam:ListRolePolicies",
+        "iam:PassRole",
+        "iam:PutRolePolicy",
         "iam:TagRole",
         "iam:UntagRole"
       ],
@@ -128,12 +120,48 @@
         "logs:DeleteLogGroup",
         "logs:DescribeLogGroups",
         "logs:DescribeLogStreams",
+        "logs:ListTagsForResource",
         "logs:PutRetentionPolicy",
         "logs:TagResource",
-        "logs:UntagResource",
-        "logs:ListTagsForResource"
+        "logs:UntagResource"
       ],
       "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/kge2e-*"
+    },
+    {
+      "Sid": "HttpApiCompromise",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:*"
+      ],
+      "Resource": "arn:aws:apigateway:*::*"
+    },
+    {
+      "Sid": "WebBucketLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucketTagging",
+        "s3:DeleteBucketWebsite",
+        "s3:DeleteObject",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketTagging",
+        "s3:GetBucketWebsite",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketTagging",
+        "s3:PutBucketWebsite",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::kge2e-*",
+        "arn:aws:s3:::kge2e-*/*"
+      ]
     },
     {
       "Sid": "EcrAuth",
@@ -148,74 +176,46 @@
       "Effect": "Allow",
       "Action": [
         "ecr:BatchCheckLayerAvailability",
-        "ecr:InitiateLayerUpload",
-        "ecr:UploadLayerPart",
-        "ecr:CompleteLayerUpload",
-        "ecr:PutImage",
         "ecr:BatchGetImage",
-        "ecr:GetDownloadUrlForLayer",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeImages",
         "ecr:DescribeRepositories",
-        "ecr:DescribeImages"
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
       ],
       "Resource": "arn:aws:ecr:*:*:repository/kagerou-e2e"
     },
     {
-      "Sid": "WebBucketLifecycle",
+      "Sid": "DynamoDBTableLifecycle",
       "Effect": "Allow",
       "Action": [
-        "s3:CreateBucket",
-        "s3:DeleteBucket",
-        "s3:PutBucketWebsite",
-        "s3:DeleteBucketWebsite",
-        "s3:GetBucketWebsite",
-        "s3:PutBucketPolicy",
-        "s3:GetBucketPolicy",
-        "s3:DeleteBucketPolicy",
-        "s3:PutBucketPublicAccessBlock",
-        "s3:GetBucketPublicAccessBlock",
-        "s3:PutBucketTagging",
-        "s3:GetBucketTagging",
-        "s3:DeleteBucketTagging",
-        "s3:GetBucketLocation",
-        "s3:ListBucket",
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:UpdateTable"
       ],
-      "Resource": [
-        "arn:aws:s3:::kge2e-*",
-        "arn:aws:s3:::kge2e-*/*"
-      ]
+      "Resource": "arn:aws:dynamodb:*:*:table/kge2e-*"
     },
     {
-      "Sid": "SqsLifecycle",
+      "Sid": "SQSQueueLifecycle",
       "Effect": "Allow",
       "Action": [
         "sqs:CreateQueue",
         "sqs:DeleteQueue",
         "sqs:GetQueueAttributes",
+        "sqs:ListQueueTags",
         "sqs:SetQueueAttributes",
         "sqs:TagQueue",
-        "sqs:UntagQueue",
-        "sqs:ListQueueTags"
+        "sqs:UntagQueue"
       ],
       "Resource": "arn:aws:sqs:*:*:kge2e-*"
-    },
-    {
-      "Sid": "DynamoLifecycle",
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:CreateTable",
-        "dynamodb:DeleteTable",
-        "dynamodb:DescribeTable",
-        "dynamodb:UpdateTable",
-        "dynamodb:TagResource",
-        "dynamodb:UntagResource",
-        "dynamodb:ListTagsOfResource",
-        "dynamodb:DescribeTimeToLive",
-        "dynamodb:DescribeContinuousBackups"
-      ],
-      "Resource": "arn:aws:dynamodb:*:*:table/kge2e-*"
     },
     {
       "Sid": "EventSourceMapping",
@@ -224,8 +224,8 @@
         "lambda:CreateEventSourceMapping",
         "lambda:DeleteEventSourceMapping",
         "lambda:GetEventSourceMapping",
-        "lambda:UpdateEventSourceMapping",
-        "lambda:ListEventSourceMappings"
+        "lambda:ListEventSourceMappings",
+        "lambda:UpdateEventSourceMapping"
       ],
       "Resource": "*"
     },
@@ -233,11 +233,92 @@
       "Sid": "EventSourceMappingTags",
       "Effect": "Allow",
       "Action": [
+        "lambda:ListTags",
         "lambda:TagResource",
-        "lambda:UntagResource",
-        "lambda:ListTags"
+        "lambda:UntagResource"
       ],
       "Resource": "arn:aws:lambda:*:*:event-source-mapping:*"
+    },
+    {
+      "Sid": "EcsClusterAndService",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:CreateCluster",
+        "ecs:CreateService",
+        "ecs:DeleteCluster",
+        "ecs:DeleteService",
+        "ecs:DescribeClusters",
+        "ecs:DescribeServices",
+        "ecs:ListTagsForResource",
+        "ecs:TagResource",
+        "ecs:UntagResource",
+        "ecs:UpdateService"
+      ],
+      "Resource": [
+        "arn:aws:ecs:*:*:cluster/kge2e-*",
+        "arn:aws:ecs:*:*:service/kge2e-*/*"
+      ]
+    },
+    {
+      "Sid": "EcsTaskDefinition",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DeregisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudMapDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "servicediscovery:CreatePrivateDnsNamespace",
+        "servicediscovery:CreateService",
+        "servicediscovery:DeleteNamespace",
+        "servicediscovery:DeleteService",
+        "servicediscovery:GetNamespace",
+        "servicediscovery:GetOperation",
+        "servicediscovery:GetService",
+        "servicediscovery:ListInstances",
+        "servicediscovery:ListNamespaces",
+        "servicediscovery:ListServices",
+        "servicediscovery:ListTagsForResource",
+        "servicediscovery:TagResource",
+        "servicediscovery:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TaskNetworking",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:DeleteSecurityGroup",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ContainerLogGroups",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/kagerou/*"
     }
   ]
 }

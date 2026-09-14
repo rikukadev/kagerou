@@ -73,6 +73,14 @@ var knownTypes = map[string]bool{
 	"AWS::ElasticLoadBalancingV2::ListenerRule": true,
 	"AWS::ECS::TaskDefinition":                  true,
 	"AWS::ECS::Service":                         true,
+	// Cloud Map 経由の apigw 構成(#105)。E2E fixture はクラスタも自前で作る
+	"AWS::ECS::Cluster":                          true,
+	"AWS::ServiceDiscovery::PrivateDnsNamespace": true,
+	"AWS::ServiceDiscovery::Service":             true,
+	"AWS::EC2::SecurityGroup":                    true,
+	"AWS::EC2::SecurityGroupIngress":             true,
+	"AWS::EC2::SecurityGroupEgress":              true,
+	"AWS::ApiGatewayV2::VpcLink":                 true, // apigateway:* でカバー
 }
 
 // ssmRefRe は CloudFormation の動的参照 {{resolve:ssm:<path>}} / {{resolve:ssm-secure:<path>}}。

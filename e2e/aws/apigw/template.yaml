@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# 実 AWS E2E: HTTP API + VPC Link → Cloud Map → ECS Fargate(#105 / #169)。
+#
+#   Browser ──→ HTTP API ──VPC Link──→ Cloud Map (SRV) ──→ Fargate タスク
+#
+# 既存 4 fixture との違いは **compute が Lambda でない**こと。この経路には
+# Lambda では出ない失敗が 2 つあり、どちらも cfn-lint は通る:
+#
+#   1. Cloud Map の DnsRecords が A だと VPC Link 統合は繋がらない。**SRV が要る**
+#   2. SRV にはポートが要るので、ECS の ServiceRegistries に ContainerName と
+#      ContainerPort を付けないとタスクを登録できない
+#
+# 「デプロイは成功するのに 503 が返る」形で出るので、テンプレートを読んでも
+# 気づけない。実際に叩くところまでやる意味があるのはそこ。
+#
+# この fixture は **1 スタックで自己完結する**(共有ベースを前提にしない)。
+# VPC Link と名前空間も毎回作って壊す — 遅いが、E2E が他の状態に依存しなくなる。
+# イメージはビルドしない(public ECR の busybox が env を返す)。
+Description: kagerou real-AWS E2E, HTTP API + VPC Link -> Cloud Map -> ECS Fargate
+
+Parameters:
+  EnvKagerouEnv:
+    Type: String
+  EnvGreeting:
+    Type: String
+    Default: ""
+  # 既定 VPC のサブネット。E2E は VPC を作らない(作ると遅いうえ、
+  # 確かめたいのは VPC Link の結線であって VPC の作り方ではない)
+  BaseSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  BaseVpcId:
+    Type: AWS::EC2::VPC::Id
+
+Resources:
+  VpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "kagerou e2e vpc link (${EnvKagerouEnv})"
+      VpcId: !Ref BaseVpcId
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "kagerou e2e task (${EnvKagerouEnv})"
+      VpcId: !Ref BaseVpcId
+
+  # タスクに届くのは VPC Link だけ。egress は既定の全許可のまま
+  # (public ECR からイメージを引くために要る)
+  TaskIngressFromVpcLink:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref VpcLinkSecurityGroup
+
+  VpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "kge2e-${EnvKagerouEnv}"
+      SubnetIds: !Ref BaseSubnets
+      SecurityGroupIds: [!Ref VpcLinkSecurityGroup]
+
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub "${EnvKagerouEnv}.kge2e.internal"
+      Vpc: !Ref BaseVpcId
+
+  DiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: app
+      NamespaceId: !GetAtt Namespace.Id
+      DnsConfig:
+        DnsRecords:
+          # ここが A だとデプロイは通るが 503 になる。SRV でなければならない
+          - Type: SRV
+            TTL: 10
+        RoutingPolicy: MULTIVALUE
+      # 環境は消える。登録解除を待たせない
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "kge2e-${EnvKagerouEnv}"
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/kagerou/${EnvKagerouEnv}"  # ecs 雛形と同じ規約
+      RetentionInDays: 1
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "kge2e-${EnvKagerouEnv}"
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      RuntimePlatform: { CpuArchitecture: ARM64, OperatingSystemFamily: LINUX }
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: app
+          # ビルドしない。確かめたいのは結線であってイメージの作り方ではない
+          Image: public.ecr.aws/docker/library/busybox:1.37
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - { Name: KAGEROU_ENV, Value: !Ref EnvKagerouEnv }
+            - { Name: GREETING, Value: !Ref EnvGreeting }
+          # env が中まで届いていることを応答で確かめられるようにする
+          Command:
+            - sh
+            - -c
+            - >-
+              mkdir -p /www &&
+              printf '{"service":"apigw-ecs","env":"%s","greeting":"%s"}' "$KAGEROU_ENV" "$GREETING" > /www/index.html &&
+              httpd -f -p 8080 -h /www
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: app
+
+  Service:
+    Type: AWS::ECS::Service
+    # VPC Link が使えるようになる前にサービスを作ると登録が宙に浮く
+    DependsOn: [TaskIngressFromVpcLink]
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref TaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # public サブネット + public IP。NAT を立てずに public ECR を引く
+          AssignPublicIp: ENABLED
+          Subnets: !Ref BaseSubnets
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      ServiceRegistries:
+        # SRV にはコンテナとポートが要る。落とすと登録できない
+        - RegistryArn: !GetAtt DiscoveryService.Arn
+          ContainerName: app
+          ContainerPort: 8080
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "kge2e-${EnvKagerouEnv}"
+      ProtocolType: HTTP
+
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      ConnectionType: VPC_LINK
+      ConnectionId: !Ref VpcLink
+      IntegrationUri: !GetAtt DiscoveryService.Arn
+      PayloadFormatVersion: "1.0"
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: $default
+      Target: !Sub "integrations/${Integration}"
+
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+Outputs:
+  KagerouUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  DiscoveryServiceId:
+    Value: !GetAtt DiscoveryService.Id
