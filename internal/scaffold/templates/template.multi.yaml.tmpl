@@ -46,8 +46,10 @@ Resources:
   {{.Logical}}Function:
     Type: AWS::Serverless::Function
     Metadata:
-      DockerContext: .
-      Dockerfile: Dockerfile
+      # range の中なので $ でルートを見る(. は ServiceSpec)。
+      # サービスごとに Dockerfile を分ける構成はまだ扱っていない(#160)
+      DockerContext: {{$.DockerContext}}
+      Dockerfile: {{$.DockerfileOrDefault}}
       DockerTag: !Ref EnvKagerouEnv
     Properties:
       PackageType: Image

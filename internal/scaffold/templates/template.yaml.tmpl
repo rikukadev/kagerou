@@ -44,11 +44,11 @@ Resources:
   AppFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      DockerContext: .
+      DockerContext: {{.DockerContext}}
 {{- if .HasDockerfile}}
-      Dockerfile: Dockerfile # 既存の Dockerfile(LWA 拡張入り)をそのまま使う
+      Dockerfile: {{.DockerfileOrDefault}} # 検出した既存の Dockerfile(LWA 拡張入り)
 {{- else}}
-      Dockerfile: Dockerfile # TODO: run your app as an HTTP server wrapped by LWA
+      Dockerfile: {{.DockerfileOrDefault}} # TODO: run your app as an HTTP server wrapped by LWA
 {{- end}}
       DockerTag: !Ref EnvKagerouEnv
     Properties:

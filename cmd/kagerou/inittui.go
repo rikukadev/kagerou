@@ -236,6 +236,9 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	}
 	p.Port = m.det.AppPort
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
+	// 検出したファイル名/場所をそのまま生成物に流す。固定にすると LWA を
+	// Dockerfile.lambda に分けている構成で、LWA 無しのイメージが載る(#160)
+	p.DockerfileName, p.DockerfileDir = m.det.DockerfileName, m.det.DockerfileDir
 	switch base, ok := m.det.Base(p.Project); {
 	case ok: // この project(または旧アカウント単位)の base をそのまま使う
 		p.Domain, p.DomainFromSSM = base.Domain, base.DomainFromSSM
