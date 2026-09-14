@@ -285,8 +285,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # go.mod の**最低**バージョンではなく最新で回す。govulncheck 自身が
+      # 新しい Go を要求する(v1.8.0 は go >= 1.26)ので、最低バージョンに
+      # 揃えるとスキャンに入る前の go install で落ちる。
+      # 脆弱性の有無は toolchain のバージョンで変わる話ではない
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - run: govulncheck ./...
