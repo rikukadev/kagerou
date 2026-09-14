@@ -154,9 +154,26 @@ func reportPermissions(ctx context.Context, region string, plan preflight.Plan, 
 		say("     permissions ok for the selected setup\n")
 		return false
 	}
-	say("     missing permissions for the selected setup:\n")
-	for _, c := range denied {
-		say("       %-38s %s\n", c.Action, c.Why)
+	setup, teardown := rep.DeniedSetup(), rep.DeniedTeardown()
+	if len(setup) > 0 {
+		say("     missing permissions for the selected setup:\n")
+		for _, c := range setup {
+			say("       %-38s %s\n", c.Action, c.Why)
+		}
+	}
+	if len(teardown) > 0 {
+		// 作れるのに壊せない状態は、**作った後にしか表に出ない**。
+		// down / reap が落ち続け、TTL が切れても環境が残って課金される。
+		// 「足りない」で一括りにせず、何が起きるかまで書く(#158)
+		if len(setup) == 0 {
+			say("     the setup can be created but NOT removed with these credentials:\n")
+		} else {
+			say("     also missing the permissions to remove it again:\n")
+		}
+		for _, c := range teardown {
+			say("       %-38s %s\n", c.Action, c.Why)
+		}
+		say("     (a preview environment you cannot tear down keeps costing money)\n")
 	}
 	return true
 }
