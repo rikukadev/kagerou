@@ -21,6 +21,12 @@ NAME=${3:?usage: run.sh <kagerou> <config> <name>}
 # iam-policy / validate が回せるように)、CI だけがここで差し替える(#135)。
 template_args=()
 [ -n "${KAGEROU_TEMPLATE:-}" ] && template_args=(--template "$KAGEROU_TEMPLATE")
+# 構成によっては、リポジトリに書けない値(アカウント固有の VPC / サブネット)を
+# テンプレートパラメータで渡す必要がある。KAGEROU_PARAMS="K=V K=V" で受ける。
+param_args=()
+if [ -n "${KAGEROU_PARAMS:-}" ]; then
+  for kv in $KAGEROU_PARAMS; do param_args+=(--param "$kv"); done
+fi
 
 fail() { echo "E2E FAILED: $*" >&2; exit 1; }
 log()  { echo; echo "=== $* ==="; }
@@ -53,7 +59,8 @@ cleanup() {
 trap cleanup EXIT
 
 log "up: $NAME"
-up_json=$("$KAGEROU" up --name "$NAME" --config "$CONFIG" "${template_args[@]+"${template_args[@]}"}" --output json) \
+up_json=$("$KAGEROU" up --name "$NAME" --config "$CONFIG" \
+  "${template_args[@]+"${template_args[@]}"}" "${param_args[@]+"${param_args[@]}"}" --output json) \
   || fail "up が失敗した"
 echo "$up_json"
 

@@ -770,10 +770,13 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		return err
 	}
 	// 複数指定は「複数構成ぶんの最小ポリシーを足し合わせたものが、実際に attach
-	// されているポリシーと一致するか」を見るための機能(#135)。生成物そのものは
-	// 1 構成ぶんしか意味を持たないので、出力用途では受け付けない。
-	if len(cfgPaths) > 1 && (*check == "" || *doc != "policy") {
-		return fmt.Errorf("--config can only be repeated with --doc policy --check <file>")
+	// されているポリシーと一致するか」を見るための機能(#135)。
+	//
+	// 出力にも効かせる: **1 つのロールを複数構成が共有する**とき、アタッチする
+	// ポリシーはその和集合そのもの。生成できないと結局手で書くことになり、
+	// #135 が止めたかった「手で足して生成器が知らない」に戻る。
+	if len(cfgPaths) > 1 && *doc != "policy" {
+		return fmt.Errorf("--config can only be repeated with --doc policy")
 	}
 	prefixOrCfg := func() string {
 		if *prefix != "" {
@@ -849,6 +852,22 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	switch *doc {
 	case "policy":
 		pol, err = buildPolicy(cfg, cfgPaths.first())
+		if err == nil && len(cfgPaths) > 1 {
+			// 1 ロールを複数構成が共有する場合、出力も判定も和集合で見る
+			pols := []iampolicy.Policy{pol}
+			for _, path := range cfgPaths[1:] {
+				other, oerr := config.LoadOrDefault(path)
+				if oerr != nil {
+					return oerr
+				}
+				op, oerr := buildPolicy(other, path)
+				if oerr != nil {
+					return oerr
+				}
+				pols = append(pols, op)
+			}
+			pol = iampolicy.Union(pols...)
+		}
 		note = "apigateway:* is a documented compromise (cannot be scoped per stack); review before attaching"
 	case "boundary":
 		var regs []string
@@ -919,21 +938,8 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		if err != nil {
 			return fmt.Errorf("--check: %w", err)
 		}
-		// 2 つ目以降の config も生成して足し合わせる(#135)。
+		// pol は和集合済み(複数 config のとき)
 		gen := iampolicy.PolicyAllowActions(pol)
-		for _, path := range cfgPaths[1:] {
-			other, err := config.LoadOrDefault(path)
-			if err != nil {
-				return err
-			}
-			op, err := buildPolicy(other, path)
-			if err != nil {
-				return err
-			}
-			for a := range iampolicy.PolicyAllowActions(op) {
-				gen[a] = true
-			}
-		}
 		extra, missing, err := iampolicy.CheckDriftActions(gen, data)
 		if err != nil {
 			return err

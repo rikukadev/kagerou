@@ -1,0 +1,18 @@
+# 実 AWS E2E(HTTP API + VPC Link → ECS 版)。名前は CI が --name で渡す。
+project: kagerou-e2e
+driver: stack
+template: e2e/aws/apigw/template.yaml
+region: ap-northeast-1
+name_prefix: kge2e-
+# Fargate は動いている間ずっと課金される。E2E は使い捨てなので短く
+ttl: 2h
+
+env:
+  KAGEROU_ENV: "{name}"
+  GREETING: "hello from {name}"
+
+# タスクの起動 + Cloud Map への登録 + VPC Link の反映で、200 が返るまで
+# Lambda より明確に遅い。ここを待たずに down すると「作れたが通らない」構成を
+# 緑にしてしまう(この fixture が確かめたいのはまさにそこ)
+readiness_path: "/"
+readiness_timeout: 420s

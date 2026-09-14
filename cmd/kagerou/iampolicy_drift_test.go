@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ import (
 // まま」というループ。CI にも同じチェックを入れてあるが、ここにも置くのは
 // `make test` の時点で気づけるようにするため。
 //
-// 4 fixture は 1 本のロールを共有しているので、和集合で突き合わせる。単独の
+// fixture は 1 本のロールを共有しているので、和集合で突き合わせる。単独の
 // 構成と比べると「他の構成にだけ要る権限」が全部 over-permission に見えてしまう。
 func TestE2EPolicyMatchesGenerated(t *testing.T) {
 	wd, err := os.Getwd()
@@ -35,6 +36,7 @@ func TestE2EPolicyMatchesGenerated(t *testing.T) {
 		"--config", "e2e/aws/ssr/kagerou.yaml",
 		"--config", "e2e/aws/multi/kagerou.yaml",
 		"--config", "e2e/aws/worker/kagerou.yaml",
+		"--config", "e2e/aws/apigw/kagerou.yaml",
 		"--check", "e2e/aws/ci-policy.json",
 	}, out)
 	if err != nil {
@@ -43,16 +45,55 @@ func TestE2EPolicyMatchesGenerated(t *testing.T) {
 	}
 }
 
-// 和集合モードは --check 専用。生成物の出力は 1 構成ぶんしか意味を持たない。
-func TestRepeatedConfigRequiresCheck(t *testing.T) {
+// 和集合は出力にも効く。1 ロールを複数構成が共有するとき、アタッチする
+// ポリシーは和集合そのものなので、生成できないと結局手で書くことになる
+// (#135 が止めたかったループに戻る)。
+func TestRepeatedConfigUnionsForOutput(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir("../.."); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
 	out, err := os.CreateTemp(t.TempDir(), "out")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = out.Close() })
 
-	err = cmdIamPolicy([]string{"--config", "a.yaml", "--config", "b.yaml"}, out)
+	// worker(SQS)と apigw(ECS)は要る権限が重ならない。和集合なら両方出る
+	if err := cmdIamPolicy([]string{
+		"--config", "e2e/aws/worker/kagerou.yaml",
+		"--config", "e2e/aws/apigw/kagerou.yaml",
+	}, out); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"sqs:CreateQueue", "ecs:CreateService", "servicediscovery:GetOperation"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("和集合に %q が無い", want)
+		}
+	}
+}
+
+// --doc policy 以外では和集合に意味が無い(Action 集合の形が違う)。
+func TestRepeatedConfigRejectedForOtherDocs(t *testing.T) {
+	out, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = out.Close() })
+
+	err = cmdIamPolicy([]string{
+		"--doc", "boundary", "--config", "a.yaml", "--config", "b.yaml",
+	}, out)
 	if err == nil {
-		t.Fatal("--check 無しの複数 --config は拒否されるべき")
+		t.Fatal("--doc policy 以外の複数 --config は拒否されるべき")
 	}
 }

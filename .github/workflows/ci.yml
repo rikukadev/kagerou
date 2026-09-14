@@ -186,6 +186,60 @@ jobs:
           NAME: e2e-wrk-${{ github.run_id }}
         run: ./bin/kagerou down --name "$NAME" --config e2e/aws/worker/kagerou.yaml || true
 
+  # HTTP API + VPC Link → Cloud Map → ECS Fargate(#105)。既存 4 本と違って
+  # **compute が Lambda でない**唯一の経路で、ここにしか出ない壊れ方がある:
+  # Cloud Map のレコードが A だとデプロイは成功して 503 になる(cfn-lint も通る)。
+  #
+  # VPC とサブネットはアカウント固有なのでリポジトリに書けない。既定 VPC を
+  # その場で引く(読み取りのみ)。既定 VPC が無いアカウントでは vars で渡す。
+  e2e-aws-apigw:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - run: go build -o bin/kagerou ./cmd/kagerou
+
+      - name: Resolve the VPC to run tasks in
+        id: vpc
+        run: |
+          set -euo pipefail
+          VPC="${{ vars.E2E_VPC_ID }}"
+          SUBNETS="${{ vars.E2E_SUBNET_IDS }}"
+          if [ -z "$VPC" ]; then
+            VPC=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true               --query 'Vpcs[0].VpcId' --output text)
+          fi
+          if [ -z "$SUBNETS" ]; then
+            # VPC Link は 2 AZ 以上を要求する
+            SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC"               --query 'Subnets[:2].SubnetId' --output text | tr '	' ',')
+          fi
+          [ -n "$VPC" ] && [ "$VPC" != "None" ] || { echo "::error::no VPC"; exit 1; }
+          echo "vpc=$VPC" >> "$GITHUB_OUTPUT"
+          echo "subnets=$SUBNETS" >> "$GITHUB_OUTPUT"
+
+      - name: Run E2E
+        env:
+          NAME: e2e-apigw-${{ github.run_id }}
+          KAGEROU_PARAMS: BaseVpcId=${{ steps.vpc.outputs.vpc }} BaseSubnets=${{ steps.vpc.outputs.subnets }}
+        run: ./e2e/aws/run.sh bin/kagerou e2e/aws/apigw/kagerou.yaml "$NAME"
+
+      # Fargate は動いている間ずっと課金される。取りこぼすと TTL まで回り続ける
+      - name: Clean up
+        if: always()
+        env:
+          NAME: e2e-apigw-${{ github.run_id }}
+        run: ./bin/kagerou down --name "$NAME" --config e2e/aws/apigw/kagerou.yaml || true
+
   e2e-aws-ssr:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     # arm64 イメージ(template の Architectures)をネイティブでビルドする
@@ -279,6 +333,7 @@ jobs:
             --config e2e/aws/ssr/kagerou.yaml \
             --config e2e/aws/multi/kagerou.yaml \
             --config e2e/aws/worker/kagerou.yaml \
+            --config e2e/aws/apigw/kagerou.yaml \
             --check e2e/aws/ci-policy.json
 
   vuln:
