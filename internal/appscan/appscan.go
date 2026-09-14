@@ -27,12 +27,12 @@ import (
 type Facts struct {
 	Owner, Repo   string // .git/config の remote origin(ルートのみ)
 	Region        string // samconfig.toml(ルートのみ・ファイル由来)
-	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go
+	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go / yii / laravel / php
 	DBDriver      string // mysql2 / pg / go-sql-driver/mysql など(空 = DB 依存なし)
 	HasDockerfile bool
 	HasLWA        bool     // その Dockerfile に Lambda Web Adapter が入っているか
 	DockerfileDir string   // Dockerfile のあるディレクトリ(ルートからの相対。ルート直下なら "")
-	AppPort       string   // Dockerfile の EXPOSE / compose の ports から検出した listen ポート
+	AppPort       string   // Dockerfile の EXPOSE / compose の ports・expose から検出した listen ポート
 	HasTemplate   bool     // ルートに template.yaml があるか
 	Services      int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
 	ServiceNames  []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
@@ -138,16 +138,29 @@ func walk(root, rel string, depth int, f *Facts, visited *int) {
 // frameworkRank はマージ時の優先度。具体的なフレームワーク > go > 素の node。
 // モノレポ(web=素の React SPA + api=Go)ではコンテナ化対象の Go が勝つ。
 func frameworkRank(fw string) int {
-	switch fw {
-	case "":
+	switch {
+	case fw == "":
 		return 0
-	case "node":
+	case fw == "node", fw == "php":
 		return 1
-	case "go":
+	case fw == "go":
 		return 2
+	case isPHPFramework(fw):
+		// composer.json はデプロイされるアプリそのものを指す。JS のフレームワークは
+		// PHP アプリに同梱された assets バンドルとしても出てくるので、同点にしない。
+		return 4
 	default: // next / remix-run / react-router / astro / nuxt / sveltejs
 		return 3
 	}
+}
+
+func isPHPFramework(fw string) bool {
+	for _, f := range phpFrameworks {
+		if f[1] == fw {
+			return true
+		}
+	}
+	return false
 }
 
 // scanDir は 1 ディレクトリの事実を f にマージする。
@@ -350,8 +363,18 @@ func samconfigRegion(dir string) string {
 // 依存名 → 何を使うか。フレームワーク・DB と違い「あるだけ全部」拾う。
 var (
 	nodeFrameworks = []string{"next", "@remix-run/node", "react-router", "astro", "nuxt", "@sveltejs/kit"}
-	nodeDBs        = []string{"mysql2", "mysql", "pg", "postgres", "@prisma/client", "drizzle-orm"}
-	goDBs          = []string{"go-sql-driver/mysql", "jackc/pgx", "lib/pq"}
+	// composer の require / require-dev から拾う。上から順に見て最初の一致を採る。
+	phpFrameworks = [][2]string{
+		{"yiisoft/yii2", "yii"},
+		{"yiisoft/yii", "yii"},
+		{"laravel/framework", "laravel"},
+		{"symfony/framework-bundle", "symfony"},
+		{"cakephp/cakephp", "cakephp"},
+		{"codeigniter4/framework", "codeigniter"},
+		{"slim/slim", "slim"},
+	}
+	nodeDBs = []string{"mysql2", "mysql", "pg", "postgres", "@prisma/client", "drizzle-orm"}
+	goDBs   = []string{"go-sql-driver/mysql", "jackc/pgx", "lib/pq"}
 
 	nodeWants = map[string]func(*Wants){
 		"@aws-sdk/client-dynamodb":       func(w *Wants) { w.DynamoDB = true },
@@ -418,6 +441,34 @@ func depsOf(dir string) (framework, dbDriver string, wants Wants) {
 			}
 		}
 	}
+	if b, err := os.ReadFile(filepath.Join(dir, "composer.json")); err == nil {
+		var pkg struct {
+			Require    map[string]string `json:"require"`
+			RequireDev map[string]string `json:"require-dev"`
+		}
+		req := map[string]bool{}
+		if json.Unmarshal(b, &pkg) == nil {
+			for k := range pkg.Require {
+				req[k] = true
+			}
+			for k := range pkg.RequireDev {
+				req[k] = true
+			}
+		}
+		fw := ""
+		for _, f := range phpFrameworks {
+			if req[f[0]] {
+				fw = f[1]
+				break
+			}
+		}
+		if fw == "" && len(req) > 0 {
+			fw = "php"
+		}
+		if frameworkRank(fw) > frameworkRank(framework) {
+			framework = fw
+		}
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
 		if frameworkRank("go") > frameworkRank(framework) {
 			framework = "go"
@@ -469,24 +520,143 @@ func exists(path string) bool {
 }
 
 var (
-	exposeRe      = regexp.MustCompile(`(?mi)^\s*EXPOSE\s+(\d+)`)
-	composePortRe = regexp.MustCompile(`(?m)^\s*-\s*"?(?:\d+:)?(\d+)"?\s*$`)
+	exposeRe = regexp.MustCompile(`(?mi)^\s*EXPOSE\s+(\d+)`)
+
+	composeServiceHeadRe = regexp.MustCompile(`^  ([A-Za-z0-9_.-]+):\s*$`)
+	composeServiceKeyRe  = regexp.MustCompile(`^    ([A-Za-z0-9_.-]+):\s*(.*)$`)
+	composeListItemRe    = regexp.MustCompile(`^\s+-\s*(.+?)\s*$`)
 )
 
-// composePort は compose の ports("8080:3000" の右側 = コンテナ側)を拾う。
+// composeService は compose の 1 サービスのうち、ポート検出に要る分だけ。
+type composeService struct {
+	name   string
+	image  string
+	build  bool
+	ports  []string
+	expose []string
+}
+
+// parseComposeServices は services: 直下を読む。YAML パーサは持ち込まない
+// (このパッケージは標準ライブラリだけで閉じる)。読めない形は黙って捨てる。
+func parseComposeServices(s string) []composeService {
+	if i := strings.Index(s, "\nservices:"); i >= 0 {
+		s = s[i+1:]
+	} else if !strings.HasPrefix(s, "services:") {
+		return nil
+	}
+	var out []composeService
+	cur := -1
+	mode := ""
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			if strings.HasPrefix(line, "services:") {
+				continue
+			}
+			break // 次のトップレベルキー(volumes: など)
+		}
+		if m := composeServiceHeadRe.FindStringSubmatch(line); m != nil {
+			out = append(out, composeService{name: m[1]})
+			cur, mode = len(out)-1, ""
+			continue
+		}
+		if cur < 0 {
+			continue
+		}
+		if m := composeServiceKeyRe.FindStringSubmatch(line); m != nil {
+			mode = ""
+			switch m[1] {
+			case "image":
+				out[cur].image = strings.TrimSpace(m[2])
+			case "build":
+				out[cur].build = true
+			case "ports", "expose":
+				mode = m[1]
+			}
+			continue
+		}
+		if mode == "" {
+			continue
+		}
+		if m := composeListItemRe.FindStringSubmatch(line); m != nil {
+			if mode == "ports" {
+				out[cur].ports = append(out[cur].ports, m[1])
+			} else {
+				out[cur].expose = append(out[cur].expose, m[1])
+			}
+		}
+	}
+	return out
+}
+
+// ポートの持ち主として当てにしない image(DB・キャッシュ・検索・エミュレータ等)。
+var infraImageMarks = []string{
+	"mysql", "mariadb", "postgres", "redis", "valkey", "opensearch", "elasticsearch",
+	"kibana", "localstack", "traefik", "mailcatcher", "mailhog", "mailpit", "minio",
+	"rabbitmq", "memcached", "dynamodb-local", "adminer", "selenium", "ftp",
+}
+
+func isInfraImage(image string) bool {
+	l := strings.ToLower(image)
+	for _, m := range infraImageMarks {
+		if strings.Contains(l, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// containerPort は ports / expose の 1 エントリからコンテナ側のポートを取る。
+// "8080:3000" は 3000、"9200" は 9200。変数展開など数値にならないものは捨てる。
+func containerPort(entry string) string {
+	e := strings.Trim(strings.TrimSpace(entry), `"'`)
+	if i := strings.Index(e, "/"); i >= 0 {
+		e = e[:i]
+	}
+	if i := strings.LastIndex(e, ":"); i >= 0 {
+		e = e[i+1:]
+	}
+	if e == "" {
+		return ""
+	}
+	for _, r := range e {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return e
+}
+
+// composePort は compose から listen ポートを拾う。アプリのサービス
+// (build: がある > DB 等の既製 image でない)を先に見て、そのサービスの
+// ports / expose の中だけを読む。ブロックの外まで走査すると、変数展開で
+// 読めない行を飛び越えて別サービスのポート(DB や検索)を拾ってしまう。
 func composePort(dir string) string {
 	for _, name := range composeFiles {
 		b, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			continue
 		}
-		s := string(b)
-		i := strings.Index(s, "ports:")
-		if i < 0 {
-			continue
-		}
-		if m := composePortRe.FindStringSubmatch(s[i:]); m != nil {
-			return m[1]
+		svcs := parseComposeServices(string(b))
+		for _, pick := range []func(composeService) bool{
+			func(s composeService) bool { return s.build },
+			func(s composeService) bool { return !isInfraImage(s.image) },
+			func(composeService) bool { return true },
+		} {
+			for _, svc := range svcs {
+				if !pick(svc) {
+					continue
+				}
+				for _, entries := range [][]string{svc.ports, svc.expose} {
+					for _, e := range entries {
+						if p := containerPort(e); p != "" {
+							return p
+						}
+					}
+				}
+			}
 		}
 	}
 	return ""
