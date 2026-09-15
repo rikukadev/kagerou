@@ -24,9 +24,23 @@ go vet ./... && go test ./... && gofmt -l .
 ```
 
 CI には**実 AWS で環境を作って壊す E2E** が構成ごとに 1 本ずつある
-(3tier / ssr / multi / worker)。required check なので、fork からの PR は
-そのままではマージできない — 信頼できる変更は同一リポジトリのブランチに
-持ってきて回す。
+(3tier / ssr / multi / worker)。この 4 本と `lint` / `test` / `test-aws` が
+required check。
+
+### fork からの PR について
+
+**fork からの PR は、そのままでは緑になりません。** E2E は OIDC でこのリポジトリの
+AWS ロールを assume しますが、GitHub は fork の workflow に OIDC トークンを
+渡しません(渡したら、誰でも PR を投げるだけで他人の AWS を触れてしまう)。
+E2E job は fork では起動しないようになっていて、required check は
+「未実行」のまま残ります。
+
+**待たないでください。** メンテナ側で変更を同一リポジトリのブランチに持ってきて
+E2E を回し、そちらをマージします。**PR を閉じる必要も、投げ直す必要もありません** —
+取り込まれれば閉じます。
+
+レビューは fork の PR 上で普通に行います。`go vet` / `go test` / `lint` は
+fork でも走るので、そこは緑にしてから投げてもらえると速いです。
 
 ## commit type は「利用者に何が起きるか」で選ぶ
 
