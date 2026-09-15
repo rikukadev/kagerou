@@ -5,6 +5,7 @@ package scaffold
 import (
 	"embed"
 	"fmt"
+	"github.com/rikukadev/kagerou/internal/genstamp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,19 @@ import (
 
 //go:embed templates/*.tmpl
 var tmplFS embed.FS
+
+// Version は生成物に埋めるバージョン(#207)。main が起動時に設定する。
+// init が書いたファイルは利用者のものになるので、こちらでバグを直しても
+// 届かない。せめて「いつの kagerou が書いたか」は残す。
+var Version = "dev"
+
+// parseTmpl はテンプレートを関数つきで読む。印を関数にしてあるのは、
+// テンプレートごとに渡すデータ型が違うため(メソッドにすると全部に生やす必要がある)。
+func parseTmpl(name string) (*template.Template, error) {
+	return template.New(name).Funcs(template.FuncMap{
+		"generatedBy": func(prefix string) string { return genstamp.Line(prefix, Version) },
+	}).ParseFS(tmplFS, "templates/"+name)
+}
 
 type Params struct {
 	Project       string
@@ -360,7 +374,7 @@ type dockerfileData struct {
 
 func renderDockerfile(dst, variant string, p Params) error {
 	name := "dockerfile." + variant + ".tmpl"
-	t, err := template.ParseFS(tmplFS, "templates/"+name)
+	t, err := parseTmpl(name)
 	if err != nil {
 		return err
 	}
@@ -376,7 +390,7 @@ func renderDockerfile(dst, variant string, p Params) error {
 }
 
 func renderTo(dst, name string, p Params) error {
-	t, err := template.ParseFS(tmplFS, "templates/"+name)
+	t, err := parseTmpl(name)
 	if err != nil {
 		return err
 	}
@@ -422,7 +436,7 @@ func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase, p.RoutingOrDefault(),
 		p.Auth, p.AuthDomain, p.ALB(), p.APIGatewayVPCLink(),
 		p.SetupBase || handOff(p), !handOff(p) || p.DomainFromSSM}
-	t, err := template.ParseFS(tmplFS, "templates/setup.sh.tmpl")
+	t, err := parseTmpl("setup.sh.tmpl")
 	if err != nil {
 		return "", err
 	}

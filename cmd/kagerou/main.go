@@ -4,12 +4,15 @@ package main
 
 import (
 	"fmt"
+	"github.com/rikukadev/kagerou/internal/scaffold"
 	"os"
 )
 
 var version = "dev"
 
 func main() {
+	// 生成物に埋める版(#207)。ldflags で入る version をここで渡す。
+	scaffold.Version = version
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "kagerou:", err)
 		os.Exit(1)

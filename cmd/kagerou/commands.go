@@ -1035,6 +1035,8 @@ func cmdValidate(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	// 生成物が古くないか(#207)。契約検査の入口がここなので同じ場所で言う。
+	findings = append(findings, validate.GeneratedStamps(validate.GeneratedPathsFor(tpl), version)...)
 	for _, fd := range findings {
 		if _, err := fmt.Fprintf(out, "%s\t%s\n", fd.Level, fd.Msg); err != nil {
 			return err
