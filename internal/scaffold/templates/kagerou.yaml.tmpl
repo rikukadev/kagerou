@@ -110,15 +110,18 @@ env:
   KAGEROU_ENV: "{name}"
 {{- end}}
 {{- if .ECS}}
-  # IMAGE_URI と RULE_PRIORITY は実行ごとに変わるので CI が --env で渡す
-  # (workflow 生成済み)。手元から up するときは自分で渡す:
-  #   kagerou up --name e2e-1 --env IMAGE_URI=<ecr>:e2e-1 --env RULE_PRIORITY=900
-{{- else if .LambdaALB}}
-  # RULE_PRIORITY は共有リスナー上で一意にする値。**1〜50000** の範囲で、
-  # 複数サービス構成ではここに Index が連結されるので 1〜4999 に収める。
-  # CI は PR 番号を 4999 で割った余り + 1 を渡す(workflow 生成済み)
-  # (workflow 生成済み)。手元から up するときは空いている番号を自分で渡す:
+  # IMAGE_URI は実行ごとに変わるので CI が --env で渡す(workflow 生成済み)。
+  # 手元から up するときは自分で渡す:
+  #   kagerou up --name e2e-1 --env IMAGE_URI=<ecr>:e2e-1
+{{- end}}
+{{- if .ALB}}
+  # リスナールールの優先度は渡さなくてよい。kagerou が up のたびに共有リスナーの
+  # 空きを確保する(#189)。固定したいときだけ明示する(明示が勝つ):
+{{- if .MultiService}}
+  #   kagerou up --name e2e-1 --env RULE_PRIORITY_{{(index .ServiceSpecs 0).Upper}}=900
+{{- else}}
   #   kagerou up --name e2e-1 --env RULE_PRIORITY=900
+{{- end}}
 {{- end}}
 {{- if .Wants.Redis}}
   # redis を検出。ElastiCache は preview 向きでない(常時課金・VPC・作成に数分)ため

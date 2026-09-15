@@ -27,8 +27,8 @@ Parameters:
   EnvRulePriority:
     Type: Number
     Description: >
-      Listener-rule priority; must be unique on the shared listener. CI passes
-      the PR number (--env RULE_PRIORITY). For manual up, pick a free number.
+      Listener-rule priority; must be unique on the shared listener. kagerou
+      reserves a free one at up time (#189). Pass --env RULE_PRIORITY to pin it.
 {{- if .Wants.Redis}}
   EnvRedisUrl:
     Type: String
