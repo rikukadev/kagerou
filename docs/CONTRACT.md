@@ -1,10 +1,44 @@
 # kagerou 公開契約 v0.1
 
-> 外部(Backstage プラグイン、CI、他ツール)が依存してよい安定インターフェース。
-> **ここに書いたものは v0.x の間も後方互換を守る(変更はフィールド/タグの追加のみ)**。
+> 外部(Backstage プラグイン、CI、他ツール)から見た kagerou の約束事。
 > 設計の背景は docs/DESIGN.md。
 
-## 1. タグスキーマ
+## この文書の読み方
+
+見出しに **[Stable]** と **[Reference]** が付いている。**約束しているのは Stable
+だけ**で、そこに依存するコードは v0.x の間、壊れないまま動き続ける。
+
+| | 意味 | 変更のしかた |
+|---|---|---|
+| **[Stable]** | 外部が依存してよい。データの形と名前 | **追加のみ**(タグ / フィールド / キーを足す)。既存の意味とキー名は変えない |
+| **[Reference]** | 現状の実装と既定値。**依存しないこと** | 予告なく変わる。変わったら CHANGELOG に書く |
+
+この区別が要る理由は単純で、**全部に互換を約束すると直せなくなる**から。
+生成される CloudFormation の中身、IAM の権限セット、リスナールールの採番、
+認証の実装は、AWS 側の都合やバグ修正で動く。実際 v0.12 までに
+リスナー優先度の式も Cloud Map のレコード型も IAM の権限も変えている。
+それらを「契約」に含めていたら、直すたびに破壊的変更になっていた。
+
+一方、**タグ・環境名・Environment JSON・`Env<Key>` 規約・`serve` の
+エンドポイント・hooks の環境変数・SSM のキー**は、外から読み書きされる
+データそのものなので、こちらは動かさない。
+
+| 節 | 区分 |
+|---|---|
+| §1 タグスキーマ | Stable |
+| §2 環境名の制約 | Stable |
+| §3 Environment JSON | Stable |
+| §4 env の届け方(`Env<Key>` 規約) | Stable |
+| §4.5 driver: static のプレフィックス配置 | Stable |
+| §5 URL の発行(`kagerou:url` / `url_template`) | Stable |
+| §6 読み取り口(`kagerou serve`) | Stable |
+| §7 Hooks に渡る環境変数 | Stable |
+| §8 IAM(生成される権限の中身) | Reference |
+| §9 SSM のキー契約(パスと意味) | Stable |
+| §9 の各節(入口 / 認証 / MemorySize / 優先度 / routing) | Reference |
+| §10 peer 連動 | Reference |
+
+## 1. タグスキーマ [Stable]
 
 kagerou が管理する AWS リソースには以下のタグが付く。stack driver では CFN
 スタックに付け、配下リソースへは CFN の伝播に任せる。スタック外リソースを持つ
@@ -41,7 +75,7 @@ driver は個別に付ける責務を負う。
 - CI は全員が同じデプロイロールを assume する = 同一 owner なので、PR への push で
   同名環境の更新が続く挙動は変わらない。`reap` は owner に関係なく期限切れを回収する。
 
-## 2. 環境名の制約
+## 2. 環境名の制約 [Stable]
 
 ```
 ^[a-z]([a-z0-9-]*[a-z0-9])?$   かつ 63 文字以下
@@ -50,7 +84,7 @@ driver は個別に付ける責務を負う。
 小文字英字始まり・小文字英数字とハイフン・末尾ハイフン禁止。Route53 の
 サブドメインラベル(63 文字)と S3 プレフィックスにそのまま使えるよう最初から狭くする。
 
-## 3. Environment JSON
+## 3. Environment JSON [Stable]
 
 `kagerou up|list|url --output json` が返す形。以後の変更はフィールド追加のみ。
 
@@ -75,7 +109,7 @@ driver は個別に付ける責務を負う。
 - `source`: opaque 文字列(URI 形式推奨)。未指定のときは `null`。kagerou は解釈しない
 - driver 固有の情報は driver 名のキー(`stack` 等)の下に入れ子にする
 
-## 4. env の届け方(stack driver)
+## 4. env の届け方(stack driver)[Stable]
 
 テンプレートが **`Env<Key>` という名前のパラメータを宣言していれば**、kagerou は
 `--env` / kagerou.yaml の env をそこへ流す。宣言が受け取り口であり、kagerou は
@@ -99,7 +133,7 @@ Resources:
           DB_USER: !Ref EnvDbUser
 ```
 
-## 4.5 driver: static
+## 4.5 driver: static [Stable]
 
 compute を持たない環境(SSG / CSR の SPA)。テンプレートも `Env<Key>` も使わず、
 ビルド成果物を preview base バケットの `{name}/` プレフィックスへ配置する。
@@ -121,7 +155,7 @@ static:
   確定しているため、フックには `KAGEROU_URL` も渡る
 - `down` はスタックとプレフィックス配下の両方を消す
 
-## 5. URL の発行
+## 5. URL の発行 [Stable]
 
 環境 URL の解決順:
 
@@ -148,7 +182,7 @@ url_template: "https://{name}.{base_domain}"
 **引けなければ up は失敗する** — 空文字で `https://pr-42..` を作らない。
 `{name}` / `{project}` と同じく `env` の値と hooks 本文でも使える。
 
-## 6. 読み取り口(`kagerou serve`)
+## 6. 読み取り口(`kagerou serve`)[Stable]
 
 Backstage 等からの読み取りは `kagerou serve` が提供する**読み取り専用 HTTP**。
 Lambda function URL に AWS Lambda Web Adapter(LWA)越しで置く想定(`$PORT` を見る)。
@@ -168,7 +202,24 @@ Lambda function URL に AWS Lambda Web Adapter(LWA)越しで置く想定(`$PORT`
 - `GET` 以外は `405`(`Allow: GET`)。エラーは `{"error": "..."}` を対応する 4xx/5xx で返す。
 - 各リクエストは driver を都度読むため、返す状態は常にライブ。
 
-## 7. Hooks に渡る環境変数
+### 置き方(認証)
+
+**この API は認証を持たない。** 一覧には環境名・URL に加えて `source`
+(例 `github_pr://org/repo/42`)が入るので、素で公開すると**社内の PR 番号と
+プレビュー URL が外から読める**。プレビュー本体を `auth:` で守っていても、
+その一覧が素通しでは意味が薄い。
+
+置き方は次のどちらかにする:
+
+- **function URL を `AuthType: AWS_IAM`** にして、ポータル側が SigV4 で署名して叩く
+  (Backstage のバックエンドから呼ぶならこれが素直)
+- **VPC 内からのみ到達させる**(社内ネットワーク / VPC エンドポイント経由)
+
+どちらも取れない場合に何が出るかは把握しておくこと: 環境名、URL、TTL、
+`source`(リポジトリ名と PR 番号)、`owner`(IAM プリンシパル)。
+**`AuthType: NONE` で置くのは、これらが公開されてよいときだけ。**
+
+## 7. Hooks に渡る環境変数 [Stable]
 
 kagerou.yaml の hooks(`pre_up` / `post_up` / `pre_down` / `post_down`)は
 `sh -c` で実行され、以下の環境変数を受け取る。以後の変更は追加のみ。
@@ -213,7 +264,11 @@ hooks:
     aws s3 sync web/dist/ "s3://$KAGEROU_OUTPUT_WEBBUCKETNAME/" --delete
 ```
 
-## 8. IAM(デプロイロール / trust / boundary / execution)
+## 8. IAM(デプロイロール / trust / boundary / execution)[Reference]
+
+> **[Reference]** 生成される権限の集合は、AWS 側の都合と実運用で見つかる
+> 不足で動く(実際 v0.12 までに何度も足している)。**生成された JSON を
+> 写して固定するのではなく、`kagerou iam-policy` を都度実行すること**。
 
 「admin を付けてね」を避けるため、CI が使うロールに必要な IAM を
 `kagerou iam-policy` が生成する。`--doc` で 4 つの文書を出す:
@@ -262,11 +317,12 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
   - 新規ロール作成時に **同じ boundary の付与を必須化**(付けないと作れない=子ロールも同じ天井に)
   - 組織・アカウント・課金(`organizations:*` / `account:*` / `budgets:*` / `ce:*`)を Deny
 
-これらは v0.x の間も後方互換(Deny の追加・スコープを狭める変更はしうるが、
-出力の骨格と上記の性質は保つ)。`policy` はワイルドカードが残る箇所があるため、
+**これらは Reference** — 個々の Allow / Deny は足し引きされる。保つのは
+上記の**性質**(昇格させない、名前空間の外を触らせない、子ロールに同じ天井)で、
+アクションの集合そのものではない。`policy` はワイルドカードが残る箇所があるため、
 アタッチ前にレビューすること(コマンドが stderr で注意する)。
 
-## 9. preview base のデータ契約(SSM)
+## 9. preview base のデータ契約(SSM)[Stable]
 
 ベース(共有 CloudFront / 証明書 / DNS / バケット。§5・DESIGN §10)と環境の境界は
 **SSM Parameter Store のキー契約**。ベースは作成時に次を書き、`kagerou init` は
@@ -359,7 +415,11 @@ ALB ベース = アプリのリージョン)。解決側は入口を知らない
 `{base_domain}` を使う設定では `kagerou iam-policy` が `ssm:GetParameter`
 (`/kagerou/base/*`)を自動で足す — フラグにすると付け忘れて 403 になるため。
 
-### 入口(entrypoint)
+### 入口(entrypoint)[Reference]
+
+> ここから先(入口 / 認証 / MemorySize / 優先度 / routing)は、**kagerou が今
+> 何を作るか**の説明であって、外部が依存してよい形ではない。生成物の中身は
+> バグ修正と AWS の仕様変更で動く。
 
 環境の公開経路は **compute と entrypoint の組み合わせ**で決まる。
 **既定は独自ドメイン**(`alb`)で、`apigateway` の中身は compute で変わる:
@@ -403,7 +463,7 @@ NAT 経由 egress の本番乖離を縮めたい場合は、alb-base の `TaskSu
 - `_shared` は project 名として使えない文字(`_`)で始まるので、実在の
   project と衝突しない
 
-### 認証(`auth:`)
+### 認証(`auth:`)[Reference]
 
 `kagerou.yaml` に `auth:` を書くと、プレビューがログインの後ろに入る。
 
@@ -441,7 +501,7 @@ auth:
 動的参照を**デプロイロールの資格情報で**解決するため)。`kagerou iam-policy` が
 テンプレートから導いて、読むシークレットの ARN に絞って出す。
 
-### 認証つきのベース(edge)
+### 認証つきのベース(edge)[Reference]
 
 `kagerou init --auth` は preview base の代わりに **edge base**
 (`deploy/edge-base.yaml` + `deploy/edge-auth/index.mjs`)を生成する。
@@ -474,7 +534,7 @@ IdP に登録する redirect_uri は **1 本だけ**:
 `Domain=.<domain>` で発行するので、全環境で共有される
 (= 環境ごとにログインし直さない)。
 
-### Lambda の MemorySize / Timeout
+### Lambda の MemorySize / Timeout [Reference]
 
 `kagerou init --memory 1024 --timeout 120` で生成物に焼き込む。検出はしない
 (適正なメモリはリポジトリのファイルからは分からない)。既定は 512MB。
@@ -492,7 +552,7 @@ IdP に登録する redirect_uri は **1 本だけ**:
 HTTP API 入口で 30 秒を超える `--timeout` を渡すと `init` が警告する。設定自体は
 書き出すが、**効かない設定**であることを黙って隠さない。
 
-### リスナールールの優先度
+### リスナールールの優先度 [Reference]
 
 共有 ALB 入口では、環境が足すリスナールールに **1〜50000 の一意な優先度**が要る。
 kagerou は `--env RULE_PRIORITY` で受け、複数サービス構成ではそこに
@@ -523,7 +583,7 @@ workflow は `PR % 4999 + 1` で畳む。
 そのときは ALB が `PriorityInUse` を返して `up` が落ちるだけで、他の環境の
 ルールを黙って奪うことはない。番号幅が 4999 未満の運用(通常はそう)では起きない。
 
-### routing
+### routing [Reference]
 
 拡張子の無いパスをどう解決するか。**ベースを作るときに決まり、環境ごとには
 変えられない**(CloudFront Function に焼き込まれるため)。
@@ -555,7 +615,7 @@ SPA を `directory` のまま配ると、実体が無いので **403** になる
   (環境と違い TTL で消えない。所有はリポジトリのコラボレータ全員で、
   更新はテンプレート/モジュールの再適用)。
 
-## 10. peer 連動(複数アプリの環境を名前で組む)
+## 10. peer 連動(複数アプリの環境を名前で組む)[Reference]
 
 複数アプリ(= 複数の kagerou プロジェクト)が連動する系(例: A が SNS に publish、
 B の SQS が受ける)では、**環境名が合成キー**になる。kagerou.yaml で相手を宣言する:
