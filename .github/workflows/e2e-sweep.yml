@@ -1,0 +1,79 @@
+name: e2e-sweep
+
+# E2E の残骸を拾う(#209)。
+#
+# 各 job は `if: always()` で down するが、**スクリプトごと死んだときはそこも
+# 動かない**。fixture の TTL は 2h なので、それを過ぎて残っているものは
+# 「片付けに失敗して誰も気づいていない環境」で、Fargate なら課金も続く。
+#
+# 自分のツールで自分の残骸を拾う形にしてある: まず reap に任せ、それでも
+# 残ったものだけを失敗として報告する。reap が消せない = DELETE_FAILED 等で
+# 人の手が要る状態、という切り分けになる。
+
+on:
+  schedule:
+    # 毎日 1 回。TTL 2h に対して十分細かく、通知が埋もれない程度に粗く
+    - cron: "17 21 * * *" # 06:17 JST
+  workflow_dispatch:
+
+# 手動実行が重なっても、消す対象は同じなので待たせる
+concurrency:
+  group: e2e-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - run: go build -o bin/kagerou ./cmd/kagerou
+
+      # project は kagerou.yaml から取る(= kagerou-e2e)。--all-projects は
+      # 使わない。同じアカウントにデモ環境が同居していて、そちらは別の寿命で
+      # 動いている
+      - name: Reap expired E2E environments
+        run: ./bin/kagerou reap --config e2e/aws/apigw/kagerou.yaml
+
+      # reap が消せなかったものを出す。ここが鳴るのは
+      # 「TTL を過ぎても消えない」= 人が見る必要がある状態のときだけ
+      - name: Report what is still there
+        run: |
+          set -euo pipefail
+          ./bin/kagerou list --config e2e/aws/apigw/kagerou.yaml --output json > /tmp/envs.json
+          python3 - <<'PY'
+          import json, sys, datetime
+          envs = json.load(open("/tmp/envs.json"))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          stuck = []
+          for e in envs:
+              exp = e.get("expires_at")
+              if not exp:
+                  # TTL なしは fixture には無い。あれば設定ミスなので拾う
+                  stuck.append((e, "no TTL"))
+                  continue
+              if datetime.datetime.fromisoformat(exp.replace("Z", "+00:00")) < now:
+                  stuck.append((e, "past its TTL and still here"))
+          if not stuck:
+              print(f"clean: {len(envs)} live environment(s), none past TTL")
+              sys.exit(0)
+          print("::error::reap で消えない E2E 環境が残っています")
+          for e, why in stuck:
+              st = (e.get("stack") or {}).get("status", "?")
+              print(f"  {e['name']}  state={e['state']}  stack={st}  ({why})")
+          print()
+          print("DELETE_FAILED なら手で消す必要があります:")
+          print("  aws cloudformation describe-stack-events --stack-name <name> \\")
+          print("    --query \"StackEvents[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceStatusReason]\"")
+          sys.exit(1)
+          PY
