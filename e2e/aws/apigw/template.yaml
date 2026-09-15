@@ -39,7 +39,9 @@ Resources:
   DiscoveryService:
     Type: AWS::ServiceDiscovery::Service
     Properties:
-      Name: app
+      # 名前空間はベースの持ち物で **全環境で共有** される。ここを固定名にすると
+      # 2 本目の環境が AlreadyExists で作れない(製品の雛形も環境名を使っている)
+      Name: !Ref EnvKagerouEnv
       NamespaceId: "{{resolve:ssm:/kagerou/base/kagerou-e2e/apigw_namespace_id}}"
       DnsConfig:
         DnsRecords:
