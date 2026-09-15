@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.0](https://github.com/rikukadev/kagerou/compare/v0.12.0...v0.13.0) (2026-09-15)
+
+
+### Features
+
+* **init:** auth: 宣言と ALB の authenticate-oidc を生成する ([#112](https://github.com/rikukadev/kagerou/issues/112)) ([#180](https://github.com/rikukadev/kagerou/issues/180)) ([b0ae3d4](https://github.com/rikukadev/kagerou/commit/b0ae3d4aa2a7ceb1aaaff29ae3d6936d4d8f025e))
+* **init:** Lambda の MemorySize / Timeout を指定できるようにする ([#185](https://github.com/rikukadev/kagerou/issues/185)) ([#202](https://github.com/rikukadev/kagerou/issues/202)) ([471fb0c](https://github.com/rikukadev/kagerou/commit/471fb0c11bcd07a2358dcf6e5f244ac1ae7bbd03))
+
+
+### Bug Fixes
+
+* **init:** Dockerfile.lambda だけのリポジトリに雛形を生やさない ([#192](https://github.com/rikukadev/kagerou/issues/192)) ([#199](https://github.com/rikukadev/kagerou/issues/199)) ([83aee2a](https://github.com/rikukadev/kagerou/commit/83aee2a2553915999a149ee1656e337c7f0b1db7))
+* **init:** pass the detected health path through to what init generates ([#190](https://github.com/rikukadev/kagerou/issues/190)) ([c90bc9e](https://github.com/rikukadev/kagerou/commit/c90bc9ecc9729fdf0217fdabbb58eda68a5a8c1b))
+* **init:** セットアップが、生成していないベースを deploy しようとするのをやめる ([#198](https://github.com/rikukadev/kagerou/issues/198)) ([d33d312](https://github.com/rikukadev/kagerou/commit/d33d3128f246dc20a41e118cc0818d31520ea72f)), closes [#194](https://github.com/rikukadev/kagerou/issues/194)
+* **init:** リスナールール優先度の衝突と上限超過を直す ([#187](https://github.com/rikukadev/kagerou/issues/187)) ([#191](https://github.com/rikukadev/kagerou/issues/191)) ([6c7bae2](https://github.com/rikukadev/kagerou/commit/6c7bae28ab0ef410ae7dfa9f9dacbe868ed4f67e))
+
+
+### Documentation
+
+* **contract:** Stable と Reference を分け、約束の範囲を絞る ([7765183](https://github.com/rikukadev/kagerou/commit/7765183f261f7315f31aada4898980fea39c9c17))
+* pick the commit type by user impact, not by kind of work ([#176](https://github.com/rikukadev/kagerou/issues/176)) ([4568217](https://github.com/rikukadev/kagerou/commit/4568217db43b976bf8c86422552b85cf079abfa9))
+* 入口の表を compute × entrypoint の 2 軸に直す ([#105](https://github.com/rikukadev/kagerou/issues/105)) ([#181](https://github.com/rikukadev/kagerou/issues/181)) ([87c22dd](https://github.com/rikukadev/kagerou/commit/87c22ddd64c590e675669bef44c78b886076820e))
+
 ## [0.12.0](https://github.com/rikukadev/kagerou/compare/v0.11.0...v0.12.0) (2026-09-14)
 
 
