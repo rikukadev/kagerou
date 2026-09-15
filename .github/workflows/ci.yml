@@ -240,6 +240,103 @@ jobs:
           NAME: e2e-apigw-${{ github.run_id }}
         run: ./bin/kagerou down --name "$NAME" --config e2e/aws/apigw/kagerou.yaml || true
 
+  # 共有 ALB 入口(#131 以降 compute: lambda の既定)。ELBv2 のリソース作成と
+  # {{resolve:ssm}} の解決を、実 AWS で通るところまで見る(#175)。
+  #
+  # ベースは **この job が作って壊す**。常設すると月 $18 前後の固定費になるが、
+  # run ごとなら数分ぶんで済む。残った状態のおかげで通ることも無くなる。
+  e2e-aws-alb:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # SSM の契約パスは固定なので、同時に走ると互いのベースを上書きする。
+    # 環境名で分けられない唯一の job なので、ここだけ直列化する
+    concurrency:
+      group: e2e-aws-alb
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build -o bin/kagerou ./cmd/kagerou
+
+      # ベース作成は **デプロイロールの仕事ではない**。ALB / SG / SSM を作る権限は
+      # 生成器が出さないので、デプロイロールに足すと drift 番人が extra で落ちる
+      # (missing だけでなく extra でも失敗する)。本番でもベースは特権的な一度きりの
+      # 作業なので、権限の境界をそのまま fixture に写す
+      - name: Assume the base-setup role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_E2E_BASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve the VPC for the ALB
+        id: vpc
+        run: |
+          set -euo pipefail
+          VPC="${{ vars.E2E_VPC_ID }}"
+          SUBNETS="${{ vars.E2E_SUBNET_IDS }}"
+          if [ -z "$VPC" ]; then
+            VPC=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
+              --query 'Vpcs[0].VpcId' --output text)
+          fi
+          if [ -z "$SUBNETS" ]; then
+            # internet-facing ALB は 2 AZ 以上を要求する
+            SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC" \
+              --query 'Subnets[:2].SubnetId' --output text | tr '\t' ',')
+          fi
+          [ -n "$VPC" ] && [ "$VPC" != "None" ] || { echo "::error::no VPC"; exit 1; }
+          echo "vpc=$VPC" >> "$GITHUB_OUTPUT"
+          echo "subnets=$SUBNETS" >> "$GITHUB_OUTPUT"
+
+      # 環境スタックが {{resolve:ssm}} で読む先。これが無いと up は解決に失敗する
+      - name: Deploy the shared ALB base
+        run: |
+          aws cloudformation deploy \
+            --template-file e2e/aws/alb/base.yaml \
+            --stack-name kagerou-e2e-alb-base \
+            --parameter-overrides \
+              VpcId=${{ steps.vpc.outputs.vpc }} \
+              SubnetIds=${{ steps.vpc.outputs.subnets }} \
+            --no-fail-on-empty-changeset
+
+      # 環境の作成からは通常のデプロイロール。**生成器が出す最小権限のまま**で
+      # 通ることが、この fixture の検証項目そのもの
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run E2E
+        env:
+          NAME: e2e-alb-${{ github.run_id }}
+        run: ./e2e/aws/run.sh bin/kagerou e2e/aws/alb/kagerou.yaml "$NAME"
+
+      - name: Clean up the environment
+        if: always()
+        env:
+          NAME: e2e-alb-${{ github.run_id }}
+        run: ./bin/kagerou down --name "$NAME" --config e2e/aws/alb/kagerou.yaml || true
+
+      # ALB は動いている間ずっと課金される。環境を消した後に、ベース作成の
+      # ロールに戻して確実に壊す
+      - name: Assume the base-setup role to tear the base down
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_E2E_BASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Clean up the base
+        if: always()
+        run: |
+          aws cloudformation delete-stack --stack-name kagerou-e2e-alb-base || true
+          aws cloudformation wait stack-delete-complete --stack-name kagerou-e2e-alb-base || true
+
   e2e-aws-ssr:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     # arm64 イメージ(template の Architectures)をネイティブでビルドする
@@ -334,6 +431,7 @@ jobs:
             --config e2e/aws/multi/kagerou.yaml \
             --config e2e/aws/worker/kagerou.yaml \
             --config e2e/aws/apigw/kagerou.yaml \
+            --config e2e/aws/alb/kagerou.yaml \
             --check e2e/aws/ci-policy.json
 
   vuln:

@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  E2E only — one environment on the shared ALB entrypoint. Mirrors what
+  `kagerou init` generates for compute: lambda x entrypoint: alb (#131):
+  the base owns the ALB, the environment adds only a rule and a target group.
+
+# この fixture が確かめるのは、Lambda 単体の E2E では出ないもの:
+#   - デプロイロールが ELBv2 のリソースを作れるか(#170 で落ちていた)
+#   - CloudFormation が {{resolve:ssm}} を **デプロイロールの資格情報で**
+#     解決できるか。ssm:GetParameters が無いと、ここで止まる
+#
+# 動的参照はプロパティの値なのでリソース型の数え上げに現れず、iam-policy の
+# Unknown にも入らない。つまり静的検査では永久に見つからない(#170)。
+#
+# 本番との違いはコンテナを使わないことだけ。ELBv2 と SSM の権限は同じで、
+# 入口の形もリスナールール + Lambda ターゲットで一致している。
+
+Parameters:
+  EnvKagerouEnv:
+    Type: String
+    Description: 'Environment name. Injected via `KAGEROU_ENV: "{name}"` in kagerou.yaml'
+  EnvGreeting:
+    Type: String
+    Default: ""
+    Description: env GREETING。中まで値が届いたかを応答本文で見る
+  EnvRulePriority:
+    Type: Number
+    Default: 10
+    Description: >
+      Listener-rule priority; must be unique on the shared listener.
+      本番は PR 番号を渡す。E2E はベースごと作り直すので既定で足りる
+
+Resources:
+  AppFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          KAGEROU_ENV: !Ref EnvKagerouEnv
+          GREETING: !Ref EnvGreeting
+      # ALB ターゲットの Lambda は statusCode/headers/body の形で返す
+      # (API Gateway のペイロードとは別物)。イメージを使わないのは、
+      # ここで確かめたいのが ELBv2 と SSM の権限だからで、ECR を挟むと
+      # 落ちたときの切り分けが増える
+      # 応答は {"env": …, "greeting": …} の JSON。run.sh の共通検証が
+      # この 2 つで「--env がアプリの中まで届いたか」を見る(他の fixture と同じ契約)。
+      #
+      # InlineCode は index.js に落ちる。.js は package.json が無ければ
+      # CommonJS として読まれるので、ESM(export const)で書くと起動時に
+      # SyntaxError になり、ALB からは 502 にしか見えない
+      InlineCode: |
+        exports.handler = async () => ({
+          statusCode: 200,
+          statusDescription: "200 OK",
+          isBase64Encoded: false,
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            env: process.env.KAGEROU_ENV,
+            greeting: process.env.GREETING,
+          }),
+        })
+
+  # ターゲットグループより先に権限が要る。順序を逆にすると ALB が invoke できず
+  # 登録に失敗する(本番テンプレートと同じ DependsOn)
+  AlbInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AppFunction
+      Action: lambda:InvokeFunction
+      Principal: elasticloadbalancing.amazonaws.com
+
+  AlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: AlbInvokePermission
+    Properties:
+      TargetType: lambda
+      Targets:
+        - Id: !GetAtt AppFunction.Arn
+      HealthCheckEnabled: false
+
+  # ここが本題。ListenerArn は共有ベースが SSM に書いた値を動的参照で読む
+  AlbListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: "{{resolve:ssm:/kagerou/base/kagerou-e2e-alb/alb_listener_arn}}"
+      Priority: !Ref EnvRulePriority
+      Conditions:
+        # 本番はホスト名で分ける(独自ドメイン)。E2E はドメインを持てないので
+        # パスで分ける。確かめたいのはルールを足せることなので、条件の種類は問わない
+        - Field: path-pattern
+          Values: [!Sub "/${EnvKagerouEnv}/*", !Sub "/${EnvKagerouEnv}"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref AlbTargetGroup
+
+Outputs:
+  # url_template を持てないので Output で返す(CONTRACT §5)。
+  # DNS 名も SSM 契約から引くので、ここも動的参照の経路になる
+  KagerouUrl:
+    Value: !Sub
+      - "http://${Dns}/${EnvKagerouEnv}"
+      - Dns: "{{resolve:ssm:/kagerou/base/kagerou-e2e-alb/alb_dns_name}}"
+  TargetGroupArn:
+    Value: !Ref AlbTargetGroup
+  ListenerRuleArn:
+    Value: !Ref AlbListenerRule

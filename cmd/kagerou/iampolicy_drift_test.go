@@ -37,6 +37,7 @@ func TestE2EPolicyMatchesGenerated(t *testing.T) {
 		"--config", "e2e/aws/multi/kagerou.yaml",
 		"--config", "e2e/aws/worker/kagerou.yaml",
 		"--config", "e2e/aws/apigw/kagerou.yaml",
+		"--config", "e2e/aws/alb/kagerou.yaml",
 		"--check", "e2e/aws/ci-policy.json",
 	}, out)
 	if err != nil {
@@ -68,6 +69,7 @@ func TestRepeatedConfigUnionsForOutput(t *testing.T) {
 	if err := cmdIamPolicy([]string{
 		"--config", "e2e/aws/worker/kagerou.yaml",
 		"--config", "e2e/aws/apigw/kagerou.yaml",
+		"--config", "e2e/aws/alb/kagerou.yaml",
 	}, out); err != nil {
 		t.Fatal(err)
 	}
