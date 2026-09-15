@@ -37,8 +37,8 @@ Parameters:
 
 Globals:
   Function:
-    Timeout: 30
-    MemorySize: 512
+    Timeout: {{.TimeoutOrDefault}}
+    MemorySize: {{.MemoryOrDefault}}
 
 Resources:
   AppFunction:

@@ -863,3 +863,67 @@ func TestScaffoldsDockerfileWhenNoneExists(t *testing.T) {
 		t.Fatalf("雛形が出ていない: %v", res.Created)
 	}
 }
+
+// MemorySize / Timeout は固定だったので、生成後に手で直す前提になっていた(#185)。
+func TestMemoryAndTimeoutAreConfigurable(t *testing.T) {
+	cases := []struct {
+		name            string
+		p               Params
+		wantMem, wantTo string
+	}{
+		{
+			// 既定。ALB 入口は応答時間に上限が無いので少し長めに取れる
+			name:    "既定(ALB 入口)",
+			p:       Params{Entrypoint: "alb", Domain: "web.example.com"},
+			wantMem: "MemorySize: 512", wantTo: "Timeout: 60",
+		},
+		{
+			// HTTP API は応答 30 秒で切れる。それを超える既定を置くと
+			// 「Lambda は動いているのに 504」を標準にしてしまう
+			name:    "既定(HTTP API 入口)",
+			p:       Params{Entrypoint: "apigateway"},
+			wantMem: "MemorySize: 512", wantTo: "Timeout: 30",
+		},
+		{
+			name:    "指定あり",
+			p:       Params{Entrypoint: "alb", Domain: "web.example.com", Memory: 1024, Timeout: 120},
+			wantMem: "MemorySize: 1024", wantTo: "Timeout: 120",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.p
+			p.Project, p.Region, p.Framework = "web", "r", "next"
+			dir := t.TempDir()
+			if _, err := Run(dir, p, AllTargets(), false); err != nil {
+				t.Fatal(err)
+			}
+			tp := read(t, dir, "template.yaml")
+			for _, want := range []string{tc.wantMem, tc.wantTo} {
+				if !strings.Contains(tp, want) {
+					t.Errorf("template missing %q", want)
+				}
+			}
+		})
+	}
+}
+
+// 入口の上限を超えた指定は「効かない設定」なので、呼び出し側が警告できるようにする。
+func TestTimeoutExceedsEntrypoint(t *testing.T) {
+	cases := []struct {
+		name string
+		p    Params
+		want bool
+	}{
+		{"HTTP API で 120 秒", Params{Entrypoint: "apigateway", Timeout: 120}, true},
+		{"HTTP API で 30 秒", Params{Entrypoint: "apigateway", Timeout: 30}, false},
+		{"ALB で 120 秒", Params{Entrypoint: "alb", Domain: "x.example.com", Timeout: 120}, false},
+		{"未指定", Params{Entrypoint: "apigateway"}, false},
+		{"static は compute が無い", Params{Driver: "static", Timeout: 120}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.p.TimeoutExceedsEntrypoint(); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

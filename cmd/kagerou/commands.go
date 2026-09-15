@@ -410,6 +410,8 @@ func cmdInit(args []string, out *os.File) error {
 	auth := fs.Bool("auth", false, "put previews behind an OIDC login "+
 		"(ALB: authenticate-oidc / static: CloudFront + Lambda@Edge)")
 	authDomain := fs.String("auth-domain", "", "organisation domain allowed to sign in (e.g. example.com)")
+	memory := fs.Int("memory", 0, "Lambda MemorySize in MB (default 512)")
+	timeout := fs.Int("timeout", 0, "Lambda timeout in seconds (default: 60 on the shared ALB, 30 behind HTTP API)")
 	authSecret := fs.String("auth-secret-arn", "", "Secrets Manager ARN holding client_id / client_secret")
 	domain := fs.String("domain", "", "preview domain (e.g. myapp.example.com). Default: detected from your Route53 zone")
 	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
@@ -451,7 +453,8 @@ func cmdInit(args []string, out *os.File) error {
 		DockerfileName: det.DockerfileName, DockerfileDir: det.DockerfileDir,
 		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
 		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames, Auth: *auth,
-		AuthDomain: *authDomain, AuthSecretArn: *authSecret}
+		AuthDomain: *authDomain, AuthSecretArn: *authSecret,
+		Memory: *memory, Timeout: *timeout}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {
@@ -495,6 +498,12 @@ func cmdInit(args []string, out *os.File) error {
 	// ここで勧めると「要らないものを足せ」と言うことになる
 	if det.HasDockerfile && !det.HasLWA && !p.ECS() && !p.Static() {
 		fmt.Fprintln(os.Stderr, "kagerou: hint: your Dockerfile lacks Lambda Web Adapter — add this line to the final stage:\n  "+scaffold.LWALine)
+	}
+	// 入口の上限を超えた timeout は「効かない設定」になる。Lambda は動き続けるが
+	// 応答は入口で切れるので、黙って書き出すと原因の分からない 504 になる
+	if p.TimeoutExceedsEntrypoint() {
+		fmt.Fprintf(os.Stderr, "kagerou: warning: --timeout %d exceeds the 30s response limit of the HTTP API entrypoint; "+
+			"the function keeps running but the caller gets a 504. Use --entrypoint alb (custom domain) for longer responses\n", p.Timeout)
 	}
 	if det.SuggestSashiki() && !p.Sashiki {
 		fmt.Fprintf(os.Stderr, "kagerou: hint: detected %s — add --sashiki to include DB branch integration\n", det.DBDriver)
