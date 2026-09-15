@@ -115,7 +115,7 @@ CloudFront の手前(Lambda@Edge)だけです。Lambda@Edge は環境変数を�
 IdP に登録する redirect_uri は `https://auth.<domain>/_kagerou/auth/callback` の 1 本だけです。
 
 ```bash
-kagerou validate          # 契約(CONTRACT)をデプロイ前に検査
+kagerou validate          # 契約(CONTRACT)の検査 + 生成物が古くないかの確認
 kagerou iam-policy > ci-policy.json   # CI ロールの最小権限をテンプレートから生成
 kagerou capacity                      # 共有 ALB にあと何面置けるか(読み取りのみ)
 ```
