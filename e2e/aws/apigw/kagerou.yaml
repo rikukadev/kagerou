@@ -12,21 +12,31 @@ env:
   GREETING: "hello from {name}"
 
 hooks:
-  # Cloud Map の名前空間は、登録インスタンスが残っていると削除できない。
-  # ECS のサービスを消しても **登録解除は非同期で遅れる** ので、CFN が
-  # Namespace の DELETE_FAILED を踏む。1 回目の down が落ちて 2 回目は通る
-  # = required check が flaky になる(実際に踏んだ)。
+  # Cloud Map のサービスは、登録インスタンスが残っていると削除できない。
+  # ECS サービスを消しても **登録解除は非同期で遅れる**ので、先にタスクを
+  # 落として止まりきるまで待つ(CONTRACT §7 の「やらないと削除が失敗する前処理」)。
   #
-  # タスクを先に落として止まりきるまで待つ。「やらないと削除が失敗する
-  # 前処理」そのもので、pre_down の用途(CONTRACT §7)。
+  # **冪等にすること。** pre_down が失敗すると down ごと中止されるので、
+  # 部分削除された状態(クラスタやサービスが既に無い)で落ちると、
+  # kagerou から回復できなくなる — 実際にそれで詰まらせた。
   pre_down: |
     set -eu
-    : "${KAGEROU_OUTPUT_CLUSTERNAME:?pre_down に ClusterName が届いていない}"
-    : "${KAGEROU_OUTPUT_SERVICENAME:?pre_down に ServiceName が届いていない}"
-    aws ecs update-service --cluster "$KAGEROU_OUTPUT_CLUSTERNAME" \
-      --service "$KAGEROU_OUTPUT_SERVICENAME" --desired-count 0 >/dev/null
-    aws ecs wait services-stable --cluster "$KAGEROU_OUTPUT_CLUSTERNAME" \
-      --services "$KAGEROU_OUTPUT_SERVICENAME"
+    cluster="${KAGEROU_OUTPUT_CLUSTERNAME:-}"
+    service="${KAGEROU_OUTPUT_SERVICENAME:-}"
+    if [ -z "$cluster" ] || [ -z "$service" ]; then
+      echo "pre_down: cluster/service の Output が無い。何もしない"
+      exit 0
+    fi
+    # 既に消えている / クラスタが inactive なら、drain するものが無い
+    active=$(aws ecs describe-services --cluster "$cluster" --services "$service" \
+      --query 'services[0].status' --output text 2>/dev/null || echo NONE)
+    if [ "$active" != "ACTIVE" ]; then
+      echo "pre_down: service は $active。drain 不要"
+      exit 0
+    fi
+    aws ecs update-service --cluster "$cluster" --service "$service" \
+      --desired-count 0 >/dev/null
+    aws ecs wait services-stable --cluster "$cluster" --services "$service"
 
 # タスクの起動 + Cloud Map への登録 + VPC Link の反映で、200 が返るまで
 # Lambda より明確に遅い。ここを待たずに down すると「作れたが通らない」構成を
