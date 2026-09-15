@@ -36,6 +36,13 @@ type TemplateFacts struct {
 	SSMParams []string
 	// HasSecureSSM は {{resolve:ssm-secure:…}} を使っているか(kms:Decrypt が要る)。
 	HasSecureSSM bool
+	// Secrets は {{resolve:secretsmanager:<id>…}} で読まれるシークレット
+	// (ソート済み・重複なし)。SSM と同じく **デプロイロールの資格情報で**
+	// 解決されるので secretsmanager:GetSecretValue が要る。
+	//
+	// ALB の authenticate-oidc(#112)がここを通る。ssm-secure が使えない
+	// リソースで秘密を渡す唯一の道なので、これから増える。
+	Secrets []string
 }
 
 // knownTypes は Build が権限を導出できる(または既存 statement でカバー済みの)型。
@@ -103,6 +110,40 @@ func scanDynamicRefs(body []byte, f *TemplateFacts) {
 		}
 	}
 	sort.Strings(f.SSMParams)
+
+	seenSecret := map[string]bool{}
+	for _, m := range secretRefRe.FindAllStringSubmatch(string(body), -1) {
+		if id := secretID(m[1]); id != "" && !seenSecret[id] {
+			seenSecret[id] = true
+			f.Secrets = append(f.Secrets, id)
+		}
+	}
+	sort.Strings(f.Secrets)
+}
+
+// secretRefRe は {{resolve:secretsmanager:<secret-id>[:...]}}。
+// secret-id が ARN だとコロンを含むので、まるごと取ってから分解する。
+var secretRefRe = regexp.MustCompile(`\{\{resolve:secretsmanager:([^}]+)\}\}`)
+
+// secretID は動的参照の中身から **シークレットの識別子だけ** を取り出す。
+//
+//	arn:aws:secretsmanager:ap-northeast-1:1234:secret:foo-AbCdEf:SecretString:client_id
+//	→ arn:…:secret:foo-AbCdEf
+//
+// ARN は 7 フィールド固定(シークレット名にコロンは使えない)なので、そこで切る。
+// ARN でなければ先頭フィールドがシークレット名。
+func secretID(ref string) string {
+	parts := strings.Split(strings.TrimSpace(ref), ":")
+	if len(parts) == 0 {
+		return ""
+	}
+	if parts[0] == "arn" {
+		if len(parts) < 7 {
+			return "" // ARN として壊れている。権限を推測で広げない
+		}
+		return strings.Join(parts[:7], ":")
+	}
+	return parts[0]
 }
 
 // tmplResource は検査に必要な部分だけ読む。CFN の独自タグ(!Ref / !Sub 等)を

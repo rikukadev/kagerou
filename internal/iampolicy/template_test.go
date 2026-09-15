@@ -216,3 +216,48 @@ func TestScanTemplateNoDynamicRefs(t *testing.T) {
 		t.Fatalf("動的参照なしで拾っている: %+v", f.SSMParams)
 	}
 }
+
+func TestScanTemplateSecretsManagerRefs(t *testing.T) {
+	// ALB の authenticate-oidc(#112)。ARN はコロンを含むので、
+	// SecretString / json-key まで飲み込まないことを固定する
+	f, err := ScanTemplate([]byte(`
+Resources:
+  Rule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Id: "{{resolve:secretsmanager:arn:aws:secretsmanager:ap-northeast-1:1234:secret:shop-AbCdEf:SecretString:client_id}}"
+      Sec: "{{resolve:secretsmanager:arn:aws:secretsmanager:ap-northeast-1:1234:secret:shop-AbCdEf:SecretString:client_secret}}"
+      ByName: "{{resolve:secretsmanager:plain-name:SecretString:key}}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"arn:aws:secretsmanager:ap-northeast-1:1234:secret:shop-AbCdEf",
+		"plain-name",
+	}
+	if strings.Join(f.Secrets, ",") != strings.Join(want, ",") {
+		t.Fatalf("Secrets = %v, want %v", f.Secrets, want)
+	}
+}
+
+func TestSecretARNsAddsSuffixForNames(t *testing.T) {
+	// 名前指定は ARN に直すとき "-*" が要る。Secrets Manager の ARN は
+	// 名前 + 6 文字のランダム接尾辞になるので、付けないと必ず AccessDenied
+	got := secretARNs([]string{"plain-name"})
+	if got != "arn:aws:secretsmanager:*:*:secret:plain-name-*" {
+		t.Fatalf("name → %v", got)
+	}
+	// ARN はそのまま(勝手に広げない)
+	arn := "arn:aws:secretsmanager:ap-northeast-1:1234:secret:shop-AbCdEf"
+	if got := secretARNs([]string{arn}); got != arn {
+		t.Fatalf("arn → %v", got)
+	}
+}
+
+func TestSecretIDRejectsBrokenARN(t *testing.T) {
+	// 壊れた ARN で権限を推測して広げない
+	if id := secretID("arn:aws:secretsmanager:region"); id != "" {
+		t.Fatalf("壊れた ARN から %q を導いている", id)
+	}
+}

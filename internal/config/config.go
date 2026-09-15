@@ -46,7 +46,38 @@ type Config struct {
 	// up 時に相手の同名 env を探し、居なければ fallback の env に繋ぐ。
 	// 解決結果はテンプレートの EnvPeerEnv / EnvPeerUrl に宣言時のみ届く。
 	Peer Peer `yaml:"peer"`
+	// Auth はプレビューにログインを必須にする宣言(#112)。
+	Auth Auth `yaml:"auth"`
 }
+
+// Auth は「このプレビューは誰が開けるか」の宣言。
+//
+// **client_secret はここに書けない。** 書けてしまうと必ずリポジトリに入るので、
+// 置き場は Secrets Manager 固定にしてある(SecretArn で指す)。validate が
+// それらしいキーを弾く。
+type Auth struct {
+	// Provider は OIDC プロバイダ。今は "google-oidc" のみ。
+	// 値を取るのは、Issuer/Endpoint を毎回書かせないため。
+	Provider string `yaml:"provider"`
+	// Domain は通す組織のドメイン(例 example.com)。空なら IdP で
+	// 認証できる全員が入れる。
+	//
+	// ALB には `hd` を認可リクエストの追加パラメータとして渡すが、**hd は
+	// ヒントであって強制ではない**。最終的な関門はアプリ側で
+	// x-amzn-oidc-data の hd / email クレームを検証すること(生成される
+	// テンプレートにその手順を書く)。
+	Domain string `yaml:"domain"`
+	// SecretArn は client_id / client_secret を収めた Secrets Manager の
+	// シークレット。JSON で {"client_id": …, "client_secret": …} を入れる。
+	//
+	// ssm-secure ではなく Secrets Manager なのは、ssm-secure の動的参照が
+	// 11 のリソース型にしか対応しておらず ELBv2 が含まれないため。
+	// secretsmanager は「すべてのリソースプロパティで使える」と明記がある。
+	SecretArn string `yaml:"secret_arn"`
+}
+
+// Enabled は認証が宣言されているか。
+func (a Auth) Enabled() bool { return a.Provider != "" }
 
 // Static は driver: static の設定。bucket は preview base スタックの
 // Output(kagerou-preview-base:…:bucket)を写す。
@@ -130,6 +161,11 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// KnownFields でも弾けるが、出るのは「未知のフィールド」という一般論。
+	// 秘密の直書きは理由まで伝えないと、別のキー名で書き直されて終わる
+	if err := RejectInlineSecrets(b); err != nil {
+		return Config{}, fmt.Errorf("%s: %w", path, err)
+	}
 	cfg := Default()
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
@@ -199,6 +235,65 @@ func (c Config) validate() error {
 		}
 	} else if c.Peer.Fallback != "" {
 		return fmt.Errorf("peer.fallback is set but peer.project is empty")
+	}
+	if err := c.Auth.validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// authProviders は対応する OIDC プロバイダ。値で取るのは、issuer や各
+// エンドポイントを毎回書かせないため(増やすときはテンプレート側も足す)。
+var authProviders = map[string]bool{"google-oidc": true}
+
+// secretLikeKeys は kagerou.yaml に **絶対に書かせない** キー。
+// ここを緩めると、client_secret がリポジトリに入る事故が必ず起きる。
+var secretLikeKeys = []string{"client_secret", "clientsecret", "secret", "password"}
+
+func (a Auth) validate() error {
+	if !a.Enabled() {
+		// provider が空なら他も空であるべき。書いたのに効かない状態を残さない
+		if a.Domain != "" || a.SecretArn != "" {
+			return fmt.Errorf("auth.domain / auth.secret_arn is set but auth.provider is empty")
+		}
+		return nil
+	}
+	if !authProviders[a.Provider] {
+		return fmt.Errorf("unknown auth.provider %q (only \"google-oidc\" for now)", a.Provider)
+	}
+	if a.SecretArn == "" {
+		return fmt.Errorf("auth.provider is set but auth.secret_arn is empty — " +
+			"put client_id / client_secret in Secrets Manager and point at it " +
+			"(the secret itself must never live in kagerou.yaml)")
+	}
+	if !strings.HasPrefix(a.SecretArn, "arn:") {
+		return fmt.Errorf("auth.secret_arn %q: want a Secrets Manager ARN", a.SecretArn)
+	}
+	return nil
+}
+
+// RejectInlineSecrets は kagerou.yaml に秘密が直接書かれていないかを見る。
+// Auth の構造体に入らないキー(タイポや独自拡張)も拾いたいので、
+// 生の YAML に対して当てる。
+func RejectInlineSecrets(raw []byte) error {
+	var probe struct {
+		Auth map[string]any `yaml:"auth"`
+	}
+	if err := yaml.Unmarshal(raw, &probe); err != nil {
+		return nil // 本体のパースで別途エラーになる
+	}
+	for k, v := range probe.Auth {
+		lk := strings.ToLower(strings.ReplaceAll(k, "_", ""))
+		for _, bad := range secretLikeKeys {
+			if lk != strings.ReplaceAll(bad, "_", "") {
+				continue
+			}
+			if s, ok := v.(string); ok && s == "" {
+				continue
+			}
+			return fmt.Errorf("auth.%s must not be written in kagerou.yaml — "+
+				"this file is committed. Put it in Secrets Manager and set auth.secret_arn", k)
+		}
 	}
 	return nil
 }

@@ -51,6 +51,14 @@ func TestGeneratedTemplatesHavePolicyCoverage(t *testing.T) {
 				Services: []string{"gateway", "api"}},
 		},
 		{
+			// ALB の authenticate-oidc。client_secret は Secrets Manager から
+			// 動的参照で読むので、その解決権限が要る(#112)
+			name: "auth あり(ALB の authenticate-oidc)",
+			p: scaffold.Params{Compute: "lambda", Entrypoint: "alb", Domain: "relay.example.com",
+				Auth: true, AuthDomain: "example.com",
+				AuthSecretArn: "arn:aws:secretsmanager:ap-northeast-1:111122223333:secret:kagerou/relay-AbCdEf"},
+		},
+		{
 			// 周辺リソースを同梱する形。型が増えるので別枠で見る
 			name: "wants 同梱",
 			p: scaffold.Params{Compute: "lambda", Entrypoint: "alb", Domain: "relay.example.com",
@@ -87,9 +95,16 @@ func TestGeneratedTemplatesHavePolicyCoverage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(body), "{{resolve:ssm") && !hasActionPrefix(pol, "ssm:") {
-				t.Error("テンプレートが {{resolve:ssm}} を使うのに ssm の権限が出ていない " +
-					"(CFN は動的参照をデプロイロールの資格情報で解決する)")
+			// 動的参照は種類ごとに別の権限が要る。片方だけ拾う実装だと、
+			// もう片方が「警告も出ないまま足りない」状態で通ってしまう
+			for _, ref := range []struct{ marker, prefix, why string }{
+				{"{{resolve:ssm", "ssm:", "ssm:GetParameters"},
+				{"{{resolve:secretsmanager", "secretsmanager:", "secretsmanager:GetSecretValue"},
+			} {
+				if strings.Contains(string(body), ref.marker) && !hasActionPrefix(pol, ref.prefix) {
+					t.Errorf("テンプレートが %s}} を使うのに %s が出ていない "+
+						"(CFN は動的参照をデプロイロールの資格情報で解決する)", ref.marker, ref.why)
+				}
 			}
 		})
 	}

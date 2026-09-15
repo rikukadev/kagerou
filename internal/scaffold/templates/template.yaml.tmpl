@@ -63,6 +63,18 @@ Resources:
           # Implement /healthz to avoid 502s before the server is ready
           AWS_LWA_READINESS_CHECK_PATH: /healthz
           KAGEROU_ENV: !Ref EnvKagerouEnv
+{{- if .AuthDomain}}
+          # TODO(必須): アプリで x-amzn-oidc-data を検証し、hd(または email の
+          # ドメイン)が KAGEROU_AUTH_DOMAIN と一致することを確かめること。
+          #
+          # 上のリスナールールが渡す hd は **ヒントであって強制ではない**。
+          # 認証そのものは他ドメインの Google アカウントでも通るので、これを
+          # 省くと「ログインは要るが誰でも入れる」状態になる。
+          #
+          # x-amzn-oidc-data は ALB が署名した JWT。公開鍵は
+          # https://public-keys.auth.elb.<region>.amazonaws.com/<kid> から引く。
+          KAGEROU_AUTH_DOMAIN: {{.AuthDomain}}
+{{- end}}
 {{- if .Wants.DynamoDB}}
           TABLE_NAME: !Ref AppTable
 {{- end}}
@@ -147,8 +159,40 @@ Resources:
           # https://pr-42.myapp.example.com → pr-42.myapp.example.com
           Values: [!Select [1, !Split ["//", !Ref EnvKagerouUrl]]]
       Actions:
+{{- if .Auth}}
+        # 認証は ALB が肩代わりする(アプリ側のコードは 0 行)。ここを通らない
+        # リクエストは IdP に飛ばされるので、環境が素通しになることが無い。
+        #
+        # client_secret は Secrets Manager から動的参照で読む。ssm-secure は
+        # 対応リソースが 11 種類だけで ELBv2 を含まないが、secretsmanager は
+        # すべてのリソースプロパティで使える。**テンプレートにも
+        # kagerou.yaml にも秘密は載らない**。
+        - Type: authenticate-oidc
+          Order: 1
+          AuthenticateOidcConfig:
+            Issuer: https://accounts.google.com
+            AuthorizationEndpoint: https://accounts.google.com/o/oauth2/v2/auth
+            TokenEndpoint: https://oauth2.googleapis.com/token
+            UserInfoEndpoint: https://openidconnect.googleapis.com/v1/userinfo
+            ClientId: "{{"{{"}}resolve:secretsmanager:{{.AuthSecretArn}}:SecretString:client_id{{"}}"}}"
+            ClientSecret: "{{"{{"}}resolve:secretsmanager:{{.AuthSecretArn}}:SecretString:client_secret{{"}}"}}"
+            SessionTimeout: 43200
+            Scope: openid email
+            OnUnauthenticatedRequest: authenticate
+{{- if .AuthDomain}}
+            # hd は **ヒントであって強制ではない**。ログイン画面が会社アカウントを
+            # 既定にするだけで、他ドメインのアカウントでも認証は通る。
+            # 最後の関門はアプリ側(下の TODO)。
+            AuthenticationRequestExtraParams:
+              hd: {{.AuthDomain}}
+{{- end}}
+        - Type: forward
+          Order: 2
+          TargetGroupArn: !Ref AlbTargetGroup
+{{- else}}
         - Type: forward
           TargetGroupArn: !Ref AlbTargetGroup
+{{- end}}
 {{- end}}
 {{- if .Wants.DynamoDB}}
 

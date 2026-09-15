@@ -86,6 +86,23 @@ static:
 #  project: <相手の project 名>
 #  fallback: main
 {{- end}}
+{{- if .Auth}}
+
+# プレビューを開けるのはログイン済みの人だけ(#112)。
+# **client_secret はここに書けない**(このファイルはコミットされる)。
+# Secrets Manager に {"client_id": …, "client_secret": …} を入れて、
+# その ARN を指す。validate が直書きを弾く。
+auth:
+  provider: google-oidc
+{{- if .AuthDomain}}
+  domain: {{.AuthDomain}}
+{{- end}}
+{{- if .AuthSecretArn}}
+  secret_arn: {{.AuthSecretArn}}
+{{- else}}
+  secret_arn: "" # TODO: arn:aws:secretsmanager:<region>:<account>:secret:<name>
+{{- end}}
+{{- end}}
 {{- if not .Static}}
 env:
   # {name} expands to the environment name. Values are delivered to the
