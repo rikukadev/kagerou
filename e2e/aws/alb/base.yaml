@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  E2E only — the shared ALB base for the alb-entrypoint fixture. The CI job
+  creates this before the environment and deletes it after, so a run never
+  passes because of state left behind by an earlier one.
+
+# なぜ E2E のためだけにベースを作るのか:
+#   ALB 入口の環境スタックが確かめたいのは「共有ベースの値を {{resolve:ssm}} で
+#   読んで、リスナールールとターゲットグループを足せるか」。ベースが無いと
+#   その経路自体が存在しないので、self-contained な 1 スタックにはできない。
+#
+#   常設しない理由は #175 のとおり: 置きっぱなしの ALB は月 $18 前後の固定費に
+#   なるが、run ごとに作って壊すなら 1 回あたり数分ぶん(1 円未満)で済む。
+#
+# 本番の alb-base との違いは入口の保護だけ(証明書とドメインを持たないので
+# HTTP:80 で受ける)。**環境側が読む SSM のキーは CONTRACT §9 と同じ**で、
+# そこがずれると fixture の意味が無くなる。
+
+Parameters:
+  Project:
+    Type: String
+    Default: kagerou-e2e-alb
+    Description: SSM 契約の名前空間。環境テンプレート側の {{resolve:ssm}} と一致させること
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for the ALB (at least two AZs)
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou e2e ALB (HTTP only; no certificate in E2E)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      LoadBalancerAttributes:
+        # 消すのを待たせない。E2E は作って壊すのが本体
+        - Key: deletion_protection.enabled
+          Value: "false"
+
+  # 既定は 404。環境ごとのリスナールールが自分のぶんを横取りする(本番と同じ形)
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "404"
+            ContentType: text/plain
+            MessageBody: no kagerou environment for this path
+
+  # ベース↔環境のデータ契約(CONTRACT §9)。キー名は本番の alb-base と同じ
+  SsmListener:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/alb_listener_arn"
+      Type: String
+      Value: !Ref Listener
+  SsmVpc:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/alb_vpc_id"
+      Type: String
+      Value: !Ref VpcId
+  # 環境の URL は本番なら url_template(独自ドメイン)で先に決まる。E2E は
+  # ドメインを持てないので、ALB の DNS 名を契約に載せて環境の Output に使う
+  SsmDnsName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/alb_dns_name"
+      Type: String
+      Value: !GetAtt LoadBalancer.DNSName
+
+Outputs:
+  ListenerArn:
+    Value: !Ref Listener
+  DnsName:
+    Value: !GetAtt LoadBalancer.DNSName
