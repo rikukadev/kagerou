@@ -30,6 +30,37 @@ const (
 	limitTargetGroups       = "target-groups"
 )
 
+// PerEnv は環境 1 つが ALB から取る枠。
+//
+// 単一サービスの環境はルール 1 本 + ターゲットグループ 1 個だが、**複数サービスの
+// 環境はサービスの数だけ両方を作る**(template.multi.yaml.tmpl)。ここを固定値に
+// すると、5 サービスの構成で「あと 56 面」と出て実際は 11 面、という嘘になる(#188)。
+//
+// Source は数の出どころ。分からないときに黙って 1 と仮定すると、その仮定ごと
+// 信用されてしまうので、必ず出力に添える。
+type PerEnv struct {
+	Rules        int
+	TargetGroups int
+	Source       string
+}
+
+// Assumed は構成が読めないときの仮定(単一サービス)。
+func Assumed() PerEnv { return PerEnv{Rules: 1, TargetGroups: 1, Source: "assumed"} }
+
+// UsesALB は環境が共有 ALB の枠を取るか。static や HTTP API 入口は取らない。
+func (p PerEnv) UsesALB() bool { return p.Rules > 0 || p.TargetGroups > 0 }
+
+// forLimit はこの上限を環境 1 つがいくつ消費するか。
+func (p PerEnv) forLimit(name string) int {
+	switch name {
+	case limitRulesPerALB:
+		return p.Rules
+	case limitTargetGroupsPerALB, limitTargetGroups:
+		return p.TargetGroups
+	}
+	return 0
+}
+
 // Limit は 1 つの上限と、分かるなら現在の使用数。
 type Limit struct {
 	Name string
@@ -58,6 +89,7 @@ func (l Limit) Remaining() (int, bool) {
 type Report struct {
 	Region  string
 	Limits  []Limit
+	PerEnv  PerEnv // 「あと何面」の割り算に使った 1 環境あたりの消費量
 	Unknown bool
 	Note    string
 }
@@ -98,12 +130,13 @@ var newClient = func(ctx context.Context, region string) (client, error) {
 }
 
 // Lookup は ALB の上限を引く。listenerARN があれば使用中のルール数も数える。
+// perEnv は環境 1 つあたりの消費量(構成から出す。読めなければ Assumed())。
 // 届かなければ Unknown を立てて返す(エラーにはしない)。
-func Lookup(ctx context.Context, region, listenerARN string) Report {
+func Lookup(ctx context.Context, region, listenerARN string, perEnv PerEnv) Report {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	rep := Report{Region: region}
+	rep := Report{Region: region, PerEnv: perEnv}
 	c, err := newClient(ctx, region)
 	if err != nil {
 		rep.Unknown, rep.Note = true, err.Error()
@@ -115,9 +148,7 @@ func Lookup(ctx context.Context, region, listenerARN string) Report {
 		return rep
 	}
 
-	// 環境 1 つ = ルール 1 本 + ターゲットグループ 1 つ。証明書はワイルドカードを
-	// 共有するので環境ごとには増えない(上限だけ出す)
-	perEnv := map[string]int{limitRulesPerALB: 1, limitTargetGroupsPerALB: 1}
+	// 証明書はワイルドカードを共有するので環境ごとには増えない(上限だけ出す)
 	want := []string{limitRulesPerALB, limitTargetGroupsPerALB, limitCertsPerALB, limitTargetGroups}
 	max := map[string]int{}
 	for _, l := range out.Limits {
@@ -134,16 +165,20 @@ func Lookup(ctx context.Context, region, listenerARN string) Report {
 		if !ok {
 			continue
 		}
-		rep.Limits = append(rep.Limits, Limit{Name: name, Max: v, PerEnv: perEnv[name]})
+		rep.Limits = append(rep.Limits, Limit{Name: name, Max: v, PerEnv: perEnv.forLimit(name)})
 	}
 
 	if listenerARN != "" {
 		if used, ok := countRules(ctx, c, listenerARN); ok {
 			for i := range rep.Limits {
-				// ルールとターゲットグループは環境ごとに 1 対 1 で増えるので、
-				// ルール数を両方の使用数として使う。**推定であることは
-				// 名前を見れば分かる**(TG を直接数えるには LB ARN が要る)
-				if rep.Limits[i].PerEnv > 0 {
+				// ルールとターゲットグループはサービス 1 つにつき 1 対 1 で増える
+				// (環境あたり N 本 + N 個)。比が 1:1 なのは変わらないので、
+				// ルール数を両方の使用数として使う。**推定であることは名前を
+				// 見れば分かる**(TG を直接数えるには LB ARN が要る)。
+				//
+				// アカウント全体の target-groups だけは別で、この ALB の外にも
+				// 居るので listener から数えた値を当ててはいけない。
+				if rep.Limits[i].PerEnv > 0 && rep.Limits[i].Name != limitTargetGroups {
 					rep.Limits[i].Used, rep.Limits[i].HasUsed = used, true
 				}
 			}

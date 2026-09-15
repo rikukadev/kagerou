@@ -63,7 +63,7 @@ func TestHeadroomFromRuleCount(t *testing.T) {
 	}
 	stub(t, fakeClient{limits: defaultLimits(), rules: rules})
 
-	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener")
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener", Assumed())
 	n, by, ok := rep.Headroom()
 	if !ok {
 		t.Fatal("使用数が取れているのに残りが出ていない")
@@ -83,7 +83,7 @@ func TestHeadroomBoundByTighterLimit(t *testing.T) {
 	l["rules-per-application-load-balancer"] = "500"
 	stub(t, fakeClient{limits: l, rules: []string{"default", "1", "2"}})
 
-	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener")
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener", Assumed())
 	n, by, _ := rep.Headroom()
 	if n != 98 || by != "target-groups-per-application-load-balancer" {
 		t.Errorf("残り = %d bound by %q (want 98 / target-groups-per-...)", n, by)
@@ -93,7 +93,7 @@ func TestHeadroomBoundByTighterLimit(t *testing.T) {
 func TestNoListenerStillReportsLimits(t *testing.T) {
 	// listener が分からなくても上限は出す価値がある
 	stub(t, fakeClient{limits: defaultLimits()})
-	rep := Lookup(context.Background(), "ap-northeast-1", "")
+	rep := Lookup(context.Background(), "ap-northeast-1", "", Assumed())
 	if rep.Unknown || len(rep.Limits) != 4 {
 		t.Fatalf("%+v", rep)
 	}
@@ -105,7 +105,7 @@ func TestNoListenerStillReportsLimits(t *testing.T) {
 func TestUnreachableIsUnknownNotFailure(t *testing.T) {
 	// 権限不足・資格情報なしでも「上限ゼロ」とは言わない
 	stub(t, fakeClient{err: errors.New("AccessDenied")})
-	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener")
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener", Assumed())
 	if !rep.Unknown {
 		t.Error("届かなかったのに Unknown が立っていない")
 	}
@@ -117,7 +117,7 @@ func TestUnreachableIsUnknownNotFailure(t *testing.T) {
 func TestRuleCountFailureKeepsLimits(t *testing.T) {
 	// ルールが数えられなくても上限は出す(片方の失敗で全部捨てない)
 	stub(t, fakeClient{limits: defaultLimits(), ruleer: errors.New("AccessDenied")})
-	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener")
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener", Assumed())
 	if rep.Unknown || len(rep.Limits) == 0 {
 		t.Fatalf("%+v", rep)
 	}
@@ -132,7 +132,7 @@ func TestNonNumericMaxIsSkipped(t *testing.T) {
 		"rules-per-application-load-balancer":         "Unlimited",
 		"target-groups-per-application-load-balancer": "100",
 	}})
-	rep := Lookup(context.Background(), "ap-northeast-1", "")
+	rep := Lookup(context.Background(), "ap-northeast-1", "", Assumed())
 	for _, l := range rep.Limits {
 		if l.Name == "rules-per-application-load-balancer" {
 			t.Error("数値でない上限を採っている")
@@ -144,5 +144,57 @@ func TestRemainingNeverNegative(t *testing.T) {
 	l := Limit{Name: "x", Max: 10, Used: 25, HasUsed: true, PerEnv: 1}
 	if n, _ := l.Remaining(); n != 0 {
 		t.Errorf("残り = %d (負にしない)", n)
+	}
+}
+
+// TestHeadroomDividesByServices は複数サービス構成で「あと何面」が割られることを
+// 固定する。#188 はここが固定値 1 で、5 サービスなら N 倍に見えていた。
+func TestHeadroomDividesByServices(t *testing.T) {
+	rules := []string{"default"}
+	for i := 0; i < 12; i++ {
+		rules = append(rules, "1")
+	}
+	stub(t, fakeClient{limits: defaultLimits(), rules: rules})
+
+	// 3 サービスの環境 = ルール 3 本 + ターゲットグループ 3 個
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener",
+		PerEnv{Rules: 3, TargetGroups: 3, Source: "template"})
+	n, _, ok := rep.Headroom()
+	if !ok {
+		t.Fatal("残りが出ていない")
+	}
+	// (100 - 12) / 3 = 29。単一サービスなら 88 になるところ
+	if n != 29 {
+		t.Errorf("残り = %d (want 29)", n)
+	}
+	if rep.PerEnv.Rules != 3 || rep.PerEnv.Source != "template" {
+		t.Errorf("分母が報告に残っていない: %+v", rep.PerEnv)
+	}
+}
+
+// TestNoALBConsumptionHasNoHeadroom は ALB を使わない構成(static / HTTP API 入口)で
+// 「あと何面」を出さないことを固定する。ALB の枠を取らないので、この数字に意味が無い。
+func TestNoALBConsumptionHasNoHeadroom(t *testing.T) {
+	stub(t, fakeClient{limits: defaultLimits(), rules: []string{"default", "1"}})
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener",
+		PerEnv{Source: "template"})
+	if rep.PerEnv.UsesALB() {
+		t.Error("ALB を使わない構成が使う扱いになっている")
+	}
+	if n, by, ok := rep.Headroom(); ok {
+		t.Errorf("枠を取らないのに残り %d 面 (bound by %s) と言っている", n, by)
+	}
+}
+
+// TestAccountWideTargetGroupsNotCountedFromListener は、アカウント全体の
+// target-groups にこの ALB のルール数を当てないことを固定する。
+// 同じアカウントの別 ALB にも TG は居るので、当てると残りを多く見せる。
+func TestAccountWideTargetGroupsNotCountedFromListener(t *testing.T) {
+	stub(t, fakeClient{limits: defaultLimits(), rules: []string{"default", "1", "2"}})
+	rep := Lookup(context.Background(), "ap-northeast-1", "arn:listener", Assumed())
+	for _, l := range rep.Limits {
+		if l.Name == "target-groups" && l.HasUsed {
+			t.Errorf("アカウント全体の上限に listener の数を当てている: %+v", l)
+		}
 	}
 }
