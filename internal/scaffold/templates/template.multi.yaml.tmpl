@@ -58,7 +58,8 @@ Resources:
       Environment:
         Variables:
           AWS_LWA_PORT: "{{$.PortOrDefault}}"
-          AWS_LWA_READINESS_CHECK_PATH: /healthz
+          # 検出できたアプリのパス。無ければ従来どおり /healthz(#182)
+          AWS_LWA_READINESS_CHECK_PATH: {{if $.HealthPath}}{{$.HealthPath}}{{else}}/healthz{{end}}
           KAGEROU_ENV: !Ref EnvKagerouEnv
           KAGEROU_URL: !Ref EnvKagerouUrl
 {{- range $.ServiceSpecs}}

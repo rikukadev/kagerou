@@ -258,6 +258,7 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 		p.BaseBucket = b.Bucket
 	}
 	p.Port = m.det.AppPort
+	p.HealthPath = m.det.HealthPath // #182: 非対話側と同じ値を使う
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0
 	// 検出したファイル名/場所をそのまま生成物に流す。固定にすると LWA を
 	// Dockerfile.lambda に分けている構成で、LWA 無しのイメージが載る(#160)

@@ -449,7 +449,12 @@ func cmdInit(args []string, out *os.File) error {
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
 		DockerfileName: det.DockerfileName, DockerfileDir: det.DockerfileDir,
-		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
+		// 検出したヘルスチェックのパス(#182)。渡さないと readiness_path が出ず、
+		// LWA の readiness も /healthz 固定になる — アプリが別のパスを使っていると
+		// **存在しないパスを叩き続ける**が、LWA は 5xx 未満を healthy 扱いにするので
+		// 起動は止まらない。検査として黙って無意味になる
+		HealthPath: det.HealthPath,
+		Wants:      det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
 		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames, Auth: *auth,
 		AuthDomain: *authDomain, AuthSecretArn: *authSecret}
 	// routing は preview base から配るときにだけ意味がある。compute が
