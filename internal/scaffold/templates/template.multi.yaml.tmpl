@@ -15,12 +15,13 @@ Parameters:
   EnvKagerouUrl:
     Type: String
     Description: Environment URL (from url_template) — points at the primary service
-  EnvRulePriority:
+{{- range .ServiceSpecs}}
+  EnvRulePriority{{.Logical}}:
     Type: Number
     Description: >
-      Base priority on the shared listener. Each service appends its index
-      (e.g. base 42 -> 420, 421, ...), so one PR never collides with another.
-      CI passes the PR number (--env RULE_PRIORITY).
+      Priority of {{.Name}}'s rule on the shared listener. kagerou reserves a free
+      one at up time (#189); pass --env RULE_PRIORITY_{{.Upper}} to pin it instead.
+{{- end}}
 {{- if .Wants.Redis}}
   EnvRedisUrl:
     Type: String
@@ -125,8 +126,8 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn: "{{"{{"}}resolve:ssm:/kagerou/base/{{$.Project}}/alb_listener_arn{{"}}"}}"
-      # base 優先度 + サービスの枝番(CFN に算術が無いので文字列で連結する)
-      Priority: !Sub "${EnvRulePriority}{{.Index}}"
+      # kagerou が up のたびに共有リスナーの空きから確保する(#189)
+      Priority: !Ref EnvRulePriority{{.Logical}}
       Conditions:
         - Field: host-header
           Values: [!Sub "{{.Host}}"]

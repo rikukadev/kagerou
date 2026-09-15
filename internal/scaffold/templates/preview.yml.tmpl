@@ -64,17 +64,10 @@ jobs:
             --output-template-file packaged.yaml
 {{- end}}
 {{- if .ALB}}
-      # リスナールールの優先度は **1〜50000** で、共有リスナー上で一意である必要がある。
-      # PR 番号をそのまま使うと 5000 番台で上限を超えて CREATE_FAILED になり、
-      # 複数サービス構成では番号を連結するのでもっと早く当たる(#187)。
-      #
-      # mod で 1..4999 に畳む。衝突するのは **同時に開いている環境**の PR 番号が
-      # ちょうど 4999 離れたときだけで、そのときは ALB が PriorityInUse を返して
-      # 落ちる(黙って別の環境を奪うことはない)。
-      - name: Compute the listener rule priority
-        id: prio
-        run: echo "value=$(( ${{"{{"}} github.event.pull_request.number {{"}}"}} % 4999 + 1 ))" >> "$GITHUB_OUTPUT"
-
+      # リスナールールの優先度はここで決めない。kagerou が up のたびに共有リスナーの
+      # 空きを確保する(#189)。PR 番号から導いていた頃は 5000 番台で 1..50000 の上限を
+      # 超え、複数サービスでは桁を食い、番号が 4999 離れると衝突していた。
+      # 固定したいときだけ env で明示する(明示が常に勝つ)。docs/CONTRACT.md 参照。
 {{- end}}
       - uses: rikukadev/kagerou/action@v0
         with:
@@ -82,13 +75,6 @@ jobs:
 {{- if .ECS}}
           env: |
             IMAGE_URI=${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}:pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
-{{- if .ALB}}
-            RULE_PRIORITY=${{"{{"}} steps.prio.outputs.value {{"}}"}}
-{{- end}}
-{{- else if .LambdaALB}}
-          # 共有リスナー上で一意な優先度(上の step が PR 番号から算出する)
-          env: |
-            RULE_PRIORITY=${{"{{"}} steps.prio.outputs.value {{"}}"}}
 {{- end}}
 
   cleanup:
