@@ -72,6 +72,16 @@ type Params struct {
 	// シークレット。テンプレートは {{resolve:secretsmanager:…}} で読むので、
 	// 秘密はテンプレートにも kagerou.yaml にも載らない(#112)。
 	AuthSecretArn string
+	// Memory は Lambda の MemorySize(MB)。0 なら既定(512)。
+	// 適正値はリポジトリのファイルからは分からないので検出しない。宣言で受ける。
+	Memory int
+	// Timeout は Lambda のタイムアウト(秒)。0 なら入口ごとの既定。
+	//
+	// **入口によって上限が違う**: HTTP API は応答 30 秒で切れるので、それ以上を
+	// 設定しても無駄(Lambda は動き続けるが応答は返らない)。ALB 入口は
+	// アイドルタイムアウトまで伸ばせる。
+	Timeout int
+
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
 	Routing string
@@ -197,6 +207,35 @@ func (p Params) hasExistingDockerfile(dir string) bool {
 	}
 	_, err := os.Stat(filepath.Join(dir, p.DockerfileOrDefault()))
 	return err == nil
+}
+
+// MemoryOrDefault は Lambda の MemorySize(MB)。
+func (p Params) MemoryOrDefault() int {
+	if p.Memory > 0 {
+		return p.Memory
+	}
+	return 512
+}
+
+// TimeoutOrDefault は Lambda のタイムアウト(秒)。
+//
+// 既定を入口で変える。HTTP API 入口は応答が 30 秒で切れるので、そこを超える値を
+// 既定にすると「Lambda はまだ動いているのに 504 が返る」状態を標準にしてしまう。
+// ALB 入口にはその上限が無いので、起動の遅いアプリに合わせて伸ばせる。
+func (p Params) TimeoutOrDefault() int {
+	if p.Timeout > 0 {
+		return p.Timeout
+	}
+	if p.ALB() {
+		return 60
+	}
+	return 30
+}
+
+// TimeoutExceedsEntrypoint は、指定したタイムアウトが入口の上限を超えているか。
+// 超えていても動きはするが、応答は入口で切れるので警告する値になる。
+func (p Params) TimeoutExceedsEntrypoint() bool {
+	return p.Timeout > 30 && !p.ALB() && !p.Static()
 }
 
 // fileSpec は init が書き出すファイル 1 件。
