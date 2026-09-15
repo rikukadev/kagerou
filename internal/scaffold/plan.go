@@ -62,6 +62,24 @@ type AWSPlan struct {
 	Warnings []string // 先に知っておくべきこと(時間がかかる、など)
 }
 
+// perEnvFor は「環境ごとに作られるもの」の 1 行。入口で変わる。
+func perEnvFor(p Params) string {
+	switch {
+	case p.Static():
+		// static は compute を作らない。ここに Lambda と書くと、
+		// 「作られないものが作られる」と読める。
+		return "上のバケットの <name>/ 配下(compute は作らない)"
+	case p.APIGatewayVPCLink():
+		return "HTTP API / Cloud Map サービス / ECS サービス(Fargate)/ カスタムドメイン"
+	case p.ECS():
+		return "ECS サービス(Fargate)/ ターゲットグループ / 共有 ALB のリスナールール"
+	case p.LambdaALB():
+		return "Lambda / ターゲットグループ / 共有 ALB のリスナールール(どちらも無料)"
+	default:
+		return "Lambda / HTTP API(生の execute-api URL)"
+	}
+}
+
 // BuildAWSPlan は init のセットアップが AWS に作るものを組み立てる。
 //
 // 純粋な関数にしてあるのは、TUI を起動せずに中身を検証できるようにするため
@@ -76,13 +94,10 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		repo = p.Project
 	}
 
-	plan := AWSPlan{Account: account, Region: p.Region,
-		PerEnv: "Lambda / HTTP API / 上のバケットの <name>/ 配下"}
-	if p.Static() {
-		// static は compute を作らない。ここに Lambda と書くと、
-		// 「作られないものが作られる」と読める。
-		plan.PerEnv = "上のバケットの <name>/ 配下(compute は作らない)"
-	}
+	// 入口ごとに作るものが違う。ここを固定にすると **作られないものを見せ、
+	// 作られるものを隠す**ことになる(#183)。既定が共有 ALB になった #131 以降、
+	// 「Lambda / HTTP API」は既定構成の説明ですらない。
+	plan := AWSPlan{Account: account, Region: p.Region, PerEnv: perEnvFor(p)}
 
 	// CI が引き受けるロール。環境より長生きする。
 	plan.Shared = append(plan.Shared,
@@ -93,6 +108,23 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		plan.Shared = append(plan.Shared, AWSResource{"ECR repository", repo, p.Region})
 	}
 
+	// 共有 ALB / VPC Link のベース。**init が作るのではなく、生成した
+	// deploy/*-base.yaml を人が deploy する**。プランに出さないと、
+	// 固定費のある資源が画面に一度も現れないまま y を押させることになる。
+	if p.ALB() {
+		plan.Shared = append(plan.Shared,
+			AWSResource{"ALB (shared)", "deploy/alb-base.yaml を deploy して作る",
+				"全環境で 1 本。月 18 ドル前後の固定費。環境が足すのはルールとターゲットグループだけ"})
+		plan.Teardown = append(plan.Teardown,
+			"aws cloudformation delete-stack --stack-name <alb-base のスタック名>")
+	}
+	if p.APIGatewayVPCLink() {
+		plan.Shared = append(plan.Shared,
+			AWSResource{"VPC Link + Cloud Map", "deploy/apigw-base.yaml を deploy して作る",
+				"全環境で共有。VPC Link に時間課金は無い"})
+		plan.Teardown = append(plan.Teardown,
+			"aws cloudformation delete-stack --stack-name <apigw-base のスタック名>")
+	}
 	if p.SetupBase {
 		// preview base。CloudFront の証明書が us-east-1 必須なので、
 		// スタックごと us-east-1 に置く。
@@ -129,7 +161,26 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 	}
 	plan.Cost = append(plan.Cost,
 		CostLine{"CloudFront", "無料枠内", "毎月 1TB 転送・1000 万リクエストまで"})
-	plan.Estimate = "プレビュー 10 個で 月 $0.1 未満。固定の月額はどれにも無い"
+	// 入口の固定費。ここを落とすと **額を少なく見せる**ことになる(#183)
+	if p.ALB() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"ALB", "月 $18 前後", "共有 1 本。環境を増やしても増えない(LCU は別途)"})
+	}
+	if p.ECS() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"Fargate", "動いている間だけ", "アイドルでも課金される。TTL を短くしてある(24h)"})
+	}
+	// 固定費のある構成でこれを出すと、**額を少なく見せる**ことになる
+	switch {
+	case p.ALB():
+		plan.Estimate = "環境そのものは プレビュー 10 個で 月 $0.1 未満。" +
+			"これに共有 ALB の 月 $18 前後が加わる(環境数によらず一定)"
+	case p.ECS():
+		plan.Estimate = "入口に固定費は無いが、**Fargate は動いている間ずっと課金される**。" +
+			"アイドル $0 にはならない"
+	default:
+		plan.Estimate = "プレビュー 10 個で 月 $0.1 未満。固定の月額はどれにも無い"
+	}
 
 	if p.Sashiki {
 		// sashiki ホストは preview base と同じ共有側の住人。環境ごとに乗るのは
@@ -146,8 +197,7 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		})
 		// 「固定の月額はどれにも無い」は init が作るものの話。前提側に常駐費が
 		// ある構成でこの 1 行だけ読まれると誤解になるので、必ず併記する。
-		plan.Estimate = "プレビュー 10 個で 月 $0.1 未満(kagerou が作るぶん。固定の月額は無い)。" +
-			"別途、前提の sashiki ホストに常駐費がかかる"
+		plan.Estimate += "。別途、前提の sashiki ホストに常駐費がかかる"
 		plan.Cost = append(plan.Cost,
 			CostLine{"sashiki ホスト", "月 $30 前後〜", "前提。kagerou は作らないし消さない"})
 	}
