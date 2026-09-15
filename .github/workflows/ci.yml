@@ -37,6 +37,23 @@ jobs:
           go build ./...
           go test ./...
 
+  # squash タイトルがそのまま変更履歴になるので、中身より「見えない」type を
+  # 選んでいたら止める。CONTRIBUTING に書いただけでは 3 回とも止まらなかった
+  # (#157 / #174 / #200 はどれもリリース後に手でノートへ追記した)。
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
+            --json commits --jq '.commits[].messageHeadline' \
+            | ./.github/scripts/check-pr-title.sh "$TITLE"
+
   lint:
     runs-on: ubuntu-latest
     steps:
