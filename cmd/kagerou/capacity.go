@@ -29,14 +29,24 @@ type capacityJSON struct {
 	Limits   []capacityLimit `json:"limits"`
 	Headroom *int            `json:"headroom,omitempty"`
 	BoundBy  string          `json:"bound_by,omitempty"`
-	Unknown  bool            `json:"unknown"`
-	Note     string          `json:"note,omitempty"`
+	// PerEnv は headroom の分母。これを出さないと、複数サービス構成で
+	// 数字だけ読んだ側が N 倍に取り違える(#188)。
+	PerEnv  capacityPerEnv `json:"per_environment"`
+	Unknown bool           `json:"unknown"`
+	Note    string         `json:"note,omitempty"`
+}
+
+type capacityPerEnv struct {
+	Rules        int    `json:"rules"`
+	TargetGroups int    `json:"target_groups"`
+	Source       string `json:"source"` // template | assumed
 }
 
 type capacityLimit struct {
 	Name      string `json:"name"`
 	Max       int    `json:"max"`
 	Used      *int   `json:"used,omitempty"`
+	PerEnv    int    `json:"per_environment"`
 	Remaining *int   `json:"remaining_environments,omitempty"`
 }
 
@@ -65,17 +75,47 @@ func cmdCapacity(args []string, out *os.File) error {
 		arn = lookupListenerARN(ctx, reg, cfg.Project)
 	}
 
-	rep := quota.Lookup(ctx, reg, arn)
+	rep := quota.Lookup(ctx, reg, arn, perEnvFromTemplate(cfg.Template, *cfgPath))
 	if *asJSON {
 		return writeCapacityJSON(out, rep, arn)
 	}
 	return writeCapacityText(out, rep, arn)
 }
 
+// perEnvFromTemplate は「環境 1 つが ALB から取る枠」をテンプレートから数える。
+//
+// 環境の実体は template.yaml なので、**そこに書いてある個数がそのまま答え**になる。
+// サービス数を別に推定するより確かで、複数サービス構成(#137)でも合う。
+// 読めなければ単一サービスと仮定し、仮定であることを Source に残す(#188)。
+func perEnvFromTemplate(templatePath, cfgPath string) quota.PerEnv {
+	facts := loadTemplateFacts(templatePath, cfgPath)
+	if facts == nil {
+		return quota.Assumed()
+	}
+	p := quota.PerEnv{
+		Rules:        facts.Counts["AWS::ElasticLoadBalancingV2::ListenerRule"],
+		TargetGroups: facts.Counts["AWS::ElasticLoadBalancingV2::TargetGroup"],
+		Source:       "template",
+	}
+	if !p.UsesALB() {
+		// static や HTTP API 入口。共有 ALB の枠は取らない
+		return p
+	}
+	// 片方だけ書いてある形は想定していないが、0 で割らない
+	if p.Rules == 0 {
+		p.Rules = p.TargetGroups
+	}
+	if p.TargetGroups == 0 {
+		p.TargetGroups = p.Rules
+	}
+	return p
+}
+
 func writeCapacityJSON(out io.Writer, rep quota.Report, arn string) error {
-	d := capacityJSON{Region: rep.Region, Listener: arn, Unknown: rep.Unknown, Note: rep.Note}
+	d := capacityJSON{Region: rep.Region, Listener: arn, Unknown: rep.Unknown, Note: rep.Note,
+		PerEnv: capacityPerEnv{rep.PerEnv.Rules, rep.PerEnv.TargetGroups, rep.PerEnv.Source}}
 	for _, l := range rep.Limits {
-		cl := capacityLimit{Name: l.Name, Max: l.Max}
+		cl := capacityLimit{Name: l.Name, Max: l.Max, PerEnv: l.PerEnv}
 		if l.HasUsed {
 			used := l.Used
 			cl.Used = &used
@@ -110,8 +150,15 @@ func writeCapacityText(out io.Writer, rep quota.Report, arn string) error {
 		}
 		say("  %-46s %d\n", l.Name, l.Max)
 	}
+	// 割り算の分子だけ出して分母を隠すと、複数サービス構成で数字を N 倍に
+	// 読み違える(#188)。仮定で埋めた場合はそれも書く。
+	if !rep.PerEnv.UsesALB() {
+		say("\nthis configuration does not use the shared ALB — environments add no rules or target groups.\n")
+		return nil
+	}
+	say("\n1 environment = %s (%s)\n", perEnvPhrase(rep.PerEnv), perEnvSourceNote(rep.PerEnv))
 	if n, by, ok := rep.Headroom(); ok {
-		say("\nroom for %d more environments on this ALB (bound by %s)\n", n, by)
+		say("room for %d more environments on this ALB (bound by %s)\n", n, by)
 		if n == 0 {
 			// ここに来た人が次に取る手は 1 つしかない
 			say("the next `up` will fail with TooManyRules / TooManyTargetGroups.\n")
@@ -120,10 +167,31 @@ func writeCapacityText(out io.Writer, rep quota.Report, arn string) error {
 		return nil
 	}
 	if arn == "" {
-		say("\nno listener to count against — pass --listener-arn, or deploy deploy/alb-base.yaml\n")
+		say("no listener to count against — pass --listener-arn, or deploy deploy/alb-base.yaml\n")
 		say("so the SSM contract (/kagerou/base/<project>/alb_listener_arn) has one.\n")
 	}
 	return nil
+}
+
+// perEnvPhrase は 1 環境あたりの消費量を人が読む形にする。
+func perEnvPhrase(p quota.PerEnv) string {
+	return fmt.Sprintf("%s + %s",
+		plural(p.Rules, "rule"), plural(p.TargetGroups, "target group"))
+}
+
+// perEnvSourceNote は数の出どころ。仮定なら、直し方まで書く。
+func perEnvSourceNote(p quota.PerEnv) string {
+	if p.Source == "template" {
+		return "counted in template.yaml"
+	}
+	return "assumed — no template found; run this where template.yaml is, or the number below is N times too high"
+}
+
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // lookupListenerARN はベースが書いた listener ARN を SSM から引く(CONTRACT §9)。
