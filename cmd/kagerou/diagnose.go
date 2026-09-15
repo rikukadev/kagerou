@@ -52,9 +52,22 @@ type diagnosisFacts struct {
 	HealthPath     string `json:"health_path,omitempty"`
 	PublishesImage bool   `json:"ci_publishes_image"`
 	ImageRegistry  string `json:"image_registry,omitempty"`
+	// ServiceFacts はサービスごとの事実(#184)。どのサービスがどの Dockerfile から
+	// 来るかが見えないと、複数サービス構成で何が生成されるか読めない。
+	ServiceFacts []diagnosisService `json:"service_facts,omitempty"`
 	// URLShape は web と api を別オリジンに割るかどうかを決めている値。
 	// 図の形が変わる根拠なので、機械可読側にも出す("" | "path" | "cross")。
 	URLShape string `json:"url_shape,omitempty"`
+}
+
+type diagnosisService struct {
+	Name       string `json:"name"`
+	Dir        string `json:"dir"`
+	Dockerfile string `json:"dockerfile,omitempty"`
+	LWA        bool   `json:"lambda_web_adapter"`
+	Framework  string `json:"framework,omitempty"`
+	Port       string `json:"port,omitempty"`
+	HealthPath string `json:"health_path,omitempty"`
 }
 
 type diagnosisAssumed struct {
@@ -105,6 +118,7 @@ func cmdDiagnose(args []string, out *os.File) error {
 			HealthPath: facts.HealthPath, PublishesImage: facts.PublishesImage,
 			ImageRegistry: facts.ImageRegistry,
 			URLShape:      facts.URLShape,
+			ServiceFacts:  serviceFacts(facts),
 		},
 	}
 	if facts.Owner != "" {
@@ -124,6 +138,18 @@ func cmdDiagnose(args []string, out *os.File) error {
 		return enc.Encode(d)
 	}
 	return writeDiagnosis(out, d)
+}
+
+// serviceFacts は appscan のサービスごとの事実を出力形に写す。
+func serviceFacts(f appscan.Facts) []diagnosisService {
+	out := make([]diagnosisService, 0, len(f.ServiceFacts))
+	for _, s := range f.ServiceFacts {
+		out = append(out, diagnosisService{
+			Name: s.Name, Dir: s.Dir, Dockerfile: s.Dockerfile, LWA: s.HasLWA,
+			Framework: s.Framework, Port: s.Port, HealthPath: s.HealthPath,
+		})
+	}
+	return out
 }
 
 // scaffoldFor は入口を init の生成パラメータに写す。
@@ -212,6 +238,37 @@ func writeDiagnosis(out *os.File, d diagnosis) error {
 	}
 	if d.Facts.Realtime {
 		line("realtime", "WebSocket / SSE")
+	}
+	if len(d.Facts.ServiceFacts) > 0 {
+		// 「複数サービス」と言うだけでは、何がどのイメージから来るか読めない。
+		// 生成物がサービスごとに分かれる根拠なので並べる(#184)
+		b.WriteString("\nservices\n")
+		w := 0
+		for _, s := range d.Facts.ServiceFacts {
+			if n := len(s.Name); n > w {
+				w = n
+			}
+		}
+		for _, s := range d.Facts.ServiceFacts {
+			fmt.Fprintf(&b, "  %-*s %s", w, s.Name, filepath.Join(s.Dir, s.Dockerfile))
+			if s.LWA {
+				b.WriteString("  (LWA)")
+			}
+			var extra []string
+			if s.Framework != "" {
+				extra = append(extra, s.Framework)
+			}
+			if s.Port != "" {
+				extra = append(extra, "port "+s.Port)
+			}
+			if s.HealthPath != "" {
+				extra = append(extra, s.HealthPath)
+			}
+			if len(extra) > 0 {
+				b.WriteString("  " + strings.Join(extra, " / "))
+			}
+			b.WriteString("\n")
+		}
 	}
 	if d.Facts.HealthPath != "" {
 		// readiness の既定 "/" を上書きする根拠。重い SSR やリダイレクトを避ける

@@ -3,6 +3,7 @@ package appscan
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -569,5 +570,122 @@ func TestScanNoWorkflowsIsQuiet(t *testing.T) {
 	write(t, dir, "Dockerfile", "FROM node:22\n")
 	if f := Scan(dir); f.PublishesImage || f.ImageRegistry != "" {
 		t.Errorf("%+v", f)
+	}
+}
+
+// モノレポ(ディレクトリごとに別アプリ)をサービスごとに持つ(#184)。
+// ServiceNames は名前しか持たず、「どのサービスがどの Dockerfile から来るか」を
+// 表現できなかったので、生成物が全サービスで同じイメージを指してしまう。
+func TestScanServiceFactsPerDirectory(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"api", "web", "docs"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, dir, "api/go.mod", "module m\n")
+	write(t, dir, "api/Dockerfile", "FROM golang:1\nEXPOSE 8080\n")
+	// LWA が別ファイルに入っている構成。素の Dockerfile より優先される(#151)
+	write(t, dir, "web/package.json", `{"dependencies":{"next":"15"}}`)
+	write(t, dir, "web/Dockerfile", "FROM node:22\nEXPOSE 3000\n")
+	write(t, dir, "web/Dockerfile.lambda",
+		"FROM node:22\nCOPY --from=x /lambda-adapter /opt/extensions/lambda-adapter\nEXPOSE 3000\n")
+	// Dockerfile を持たないディレクトリはサービスではない
+	write(t, dir, "docs/README.md", "# docs\n")
+
+	f := Scan(dir)
+	if len(f.ServiceFacts) != 2 {
+		t.Fatalf("ServiceFacts = %d, want 2 (docs は Dockerfile が無い): %+v", len(f.ServiceFacts), f.ServiceFacts)
+	}
+	// 走査順に依存しないよう Dir で安定させている
+	api, web := f.ServiceFacts[0], f.ServiceFacts[1]
+	if api.Name != "api" || api.Dir != "api" {
+		t.Errorf("api: %+v", api)
+	}
+	if api.Dockerfile != "Dockerfile" || api.Port != "8080" || api.Framework != "go" {
+		t.Errorf("api の事実が取れていない: %+v", api)
+	}
+	if api.HasLWA {
+		t.Error("api に LWA は入っていない")
+	}
+	if web.Dockerfile != "Dockerfile.lambda" || !web.HasLWA {
+		t.Errorf("LWA 入りを優先していない: %+v", web)
+	}
+	if web.Port != "3000" || web.Framework != "next" {
+		t.Errorf("web の事実が取れていない: %+v", web)
+	}
+}
+
+// ルート直下に Dockerfile があるのは「リポジトリ全体で 1 アプリ」の形。
+// それを 1 サービスとして数えると、単一アプリが複数サービス構成に見える。
+func TestScanServiceFactsIgnoresRoot(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "Dockerfile", "FROM alpine\nEXPOSE 8080\n")
+	write(t, dir, "go.mod", "module m\n")
+	if f := Scan(dir); len(f.ServiceFacts) != 0 {
+		t.Fatalf("ルートをサービスに数えている: %+v", f.ServiceFacts)
+	}
+}
+
+// 1 イメージ複数バイナリ(cmd/<name>/main.go)は ServiceNames のまま。
+// ディレクトリごとに Dockerfile が分かれないので ServiceFacts には載らない。
+func TestScanCmdMainStaysInServiceNames(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "go.mod", "module m\n")
+	write(t, dir, "Dockerfile", "FROM golang:1\nEXPOSE 8080\n")
+	for _, n := range []string{"gateway", "api"} {
+		if err := os.MkdirAll(filepath.Join(dir, "cmd", n), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, filepath.Join("cmd", n, "main.go"), "package main\nfunc main() {}\n")
+	}
+	f := Scan(dir)
+	if len(f.ServiceNames) != 2 {
+		t.Fatalf("ServiceNames = %v, want 2", f.ServiceNames)
+	}
+	if len(f.ServiceFacts) != 0 {
+		t.Fatalf("cmd/*/main.go を ServiceFacts に載せている: %+v", f.ServiceFacts)
+	}
+}
+
+// Services は「1 ディレクトリで見えた最大値」なので、ディレクトリをまたぐ
+// モノレポを数えられなかった(api/ も web/ もそれぞれ 1 で、最大は 1)。
+// 数がずれると recommend が単一サービス向けの入口を薦めてしまう。
+func TestScanCountsMonorepoServices(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"api", "web", "worker"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, filepath.Join(d, "Dockerfile"), "FROM alpine\nEXPOSE 8080\n")
+	}
+	f := Scan(dir)
+	if f.Services != 3 {
+		t.Fatalf("Services = %d, want 3", f.Services)
+	}
+	// ALB のホスト規約 <service>-<env> に使うので、名前もサービスごとに揃える
+	if strings.Join(f.ServiceNames, ",") != "api,web,worker" {
+		t.Fatalf("ServiceNames = %v", f.ServiceNames)
+	}
+}
+
+// compose や cmd/*/main.go のほうが多いときは、そちらを尊重する。
+// 1 ディレクトリに複数サービスが入る形は従来どおり。
+func TestScanKeepsLargerServiceCount(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "svc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "svc/Dockerfile", "FROM alpine\n")
+	write(t, dir, "svc/compose.yaml", `services:
+  a:
+    build: .
+  b:
+    build: .
+  c:
+    build: .
+`)
+	if f := Scan(dir); f.Services != 3 {
+		t.Fatalf("Services = %d, want 3 (compose のほうが多い)", f.Services)
 	}
 }
