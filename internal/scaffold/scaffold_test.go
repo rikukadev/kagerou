@@ -1,8 +1,10 @@
 package scaffold
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -761,5 +763,56 @@ func TestMultiServiceTemplateUsesDetectedDockerfile(t *testing.T) {
 	}
 	if tp := read(t, dir, "template.yaml"); !strings.Contains(tp, "Dockerfile: Dockerfile.lambda") {
 		t.Errorf("multi 版も検出したファイル名を使うはず:\n%s", tp)
+	}
+}
+
+// 優先度は `${EnvRulePriority}${Index}` の連結で作る(CFN に算術が無い)。
+// 連結が単射なのは Index が 1 桁のときだけなので、そこを上限として固定する(#187)。
+func TestServiceCountIsCappedForPriority(t *testing.T) {
+	names := make([]string, MaxServices+1)
+	for i := range names {
+		names[i] = fmt.Sprintf("svc%d", i)
+	}
+	p := Params{Project: "relay", Region: "r", Entrypoint: "alb",
+		Domain: "relay.example.com", Services: names}
+	_, err := Run(t.TempDir(), p, AllTargets(), false)
+	if err == nil {
+		t.Fatal("上限を超えたサービス数を受け入れている(優先度が衝突する)")
+	}
+	if !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("理由が伝わらない: %v", err)
+	}
+
+	// 上限ちょうどは通り、Index は 1 桁に収まる
+	ok := p
+	ok.Services = names[:MaxServices]
+	if _, err := Run(t.TempDir(), ok, AllTargets(), false); err != nil {
+		t.Fatalf("上限ちょうどは通るはず: %v", err)
+	}
+	for _, s := range ok.ServiceSpecs() {
+		if s.Index > 9 {
+			t.Fatalf("Index が 2 桁になっている: %d", s.Index)
+		}
+	}
+}
+
+// 連結が単射であること自体を、上限の範囲で総当たりして固定する。
+func TestRulePriorityIsInjectiveWithinLimits(t *testing.T) {
+	seen := map[int]string{}
+	for base := 1; base <= 4999; base++ { // workflow が mod で畳む範囲
+		for idx := 0; idx < MaxServices; idx++ {
+			prio, err := strconv.Atoi(fmt.Sprintf("%d%d", base, idx))
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := fmt.Sprintf("base=%d idx=%d", base, idx)
+			if prev, dup := seen[prio]; dup {
+				t.Fatalf("優先度 %d が衝突: %s と %s", prio, prev, key)
+			}
+			if prio < 1 || prio > 50000 {
+				t.Fatalf("優先度 %d が ALB の範囲 1..50000 を外れる (%s)", prio, key)
+			}
+			seen[prio] = key
+		}
 	}
 }

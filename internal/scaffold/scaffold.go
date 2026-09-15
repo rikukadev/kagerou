@@ -109,6 +109,16 @@ func AllTargets() Targets {
 func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	var res Result
 
+	// 上限を超えると優先度の連結が 2 桁になり、別の環境のルールと衝突する(#187)。
+	// 黙って切り捨てると「テンプレートに出てこないサービス」ができるので、ここで止める。
+	if len(p.Services) > MaxServices {
+		return res, fmt.Errorf("%d services: at most %d can share one environment "+
+			"(the listener-rule priority is built by concatenation, so a two-digit "+
+			"index collides with another PR's rules). Split the repository, or "+
+			"run the extra services as separate kagerou projects",
+			len(p.Services), MaxServices)
+	}
+
 	// これから Dockerfile 雛形を生成する場合、その listen ポートは自分が決める
 	// (variant の既定)。template.yaml の AWS_LWA_PORT にも同じ値を使わないと、
 	// 「雛形は 8080 で listen、LWA は 3000 を見にいく」で最初のデプロイから 502 になる。
@@ -499,6 +509,18 @@ func (p Params) LambdaALB() bool { return p.ALB() && !p.ECS() }
 // 意味を持つ(ホストで分けられるのが ALB の利点。DESIGN §13)。
 func (p Params) MultiService() bool { return p.LambdaALB() && len(p.Services) > 1 }
 
+// MaxServices は 1 環境に立てられるサービス数の上限。
+//
+// リスナールールの優先度は `${EnvRulePriority}${Index}` の **連結** で作る
+// (CloudFormation に算術が無いため)。連結が単射なのは Index の桁数が
+// 揃っているときだけで、2 桁になると別の環境と衝突する(#187):
+//
+//	PR 4  の Index 21 → "4"  + "21" → 421
+//	PR 42 の Index 1  → "42" + "1"  → 421
+//
+// Index を 1 桁に保つことがそのまま上限になる。
+const MaxServices = 10
+
 // PortOrDefault は LWA に渡す listen ポート(検出値、無ければ framework 既定)。
 func (p Params) PortOrDefault() string {
 	if p.Port != "" {
@@ -562,8 +584,14 @@ func (p Params) PrimaryService() string {
 // ServiceSpecs はテンプレート用にサービス一覧を組む。
 func (p Params) ServiceSpecs() []ServiceSpec {
 	primary := p.PrimaryService()
-	out := make([]ServiceSpec, 0, len(p.Services))
-	for i, name := range p.Services {
+	svcs := p.Services
+	if len(svcs) > MaxServices {
+		// 黙って切ると「テンプレートに出てこないサービス」ができる。
+		// Run が先に弾くので、ここに来るのは呼び出し側の取りこぼし
+		svcs = svcs[:MaxServices]
+	}
+	out := make([]ServiceSpec, 0, len(svcs))
+	for i, name := range svcs {
 		out = append(out, ServiceSpec{
 			Name:    name,
 			Logical: logicalID(name),
