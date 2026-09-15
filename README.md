@@ -120,6 +120,40 @@ kagerou iam-policy > ci-policy.json   # CI ロールの最小権限をテンプ�
 kagerou capacity                      # 共有 ALB にあと何面置けるか(読み取りのみ)
 ```
 
+## いくらかかっているか
+
+タグ(`kagerou:name` / `kagerou:project`)が最初から付いているので、Cost Explorer で
+そのまま割れる。**基盤の固定費と環境ごとの直接費は分けて出す**(基盤は按分しない —
+按分すると「環境を 1 つ消したらいくら減るのか」が読めなくなる):
+
+```console
+$ kagerou cost --period 30d
+
+kagerou cost  todo
+
+period    2026-08-17 .. 2026-09-16 (30 days, UTC)
+
+environments   $2.00   (2 environments, $1.00 each on average)
+base           $18.00  (shared ALB / CloudFront / NAT — NOT split across environments)
+total          $20.00
+
+at this rate   $20.00 / month (base $18.00)
+```
+
+`--by name` で環境ごとの内訳、`--json` で機械可読。
+
+**先に 1 回だけ有効化が要る。** Billing → Cost allocation tags で `kagerou:project` と
+`kagerou:name` を有効化する。**有効化した後の利用分からしか集計されない**(遡らない)ので、
+1 日ほど置いてから実行する。
+
+制約を承知の上で使うこと:
+
+- **Cost Explorer は約 1 日遅れる。** 「今いくら」は出せないので、期間は過去で終わる
+- **1 リクエスト $0.01。** 費用を見るのに費用がかかるので、叩いた回数を出力に書いている
+- **デプロイロールでは動かない。** kagerou の permissions boundary は `ce:*` を Deny して
+  いる(CI に課金 API を触らせない設計)。自分の資格情報で実行する
+
+
 権限は**テンプレートが真実の源**で、コンテナイメージ(`PackageType: Image`)や
 SAM の `Events` からも導出する。手で足した権限が生成器に無いままにならないよう、
 attach 済みのポリシーとの差分を見張れる:
