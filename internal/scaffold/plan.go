@@ -76,13 +76,7 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 		repo = p.Project
 	}
 
-	plan := AWSPlan{Account: account, Region: p.Region,
-		PerEnv: "Lambda / HTTP API / 上のバケットの <name>/ 配下"}
-	if p.Static() {
-		// static は compute を作らない。ここに Lambda と書くと、
-		// 「作られないものが作られる」と読める。
-		plan.PerEnv = "上のバケットの <name>/ 配下(compute は作らない)"
-	}
+	plan := AWSPlan{Account: account, Region: p.Region, PerEnv: perEnv(p)}
 
 	// CI が引き受けるロール。環境より長生きする。
 	plan.Shared = append(plan.Shared,
@@ -116,20 +110,49 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 			"aws ecr delete-repository --repository-name "+repo+" --region "+p.Region+" --force")
 	}
 
+	// 入口の共有ベース(deploy/*-base.yaml)。init はテンプレートを書き出すだけで
+	// deploy はしないので、「作るもの」ではなく前提として並べる。
+	plan.Prereqs = append(plan.Prereqs, baseStacks(p)...)
+
 	// 費用。**固定の月額が無い**ことが要点なので、それが伝わる並びにする。
-	plan.Cost = []CostLine{
-		{"IAM role / OIDC", "無料", "—"},
-		{"ACM certificate", "無料", "—"},
-		{"Route53 レコード", "無料", "ホストゾーンは既存のものを使う"},
-		{"S3 保管", "$0.023 /GB・月", "SPA は数 MB なので実質ゼロ"},
-	}
+	plan.Cost = []CostLine{{"IAM role / OIDC", "無料", "—"}}
 	if !p.Static() {
 		plan.Cost = append(plan.Cost,
 			CostLine{"ECR 保管", "$0.10 /GB・月", "イメージ 1 個 200MB で約 $0.02/月"})
 	}
-	plan.Cost = append(plan.Cost,
-		CostLine{"CloudFront", "無料枠内", "毎月 1TB 転送・1000 万リクエストまで"})
-	plan.Estimate = "プレビュー 10 個で 月 $0.1 未満。固定の月額はどれにも無い"
+	// 証明書と DNS は、ドメインを持つベース(配信 / ALB / apigw)があるときだけ。
+	// 関係ない構成で並べると、作りも使いもしないものの費用を読ませることになる。
+	if p.SetupBase || p.Static() || p.ALB() || p.APIGatewayVPCLink() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"ACM certificate", "無料", "—"},
+			CostLine{"Route53 レコード", "無料", "ホストゾーンは既存のものを使う"})
+	}
+	// S3 と CloudFront は配信ベースのもの。stack driver だけの構成には無い。
+	if p.SetupBase || p.Static() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"S3 保管", "$0.023 /GB・月", "SPA は数 MB なので実質ゼロ"},
+			CostLine{"CloudFront", "無料枠内", "毎月 1TB 転送・1000 万リクエストまで"})
+	}
+
+	// 固定費(常駐して毎月立つ額)を集める。1 つでもあれば「固定の月額はどれにも
+	// 無い」とは書けない。費用を**少なく**見せるのが一番まずい(#183)。
+	var fixed []string
+	if p.ALB() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"ALB(共有)", "$0.0225 /時", "+ LCU。月 $18 前後で、環境が増えても同額"})
+		fixed = append(fixed, "共有 ALB に 月 $18 前後(既にあれば増えない)")
+	}
+	if p.ECS() {
+		// Fargate はアイドル $0 ではない。Lambda と同じ書き方をすると、
+		// 止め忘れた環境の額が画面から消える。
+		plan.Cost = append(plan.Cost,
+			CostLine{"Fargate", "$0.05 /vCPU・時", "0.25 vCPU の環境を 72 時間(既定 TTL)で約 $1"})
+	}
+	if p.Auth && p.ALB() {
+		plan.Cost = append(plan.Cost,
+			CostLine{"Secrets Manager", "$0.40 /月・1 個", "authenticate-oidc が読む client_secret"})
+		fixed = append(fixed, "Secrets Manager のシークレット 1 個に 月 $0.40")
+	}
 
 	if p.Sashiki {
 		// sashiki ホストは preview base と同じ共有側の住人。環境ごとに乗るのは
@@ -144,15 +167,115 @@ func BuildAWSPlan(p Params, d Detection) AWSPlan {
 			Cost: "EC2 1 台 + EBS の常駐費。小さめの DB で 月 $30 前後、" +
 				"600GB・同時 5 なら 月 $120 前後(sashiki/docs/COSTS.md)",
 		})
-		// 「固定の月額はどれにも無い」は init が作るものの話。前提側に常駐費が
-		// ある構成でこの 1 行だけ読まれると誤解になるので、必ず併記する。
-		plan.Estimate = "プレビュー 10 個で 月 $0.1 未満(kagerou が作るぶん。固定の月額は無い)。" +
-			"別途、前提の sashiki ホストに常駐費がかかる"
 		plan.Cost = append(plan.Cost,
 			CostLine{"sashiki ホスト", "月 $30 前後〜", "前提。kagerou は作らないし消さない"})
+		fixed = append(fixed, "前提の sashiki ホストに 月 $30 前後〜")
 	}
 
+	plan.Estimate = estimate(p, fixed)
 	return plan
+}
+
+// perEnv は「環境ごとに作って壊すもの」を構成から 1 行にする。
+//
+// 入口で中身が変わる: ALB 入口では HTTP API を作らないし、ecs は Lambda を
+// 作らない。ここが生成物とずれると、作られないものを見せたまま y を押させる。
+func perEnv(p Params) string {
+	// バケットは preview base を作るときにだけ存在する。無い構成で書くと、
+	// 置き場所が別にあるように読める。
+	bucket := ""
+	if p.SetupBase {
+		bucket = " / 上のバケットの <name>/ 配下"
+	}
+	switch {
+	case p.Static():
+		// static は compute を作らない。ここに Lambda と書くと、
+		// 「作られないものが作られる」と読める。
+		return "上のバケットの <name>/ 配下(compute は作らない)"
+	case p.APIGatewayVPCLink():
+		return "Fargate タスク / Cloud Map サービス / HTTP API + ドメイン" + bucket
+	case p.ECS():
+		return "Fargate タスク / ターゲットグループ / リスナールール(後ろ 2 つは無料)" + bucket
+	case p.MultiService():
+		return "サービスごとに Lambda / ターゲットグループ / リスナールール(後ろ 2 つは無料)" + bucket
+	case p.LambdaALB():
+		return "Lambda / ターゲットグループ / リスナールール(後ろ 2 つは無料)" + bucket
+	default:
+		// ドメインの無い lambda。生の execute-api URL で配る
+		return "Lambda / HTTP API" + bucket
+	}
+}
+
+// baseStacks は init が **書き出すが deploy はしない** 共有ベースを前提として並べる。
+//
+// deploy/*-base.yaml があるのにプランに出ないと、固定費と「自分で deploy する
+// 必要があること」の両方が画面から消える(#183)。Prereq に置くのは、init が
+// 作らないものを「作るもの」に混ぜないため(sashiki ホストと同じ扱い)。
+func baseStacks(p Params) []Prereq {
+	domain := p.Domain
+	if domain == "" {
+		domain = "<domain>"
+	}
+	var out []Prereq
+	if p.ALB() {
+		out = append(out, Prereq{
+			Kind: "共有 ALB",
+			Name: "kagerou-alb-base-" + p.Project + "(*." + domain + " の入口)",
+			How: []string{
+				"init が deploy/alb-base.yaml を書き出す。アプリのリージョンで 1 回だけ deploy する:",
+				"aws cloudformation deploy --stack-name kagerou-alb-base-" + p.Project + " \\",
+				"  --template-file deploy/alb-base.yaml \\",
+				"  --parameter-overrides Project=" + p.Project + " DomainName=" + domain + " \\",
+				"    HostedZoneId=<zone> VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>",
+				"既にあれば不要。環境は同じ ALB に相乗りする(固定費は増えない)",
+			},
+			Cost: "ALB 1 本で 月 $18 前後。環境が 1 個でも 30 個でも同額",
+		})
+	}
+	if p.APIGatewayVPCLink() {
+		out = append(out, Prereq{
+			Kind: "共有 VPC Link",
+			Name: "kagerou-apigw-base-" + p.Project + "(VPC Link + Cloud Map + ECS クラスタ)",
+			How: []string{
+				"init が deploy/apigw-base.yaml を書き出す。アプリのリージョンで 1 回だけ deploy する:",
+				"aws cloudformation deploy --stack-name kagerou-apigw-base-" + p.Project + " \\",
+				"  --template-file deploy/apigw-base.yaml \\",
+				"  --parameter-overrides Project=" + p.Project + " DomainName=" + domain + " \\",
+				"    HostedZoneId=<zone> VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>",
+			},
+			Cost: "固定費なし(VPC Link も HTTP API も作成は無料)。" +
+				"課金は環境が動いている間の Fargate だけ",
+		})
+	}
+	if p.Auth {
+		out = append(out, Prereq{
+			Kind: "認証ベース",
+			Name: "kagerou-edge-base-" + p.Project + "(CloudFront + Lambda@Edge)",
+			How: []string{
+				"init が deploy/edge-base.yaml を書き出す。us-east-1 で 1 回だけ deploy する:",
+				"sam deploy --template-file deploy/edge-base.yaml --region us-east-1 \\",
+				"  --stack-name kagerou-edge-base-" + p.Project + " --capabilities CAPABILITY_IAM",
+				"OIDC の issuer / client_id / client_secret は SSM に置く(テンプレート冒頭の手順)",
+			},
+			Cost: "固定費なし(CloudFront は無料枠内、Lambda@Edge はリクエスト課金)",
+		})
+	}
+	return out
+}
+
+// estimate は費用の 1 行まとめ。固定費が 1 つでもあるなら「固定の月額はどれにも
+// 無い」とは書かない — 安い側に丸めた 1 行だけが読まれるのが一番危ない(#183)。
+func estimate(p Params, fixed []string) string {
+	est := "環境ごとの費用はプレビュー 10 個で 月 $0.1 未満"
+	if p.ECS() {
+		// Fargate は動いている間ずっと課金される。プレビュー 10 個で $0.1 は
+		// アイドル $0 の lambda の話で、ecs に流用すると額が桁で変わる。
+		est = "環境ごとの費用は Fargate の実行時間ぶん(0.25 vCPU なら 72 時間で約 $1)"
+	}
+	if len(fixed) == 0 {
+		return est + "。固定の月額はどれにも無い"
+	}
+	return est + "。別に固定費: " + strings.Join(fixed, " / ")
 }
 
 // routingNote は routing の意味を 1 行で説明する。作る前に見せる値なので、
