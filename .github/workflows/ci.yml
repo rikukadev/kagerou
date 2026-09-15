@@ -210,27 +210,13 @@ jobs:
 
       - run: go build -o bin/kagerou ./cmd/kagerou
 
-      - name: Resolve the VPC to run tasks in
-        id: vpc
-        run: |
-          set -euo pipefail
-          VPC="${{ vars.E2E_VPC_ID }}"
-          SUBNETS="${{ vars.E2E_SUBNET_IDS }}"
-          if [ -z "$VPC" ]; then
-            VPC=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true               --query 'Vpcs[0].VpcId' --output text)
-          fi
-          if [ -z "$SUBNETS" ]; then
-            # VPC Link は 2 AZ 以上を要求する
-            SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC"               --query 'Subnets[:2].SubnetId' --output text | tr '	' ',')
-          fi
-          [ -n "$VPC" ] && [ "$VPC" != "None" ] || { echo "::error::no VPC"; exit 1; }
-          echo "vpc=$VPC" >> "$GITHUB_OUTPUT"
-          echo "subnets=$SUBNETS" >> "$GITHUB_OUTPUT"
-
+      # VPC Link・名前空間・クラスタは共有ベース(e2e/aws/apigw/base.yaml)の
+      # 持ち物で、1 回だけデプロイして置いてある。環境側はそれを SSM から読む。
+      # per-env で VPC Link を作っていた頃は、削除が InternalFailure で転んで
+      # required check が flaky だった
       - name: Run E2E
         env:
           NAME: e2e-apigw-${{ github.run_id }}
-          KAGEROU_PARAMS: BaseVpcId=${{ steps.vpc.outputs.vpc }} BaseSubnets=${{ steps.vpc.outputs.subnets }}
         run: ./e2e/aws/run.sh bin/kagerou e2e/aws/apigw/kagerou.yaml "$NAME"
 
       # Fargate は動いている間ずっと課金される。取りこぼすと TTL まで回り続ける

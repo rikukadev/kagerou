@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# E2E 用の apigw ベース。**1 回だけ**デプロイして置きっぱなしにする。
+#
+#   aws cloudformation deploy --stack-name kagerou-e2e-apigw-base \
+#     --template-file e2e/aws/apigw/base.yaml --region ap-northeast-1 \
+#     --parameter-overrides VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>
+#
+# なぜベースに分けたか(最初は 1 スタックで自己完結させていた):
+#   VPC Link を環境ごとに作ると、**作成も削除も数分かかるうえ削除が転ぶ**。
+#   実際に CI で `AWS::ApiGatewayV2::VpcLink` の削除が InternalFailure になり、
+#   required check が flaky になった。しかも per-env の VPC Link は
+#   **kagerou が生成しない構成**でもある(apigwbase.yaml.tmpl はベースに置く)。
+#   製品が作らない形を検証していたので、実物に寄せた。
+#
+# ここに置くものは固定費ゼロ: VPC Link は無料、クラスタも空なら無料、
+# 名前空間だけ月 $0.50 程度。環境側は Cloud Map サービス・ECS サービス・
+# HTTP API を作って壊す(どれも作成/削除が無料)。
+#
+# 本番の apigwbase.yaml.tmpl はこれに独自ドメイン(ACM + Route53)を足したもの。
+# E2E は生の execute-api URL を叩くのでドメインは要らない。
+Description: kagerou E2E apigw base - shared VPC Link, Cloud Map namespace and ECS cluster
+
+Parameters:
+  Project:
+    Type: String
+    Default: kagerou-e2e
+    Description: SSM の名前空間。fixture の kagerou.yaml の project と揃える
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: VPC Link とタスクが使うサブネット(2 AZ 以上)
+
+Resources:
+  VpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou e2e shared VPC Link (API Gateway side)
+      VpcId: !Ref VpcId
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: kagerou e2e preview tasks (from the shared VPC Link only)
+      VpcId: !Ref VpcId
+
+  # タスクに届くのは VPC Link だけ。環境同士は繋がらない
+  TaskIngressFromVpcLink:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref VpcLinkSecurityGroup
+
+  VpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "kagerou-e2e-${Project}"
+      SubnetIds: !Ref SubnetIds
+      SecurityGroupIds: [!Ref VpcLinkSecurityGroup]
+
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub "${Project}.kagerou.internal"
+      Vpc: !Ref VpcId
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "kagerou-e2e-${Project}"
+
+  # ベース↔環境のデータ契約(CONTRACT §9)。キー名は apigwbase.yaml.tmpl と同じ
+  SsmVpcLink:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_vpc_link_id"
+      Type: String
+      Value: !Ref VpcLink
+  SsmNamespace:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_namespace_id"
+      Type: String
+      Value: !GetAtt Namespace.Id
+  SsmCluster:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_cluster"
+      Type: String
+      Value: !Ref Cluster
+  SsmVpc:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_vpc_id"
+      Type: String
+      Value: !Ref VpcId
+  SsmSubnets:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_subnets"
+      Type: StringList
+      Value: !Join [",", !Ref SubnetIds]
+  SsmTaskSecurityGroup:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/kagerou/base/${Project}/apigw_task_security_group"
+      Type: String
+      Value: !Ref TaskSecurityGroup
+
+Outputs:
+  VpcLinkId:
+    Value: !Ref VpcLink
+  NamespaceId:
+    Value: !GetAtt Namespace.Id
+  ClusterName:
+    Value: !Ref Cluster

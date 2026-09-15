@@ -13,8 +13,13 @@ AWSTemplateFormatVersion: "2010-09-09"
 # 「デプロイは成功するのに 503 が返る」形で出るので、テンプレートを読んでも
 # 気づけない。実際に叩くところまでやる意味があるのはそこ。
 #
-# この fixture は **1 スタックで自己完結する**(共有ベースを前提にしない)。
-# VPC Link と名前空間も毎回作って壊す — 遅いが、E2E が他の状態に依存しなくなる。
+# VPC Link・名前空間・クラスタ・SG は **共有ベース**(e2e/aws/apigw/base.yaml)の
+# 持ち物で、環境は Cloud Map サービス・ECS サービス・HTTP API だけ作る。
+#
+# 最初は 1 スタックで自己完結させていたが、**per-env の VPC Link は削除が転ぶ**
+# (CI で InternalFailure。required check が flaky になった)うえ、kagerou 自身が
+# 生成しない構成でもある。製品の apigwbase.yaml.tmpl に合わせた。
+#
 # イメージはビルドしない(public ECR の busybox が env を返す)。
 Description: kagerou real-AWS E2E, HTTP API + VPC Link -> Cloud Map -> ECS Fargate
 
@@ -24,55 +29,18 @@ Parameters:
   EnvGreeting:
     Type: String
     Default: ""
-  # 既定 VPC のサブネット。E2E は VPC を作らない(作ると遅いうえ、
-  # 確かめたいのは VPC Link の結線であって VPC の作り方ではない)
+  # ベースが SSM に書いた値。動的参照は Fn::Split の中で展開されないので、
+  # サブネットだけは SSM パラメータ型で受ける(#169 と同じ理由)
   BaseSubnets:
-    Type: List<AWS::EC2::Subnet::Id>
-  BaseVpcId:
-    Type: AWS::EC2::VPC::Id
+    Type: AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
+    Default: /kagerou/base/kagerou-e2e/apigw_subnets
 
 Resources:
-  VpcLinkSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: !Sub "kagerou e2e vpc link (${EnvKagerouEnv})"
-      VpcId: !Ref BaseVpcId
-
-  TaskSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: !Sub "kagerou e2e task (${EnvKagerouEnv})"
-      VpcId: !Ref BaseVpcId
-
-  # タスクに届くのは VPC Link だけ。egress は既定の全許可のまま
-  # (public ECR からイメージを引くために要る)
-  TaskIngressFromVpcLink:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref TaskSecurityGroup
-      IpProtocol: tcp
-      FromPort: 8080
-      ToPort: 8080
-      SourceSecurityGroupId: !Ref VpcLinkSecurityGroup
-
-  VpcLink:
-    Type: AWS::ApiGatewayV2::VpcLink
-    Properties:
-      Name: !Sub "kge2e-${EnvKagerouEnv}"
-      SubnetIds: !Ref BaseSubnets
-      SecurityGroupIds: [!Ref VpcLinkSecurityGroup]
-
-  Namespace:
-    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
-    Properties:
-      Name: !Sub "${EnvKagerouEnv}.kge2e.internal"
-      Vpc: !Ref BaseVpcId
-
   DiscoveryService:
     Type: AWS::ServiceDiscovery::Service
     Properties:
       Name: app
-      NamespaceId: !GetAtt Namespace.Id
+      NamespaceId: "{{resolve:ssm:/kagerou/base/kagerou-e2e/apigw_namespace_id}}"
       DnsConfig:
         DnsRecords:
           # ここが A だとデプロイは通るが 503 になる。SRV でなければならない
@@ -82,11 +50,6 @@ Resources:
       # 環境は消える。登録解除を待たせない
       HealthCheckCustomConfig:
         FailureThreshold: 1
-
-  Cluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: !Sub "kge2e-${EnvKagerouEnv}"
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -142,10 +105,8 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    # VPC Link が使えるようになる前にサービスを作ると登録が宙に浮く
-    DependsOn: [TaskIngressFromVpcLink]
     Properties:
-      Cluster: !Ref Cluster
+      Cluster: "{{resolve:ssm:/kagerou/base/kagerou-e2e/apigw_cluster}}"
       LaunchType: FARGATE
       DesiredCount: 1
       TaskDefinition: !Ref TaskDefinition
@@ -154,7 +115,7 @@ Resources:
           # public サブネット + public IP。NAT を立てずに public ECR を引く
           AssignPublicIp: ENABLED
           Subnets: !Ref BaseSubnets
-          SecurityGroups: [!Ref TaskSecurityGroup]
+          SecurityGroups: ["{{resolve:ssm:/kagerou/base/kagerou-e2e/apigw_task_security_group}}"]
       ServiceRegistries:
         # SRV にはコンテナとポートが要る。落とすと登録できない
         - RegistryArn: !GetAtt DiscoveryService.Arn
@@ -174,7 +135,7 @@ Resources:
       IntegrationType: HTTP_PROXY
       IntegrationMethod: ANY
       ConnectionType: VPC_LINK
-      ConnectionId: !Ref VpcLink
+      ConnectionId: "{{resolve:ssm:/kagerou/base/kagerou-e2e/apigw_vpc_link_id}}"
       IntegrationUri: !GetAtt DiscoveryService.Arn
       PayloadFormatVersion: "1.0"
 
@@ -196,7 +157,7 @@ Outputs:
   KagerouUrl:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
   ClusterName:
-    Value: !Ref Cluster
+    Value: "{{resolve:ssm:/kagerou/base/kagerou-e2e/apigw_cluster}}"
   ServiceName:
     Value: !GetAtt Service.Name
   DiscoveryServiceId:
