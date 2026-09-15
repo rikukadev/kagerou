@@ -147,12 +147,16 @@ func scaffoldFor(f appscan.Facts, e recommend.Entrypoint, dirName string) scaffo
 		Framework:     f.Framework,
 		Port:          f.AppPort,
 		HasDockerfile: f.HasDockerfile,
-		Wants:         f.Wants,
-		URLShape:      f.URLShape,
-		Driver:        "stack",
-		Compute:       "lambda",
-		Entrypoint:    "alb",
-		Domain:        "<your preview domain>",
+		// 予告するファイル名は検出値。ここを落とすと、Dockerfile.lambda の
+		// 構成で「Dockerfile を触る」と予告して別名を触ることになる(#192)
+		DockerfileName: f.DockerfileName,
+		DockerfileDir:  f.DockerfileDir,
+		Wants:          f.Wants,
+		URLShape:       f.URLShape,
+		Driver:         "stack",
+		Compute:        "lambda",
+		Entrypoint:     "alb",
+		Domain:         "<your preview domain>",
 	}
 	// 共有ベース(CloudFront + S3)が要るのは静的成果物を配るときだけ。
 	// 構成図に web の経路が出るときと同じ条件にしてある(図と一覧を食い違わせない)。

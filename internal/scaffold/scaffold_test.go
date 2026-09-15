@@ -816,3 +816,50 @@ func TestRulePriorityIsInjectiveWithinLimits(t *testing.T) {
 		}
 	}
 }
+
+// LWA を Dockerfile.lambda に分けている構成に、雛形を生やしてはいけない(#192)。
+// 「Dockerfile を持っているか」をリテラル名で見ると、既に LWA 入りを持って
+// いるのにもう 1 つ増え、どちらがビルドされるかが workflow 次第になる。
+func TestNoScaffoldWhenOnlyNamedDockerfileExists(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile.lambda"),
+		[]byte("FROM node:22\nEXPOSE 3000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := Params{Project: "web", Region: "r", Framework: "next",
+		HasDockerfile: true, DockerfileName: "Dockerfile.lambda"}
+
+	res, err := Run(dir, p, AllTargets(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
+		t.Error("LWA 入りの Dockerfile.lambda があるのに素の Dockerfile を生やした")
+	}
+	if !contains(res.Skipped, "Dockerfile.lambda") {
+		t.Errorf("既存として skip されるはず: created=%v skipped=%v", res.Created, res.Skipped)
+	}
+
+	// 予告も同じ名前を指す
+	var got string
+	for _, f := range PlannedFiles(p, AllTargets()) {
+		if strings.HasPrefix(f.Path, "Dockerfile") {
+			got = f.Path
+		}
+	}
+	if got != "Dockerfile.lambda" {
+		t.Errorf("PlannedFiles が %q を予告している(検出値と違う)", got)
+	}
+}
+
+// 何も無いリポジトリでは従来どおり雛形を出す。
+func TestScaffoldsDockerfileWhenNoneExists(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Run(dir, Params{Project: "web", Region: "r", Framework: "next"}, AllTargets(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(res.Created, "Dockerfile") {
+		t.Fatalf("雛形が出ていない: %v", res.Created)
+	}
+}
