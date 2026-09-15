@@ -11,6 +11,23 @@ env:
   KAGEROU_ENV: "{name}"
   GREETING: "hello from {name}"
 
+hooks:
+  # Cloud Map の名前空間は、登録インスタンスが残っていると削除できない。
+  # ECS のサービスを消しても **登録解除は非同期で遅れる** ので、CFN が
+  # Namespace の DELETE_FAILED を踏む。1 回目の down が落ちて 2 回目は通る
+  # = required check が flaky になる(実際に踏んだ)。
+  #
+  # タスクを先に落として止まりきるまで待つ。「やらないと削除が失敗する
+  # 前処理」そのもので、pre_down の用途(CONTRACT §7)。
+  pre_down: |
+    set -eu
+    : "${KAGEROU_OUTPUT_CLUSTERNAME:?pre_down に ClusterName が届いていない}"
+    : "${KAGEROU_OUTPUT_SERVICENAME:?pre_down に ServiceName が届いていない}"
+    aws ecs update-service --cluster "$KAGEROU_OUTPUT_CLUSTERNAME" \
+      --service "$KAGEROU_OUTPUT_SERVICENAME" --desired-count 0 >/dev/null
+    aws ecs wait services-stable --cluster "$KAGEROU_OUTPUT_CLUSTERNAME" \
+      --services "$KAGEROU_OUTPUT_SERVICENAME"
+
 # タスクの起動 + Cloud Map への登録 + VPC Link の反映で、200 が返るまで
 # Lambda より明確に遅い。ここを待たずに down すると「作れたが通らない」構成を
 # 緑にしてしまう(この fixture が確かめたいのはまさにそこ)
