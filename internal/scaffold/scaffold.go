@@ -333,7 +333,24 @@ func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 		Owner, Repo, Region, Domain, Project string
 		SetupBase                            bool
 		Routing                              string
-	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase, p.RoutingOrDefault()}
+		// Auth のとき配信ベースは preview-base ではなく edge-base になる。
+		// これを渡さないと、生成されていない preview-base.yaml を deploy
+		// しようとするスクリプトが出る(#194)。
+		Auth       bool
+		AuthDomain string
+		// 入口のベース。deploy はしない(VPC / サブネットの id が要るし、
+		// 認証は client_secret を人が置く)が、**要ることは言う**。
+		// 黙ると、role と ECR だけ出来た状態で最初のプレビューが繋がらない。
+		ALB        bool
+		APIGateway bool
+		Base       bool // 上のどれかがあり、ドメイン/ゾーンの解決が要る
+		// BaseReady は「この時点でベースが在る」と言ってよいか。deploy を人に
+		// 任せた直後に "base https://…" と出すと、まだ開かない URL を出来たものと
+		// して見せることになる。SSM 由来のドメインなら既に在るので出してよい。
+		BaseReady bool
+	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase, p.RoutingOrDefault(),
+		p.Auth, p.AuthDomain, p.ALB(), p.APIGatewayVPCLink(),
+		p.SetupBase || handOff(p), !handOff(p) || p.DomainFromSSM}
 	t, err := template.ParseFS(tmplFS, "templates/setup.sh.tmpl")
 	if err != nil {
 		return "", err
@@ -348,6 +365,14 @@ func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 	}
 	return dst, nil
 }
+
+// handOff は「ベースの deploy を人に渡す」構成か。
+//
+// セットアップが deploy できるのは preview base だけ。ALB / VPC Link は VPC と
+// サブネットの id が要り(チームが既に持っているものに乗る)、認証ベースは
+// コードの同梱に sam が要るうえ client_secret を人が置く。どれも勝手に決めて
+// 作れるものではないので、手順を出して渡す(#194)。
+func handOff(p Params) bool { return p.Auth || p.ALB() || p.APIGatewayVPCLink() }
 
 // SetupMode は AWS セットアップ(role / ECR / variables)をどう扱ったか。
 type SetupMode int
@@ -429,6 +454,17 @@ gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
 				Done: varsDone,
 			},
 		)
+	}
+	if p.Auth {
+		// 認証ベースだけはセットアップが deploy しない(コードの同梱に sam が要り、
+		// client_secret は人が置くもの)。ここに出さないと、認証を選んだ人に
+		// 「やること」が 1 つも見えないまま最初のプレビューが 403 になる(#194)。
+		steps = append(steps, Step{
+			Title: "Deploy the auth base (deploy/edge-base.yaml) and put the OIDC values in SSM",
+			Detail: "sam deploy --template-file deploy/edge-base.yaml --region us-east-1 --capabilities CAPABILITY_IAM\n" +
+				"secrets: /kagerou/edge-auth/<domain>/{issuer,client_id,client_secret,session_secret}\n" +
+				"IdP redirect_uri: https://auth.<domain>/_kagerou/auth/callback (1 本だけ)",
+		})
 	}
 	if p.Sashiki {
 		steps = append(steps,
