@@ -42,7 +42,16 @@ type Facts struct {
 	HasTemplate  bool     // ルートに template.yaml があるか
 	Services     int      // サービス数(compose services / cmd/*/main.go / Dockerfile の最大)
 	ServiceNames []string // 分かる場合のサービス名(cmd/<name>/main.go / compose の services)
-	Realtime     bool     // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
+	// Services2 は **サービスごとの事実**(#184)。ServiceNames は名前しか持たず、
+	// 「どのサービスがどの Dockerfile から来るか」を表現できなかった。
+	//
+	// モノレポ(api/ と web/ が別アプリ)では、生成物が全サービスで同じイメージを
+	// 指してしまう。名前の配列では、そこを直しようがない。
+	//
+	// ServiceNames は残す。1 イメージ複数バイナリ(cmd/*/main.go)の構成では
+	// ディレクトリが分かれないので、こちらには載らない。
+	ServiceFacts []ServiceFact
+	Realtime     bool // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
 	// HealthPath は アプリのヘルスチェック用パス(#165)。LWA の readiness 設定 /
 	// Dockerfile の HEALTHCHECK / compose の healthcheck から拾う。
 	// 空なら見つからなかった("/" しか無い場合も空 = 既定と同じで言う価値がない)
@@ -66,6 +75,24 @@ type Facts struct {
 	//   crossHint    別オリジン前提の傍証(CORS の依存 / 手書きの CORS ヘッダ / *_API_URL)
 	//   devProxyHint 開発時だけのパス分割(vite server.proxy)。localhost の話でしかない
 	pathHint, crossHint, devProxyHint bool
+}
+
+// ServiceFact は 1 サービスぶんの事実。ディレクトリが分かれている構成
+// (モノレポ)でだけ埋まる。
+//
+// **1 イメージ複数バイナリ(cmd/<name>/main.go)はここに載らない。** あれは
+// サービスごとに Dockerfile が分かれないので、ServiceNames のままで足りる。
+// 両方の形が実在するので、どちらかに寄せず並べて持つ。
+type ServiceFact struct {
+	Name string // サービス名(ディレクトリ名、または compose の services のキー)
+	Dir  string // リポジトリルートからの相対。ルート直下なら ""
+	// Dockerfile はこのサービスをビルドするファイル名。LWA が入っているものが
+	// あればそれを優先する(素の Dockerfile が ECS 用、という分け方があるため)。
+	Dockerfile string
+	HasLWA     bool
+	Framework  string // このディレクトリで検出したフレームワーク
+	Port       string // EXPOSE / compose の ports
+	HealthPath string // HEALTHCHECK 等から読めたパス
 }
 
 // Wants は依存関係(package.json / go.mod / compose)から推定した、アプリが
@@ -120,6 +147,27 @@ func Scan(dir string) Facts {
 
 	// CI の workflow はルートにしか無いので walk の外で読む
 	f.PublishesImage, f.ImageRegistry = scanWorkflows(dir)
+
+	// 走査順は os.ReadDir 依存で安定しない。生成物の並び(サービスごとの
+	// パラメータやリスナールール)が実行のたびに入れ替わると差分が読めないので、
+	// ここで固定する。
+	sort.Slice(f.ServiceFacts, func(i, j int) bool {
+		return f.ServiceFacts[i].Dir < f.ServiceFacts[j].Dir
+	})
+	// Services は「1 ディレクトリで見えた最大値」なので、**ディレクトリをまたぐ
+	// モノレポを数えられない**(api/ と web/ がそれぞれ 1 で、最大は 1)。
+	// サービスごとの事実が 2 件以上あるなら、そちらが実際の数。
+	//
+	// 名前も同じ理由で入れ替える。ServiceNames は ALB のホスト規約
+	// <service>-<env> に使われるので、ここがずれると URL がずれる。
+	if len(f.ServiceFacts) > 1 && len(f.ServiceFacts) > f.Services {
+		f.Services = len(f.ServiceFacts)
+		names := make([]string, 0, len(f.ServiceFacts))
+		for _, sf := range f.ServiceFacts {
+			names = append(names, sf.Name)
+		}
+		f.ServiceNames = names
+	}
 
 	// URL 構成の確定。証拠が「デプロイ後の形」をどれだけ直接に語るかの順に見る:
 	//   明示のホスト名 > 本番のパス分割 > 別オリジンの傍証 > 開発時だけのパス分割
@@ -206,6 +254,10 @@ func scanDir(dir, rel string, f *Facts) {
 	}
 	f.Wants = f.Wants.or(wants)
 
+	// サービスごとの事実。**マージ前に**、そのディレクトリで見えたものを記録する。
+	// 既存のフィールドは「先着が勝つ」で 1 つに畳むので、ここを後から復元できない。
+	recordService(dir, rel, fw, f)
+
 	if !f.HasDockerfile {
 		if names := dockerfilesIn(dir); len(names) > 0 {
 			f.HasDockerfile = true
@@ -257,6 +309,48 @@ func scanDir(dir, rel string, f *Facts) {
 		f.Realtime = realtimeUsed(dir)
 	}
 	scanURLShape(dir, f)
+}
+
+// recordService はこのディレクトリを 1 サービスとして記録する。
+//
+// 条件は **Dockerfile を持っていること**。持たないディレクトリまで数えると、
+// ただの置き場(docs/ や scripts/)がサービスになってしまう。
+//
+// ルート直下は記録しない。ルートに Dockerfile があるのは「リポジトリ全体で
+// 1 アプリ」の形で、それは ServiceFacts で表現するものではない。
+func recordService(dir, rel, framework string, f *Facts) {
+	if rel == "" {
+		return
+	}
+	names := dockerfilesIn(dir)
+	if len(names) == 0 {
+		return
+	}
+	sf := ServiceFact{Name: filepath.Base(rel), Dir: rel, Framework: framework}
+	// LWA の入っているものを優先する。素の Dockerfile が ECS 用で、Lambda 用が
+	// 別ファイル、という分け方があるため(#151)
+	sf.Dockerfile = names[0]
+	for _, n := range names {
+		b, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil {
+			continue
+		}
+		src := string(b)
+		if strings.Contains(src, "lambda-adapter") {
+			sf.HasLWA = true
+			sf.Dockerfile = n
+		}
+		if sf.Port == "" {
+			if m := exposeRe.FindAllStringSubmatch(src, -1); len(m) > 0 {
+				sf.Port = m[len(m)-1][1]
+			}
+		}
+	}
+	if sf.Port == "" {
+		sf.Port = composePort(dir)
+	}
+	sf.HealthPath = healthcheckPath(dir, names)
+	f.ServiceFacts = append(f.ServiceFacts, sf)
 }
 
 // serviceCount は「このディレクトリにいくつサービスがあるか」を数える。
