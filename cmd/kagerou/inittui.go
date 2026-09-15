@@ -480,7 +480,11 @@ func (m initModel) View() string {
 		if m.answer("docker") == 0 {
 			b.WriteString("  + Dockerfile: inject Lambda Web Adapter (1 line)\n")
 		}
-		if p.SetupBase {
+		if p.Auth {
+			// 認証ありの配信ベースは edge base。しかもセットアップは deploy しない
+			// (sam と、人が置く client_secret が要る)ので、そう書く(#194)
+			b.WriteString("  + edge base (auth): deploy/edge-base.yaml — deploy は手元で 1 回\n")
+		} else if p.SetupBase {
 			b.WriteString("  + preview base (one-time, us-east-1): https://{name}." + p.Domain + "\n")
 		} else if p.Domain != "" {
 			b.WriteString("  + preview base: reuse " + p.Domain + "\n")

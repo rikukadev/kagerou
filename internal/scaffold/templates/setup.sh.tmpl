@@ -65,18 +65,26 @@ gh variable set AWS_ROLE_ARN   --body "arn:aws:iam::${ACCOUNT}:role/${ROLE}"
 gh variable set AWS_REGION     --body "${REGION}"
 gh variable set ECR_REPOSITORY --body "${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 
-{{- if .SetupBase}}
+{{- if .Base}}
 
-# Preview base — this app's shared CloudFront + wildcard certificate + DNS.
-# One-time per app, in us-east-1 (CloudFront certificate constraint).
-# The template lives in this repository (deploy/preview-base.yaml), so anyone
-# on the repo can update the base later by re-running this deploy (idempotent).
+# --- 共有ベースの情報(以下のブロックで使う) ---
+# ベースは「環境より長生きする入口」で、アプリごとに 1 回だけ用意する。
+# テンプレートはこのリポジトリにあるので、後から誰でも deploy し直せる(冪等)。
 PROJECT="{{.Project}}"
 DOMAIN="{{.Domain}}"
 PARENT="${DOMAIN#*.}"
 ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARENT" \
-  --query "HostedZones[?Name=='${PARENT}.'].Id | [0]" --output text | sed 's#/hostedzone/##')
-if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ]; then
+  --query "HostedZones[?Name=='${PARENT}.'].Id | [0]" --output text 2>/dev/null | sed 's#/hostedzone/##') || ZONE_ID=""
+if [ "$ZONE_ID" = "None" ]; then
+  ZONE_ID=""
+fi
+ZONE_SHOW="${ZONE_ID:-<hosted zone id for ${PARENT}>}"
+{{- end}}
+{{- if and .SetupBase (not .Auth)}}
+
+# Preview base — this app's shared CloudFront + wildcard certificate + DNS.
+# One-time per app, in us-east-1 (CloudFront certificate constraint).
+if [ -z "$ZONE_ID" ]; then
   echo "error: hosted zone for ${PARENT} not found" >&2
   exit 1
 fi
@@ -87,11 +95,80 @@ aws cloudformation deploy --region us-east-1 \
   --parameter-overrides Project="$PROJECT" DomainName="$DOMAIN" HostedZoneId="$ZONE_ID" \
     Routing="{{.Routing}}"
 {{- end}}
+{{- if .ALB}}
+
+# 共有 ALB のベース。**このスクリプトは deploy しない**: VPC とサブネットの id が
+# 要り、そこはチームが既に持っているものに乗る話なので、勝手に選ばない。
+cat <<EOS
+
+next: 共有 ALB のベース(アプリごとに 1 回。既にあれば不要 — 相乗りできる)
+
+  aws cloudformation deploy --stack-name kagerou-alb-base-${PROJECT} \\
+    --template-file deploy/alb-base.yaml \\
+    --parameter-overrides Project=${PROJECT} DomainName=${DOMAIN} \\
+      HostedZoneId=${ZONE_SHOW} VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>
+
+  ALB 1 本で 月 \$18 前後の固定費。環境が増えても同額
+
+EOS
+{{- end}}
+{{- if .APIGateway}}
+
+# HTTP API + VPC Link のベース。ALB と同じ理由でここでは deploy しない。
+cat <<EOS
+
+next: 共有 VPC Link のベース(アプリごとに 1 回。固定費なし)
+
+  aws cloudformation deploy --stack-name kagerou-apigw-base-${PROJECT} \\
+    --template-file deploy/apigw-base.yaml \\
+    --parameter-overrides Project=${PROJECT} DomainName=${DOMAIN} \\
+      HostedZoneId=${ZONE_SHOW} VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>
+
+EOS
+{{- end}}
+{{- if .Auth}}
+
+# Edge base — 認証つきの配信ベース(CloudFront + Lambda@Edge)。
+#
+# **このスクリプトは deploy しない。** 理由は 2 つ:
+#   - Lambda@Edge のコード(deploy/edge-auth/)を同梱するのでパッケージが要る。
+#     aws cloudformation deploy では上げられず sam が要る(このスクリプトの前提は
+#     aws と gh だけ)
+#   - client_secret は人が SecureString として置くもの。先に stack だけ作ると、
+#     ログインが通らない入口が出来上がる
+#
+# 代わりに手順を出す。順番はこの通り(SSM を先に置く)。
+cat <<EOS
+
+next: 認証つきの配信ベース(一度だけ。us-east-1)
+
+  1. OIDC の設定を SSM に置く(client_secret は SecureString)
+     aws ssm put-parameter --region us-east-1 --type String --name /kagerou/edge-auth/${DOMAIN}/issuer --value https://accounts.google.com
+     aws ssm put-parameter --region us-east-1 --type String --name /kagerou/edge-auth/${DOMAIN}/client_id --value <client id>
+     aws ssm put-parameter --region us-east-1 --type SecureString --name /kagerou/edge-auth/${DOMAIN}/client_secret --value <client secret>
+     aws ssm put-parameter --region us-east-1 --type SecureString --name /kagerou/edge-auth/${DOMAIN}/session_secret --value "\$(openssl rand -base64 32)"
+{{- if .AuthDomain}}
+     aws ssm put-parameter --region us-east-1 --type String --name /kagerou/edge-auth/${DOMAIN}/allowed_domain --value {{.AuthDomain}}
+{{- end}}
+
+  2. ベースを deploy する(証明書の検証と配信開始で 15 分ほど)
+     sam deploy --template-file deploy/edge-base.yaml --region us-east-1 \\
+       --stack-name kagerou-edge-base-${PROJECT} --capabilities CAPABILITY_IAM \\
+       --resolve-s3 --parameter-overrides Project=${PROJECT} DomainName=${DOMAIN} \\
+         HostedZoneId=${ZONE_SHOW} Routing={{.Routing}}
+
+  3. IdP に redirect_uri を 1 本だけ登録する
+     https://auth.${DOMAIN}/_kagerou/auth/callback
+
+EOS
+{{- end}}
 
 echo "done:"
 echo "  role  arn:aws:iam::${ACCOUNT}:role/${ROLE}"
 echo "  ecr   ${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${REPO}"
 echo "  vars  AWS_ROLE_ARN / AWS_REGION / ECR_REPOSITORY"
-{{- if .Domain}}
+{{- if and .Domain .BaseReady}}
 echo "  base  https://<name>.{{.Domain}} (routing: {{.Routing}})"
+{{- else if .Domain}}
+echo "  base  未作成 — 上の next: を済ませると https://<name>.{{.Domain}} が開く"
 {{- end}}
