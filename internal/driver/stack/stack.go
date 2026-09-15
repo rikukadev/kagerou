@@ -21,6 +21,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	cfntypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+
+	"github.com/rikukadev/kagerou/internal/albrule"
 )
 
 // タグスキーマは docs/CONTRACT.md §1 で凍結。list / reap(#5, #6)も走査に使う。
@@ -58,6 +60,8 @@ const MaxLifetime = 30 * 24 * time.Hour
 type Driver struct {
 	cfn *cloudformation.Client
 	sts *sts.Client
+	// reserve は共有リスナーの空き優先度を確保する(#189)。テストで差し替える。
+	reserve func(ctx context.Context, listenerARN string, n int, seed string) ([]int, error)
 }
 
 func New(ctx context.Context, region string) (*Driver, error) {
@@ -69,7 +73,13 @@ func New(ctx context.Context, region string) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Driver{cfn: cloudformation.NewFromConfig(cfg), sts: sts.NewFromConfig(cfg)}, nil
+	return &Driver{
+		cfn: cloudformation.NewFromConfig(cfg),
+		sts: sts.NewFromConfig(cfg),
+		reserve: func(ctx context.Context, listenerARN string, n int, seed string) ([]int, error) {
+			return albrule.Reserve(ctx, region, listenerARN, n, seed)
+		},
+	}, nil
 }
 
 // callerOwner は呼び出し元の IAM プリンシパルを kagerou:owner 用に返す。
@@ -123,6 +133,10 @@ type UpInput struct {
 	MaxLifetime  time.Duration     // touch の上限。0 なら既定の MaxLifetime 定数(#51)
 	PeerEnv      string            // peer 連動の解決結果(#99)。EnvPeerEnv に宣言時のみ配送
 	PeerURL      string            // 同・相手 env の URL。EnvPeerUrl に宣言時のみ配送
+	// RuleListener は共有 ALB のリスナー ARN(SSM 契約 §9 由来)。テンプレートが
+	// EnvRulePriority… を宣言していて値が来ていないとき、ここから空きを確保する(#189)。
+	// 空なら確保しない = テンプレートの Default に任せる。
+	RuleListener string
 
 	owner string // Up が STS から解決して埋める(kagerou:owner タグ)
 }
@@ -156,7 +170,7 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 	if err := ValidateSource(in.Source); err != nil {
 		return nil, err
 	}
-	params, err := d.buildAllParams(ctx, in)
+	params, unsetPrio, err := d.buildAllParams(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +223,14 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 		}
 	}
 
+	// リスナールール優先度は create のときだけ確保する。update は今のルールが
+	// 握っている値をそのまま使う(取り直すと自分自身と衝突する。#189)
+	prio, err := d.fillPriorities(ctx, unsetPrio, in, status != "")
+	if err != nil {
+		return nil, err
+	}
+	params = append(params, prio...)
+
 	tags := buildTags(in)
 	caps := []cfntypes.Capability{
 		cfntypes.CapabilityCapabilityIam,
@@ -216,23 +238,42 @@ func (d *Driver) Up(ctx context.Context, in UpInput) (*Info, error) {
 		cfntypes.CapabilityCapabilityAutoExpand,
 	}
 
-	if status == "" { // 存在しない → create
-		_, err = d.cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
+	createOnce := func(params []cfntypes.Parameter) error {
+		if _, err := d.cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
 			StackName:    &in.StackName,
 			TemplateBody: &in.TemplateBody,
 			Parameters:   params,
 			Tags:         tags,
 			Capabilities: caps,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create stack: %w", err)
+		}); err != nil {
+			return fmt.Errorf("create stack: %w", err)
 		}
 		w := cloudformation.NewStackCreateCompleteWaiter(d.cfn)
 		stop := d.startProgress(ctx, "creating", in.StackName)
-		err = w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout)
+		err := w.Wait(ctx, &cloudformation.DescribeStacksInput{StackName: &in.StackName}, waitTimeout)
 		stop()
 		if err != nil {
-			return nil, d.explainWaitFailure(ctx, in.StackName, "create", err)
+			return d.explainWaitFailure(ctx, in.StackName, "create", err)
+		}
+		return nil
+	}
+
+	if status == "" { // 存在しない → create
+		err = createOnce(params)
+		// 同時に走った別の up が同じ空きを先に取ると ALB が PriorityInUse を返す。
+		// 失敗として観測できるので、残骸を消して取り直す(1 回だけ)。
+		if isPriorityTaken(err) && len(unsetPrio) > 0 && in.RuleListener != "" {
+			if derr := d.Down(ctx, in.StackName); derr != nil {
+				return nil, err // 消せないなら元の理由のほうが役に立つ
+			}
+			retry, rerr := d.fillPriorities(ctx, unsetPrio, in, false)
+			if rerr != nil {
+				return nil, err
+			}
+			err = createOnce(append(dropPriorities(params, unsetPrio), retry...))
+		}
+		if err != nil {
+			return nil, err
 		}
 	} else { // 存在する → update(差分なしは成功扱い)
 		updateInput := &cloudformation.UpdateStackInput{
@@ -481,15 +522,21 @@ func isAlnum(r rune) bool {
 
 // buildAllParams は --param に加え、env を Env<Key> パラメータへ写して合流する。
 // テンプレートが宣言していない env キーは黙殺せずエラー(CONTRACT §4)。
-func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Parameter, error) {
+//
+// 併せて「宣言されているのに値が決まっていない」優先度パラメータ名を返す。
+// 埋めるのは create/update が分かってから(#189)。
+func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Parameter, []string, error) {
 	merged := map[string]string{}
 	for k, v := range in.Params {
 		merged[k] = v
 	}
-	if len(in.Env) > 0 || in.URL != "" || in.PeerEnv != "" {
-		declared, err := d.templateParams(ctx, in.TemplateBody)
+	// 優先度を確保する構成では、env が空でもテンプレートの宣言を見に行く必要がある
+	var declared map[string]bool
+	if len(in.Env) > 0 || in.URL != "" || in.PeerEnv != "" || in.RuleListener != "" {
+		var err error
+		declared, err = d.templateParams(ctx, in.TemplateBody)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		// URL は「宣言していれば受け取れる」任意の口(CORS 等で使う。CONTRACT §5)。
 		// env と違い、宣言が無くてもエラーにしない(タグと表示には常に使われる)
@@ -507,7 +554,7 @@ func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Par
 		for k, v := range in.Env {
 			pname, err := EnvParamName(k)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if !declared[pname] {
 				missing = append(missing, fmt.Sprintf("%s (parameter %s)", k, pname))
@@ -517,14 +564,14 @@ func (d *Driver) buildAllParams(ctx context.Context, in UpInput) ([]cfntypes.Par
 		}
 		if len(missing) > 0 {
 			sort.Strings(missing)
-			return nil, fmt.Errorf("template declares no receiving parameter for env: %s — add Env<Key> to the template Parameters (docs/CONTRACT.md §4)", strings.Join(missing, ", "))
+			return nil, nil, fmt.Errorf("template declares no receiving parameter for env: %s — add Env<Key> to the template Parameters (docs/CONTRACT.md §4)", strings.Join(missing, ", "))
 		}
 	}
 	var out []cfntypes.Parameter
 	for k, v := range merged {
 		out = append(out, cfntypes.Parameter{ParameterKey: aws.String(k), ParameterValue: aws.String(v)})
 	}
-	return out, nil
+	return out, unsetPriorityParams(declared, merged), nil
 }
 
 func (d *Driver) templateParams(ctx context.Context, body string) (map[string]bool, error) {

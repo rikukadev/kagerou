@@ -109,16 +109,6 @@ func AllTargets() Targets {
 func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	var res Result
 
-	// 上限を超えると優先度の連結が 2 桁になり、別の環境のルールと衝突する(#187)。
-	// 黙って切り捨てると「テンプレートに出てこないサービス」ができるので、ここで止める。
-	if len(p.Services) > MaxServices {
-		return res, fmt.Errorf("%d services: at most %d can share one environment "+
-			"(the listener-rule priority is built by concatenation, so a two-digit "+
-			"index collides with another PR's rules). Split the repository, or "+
-			"run the extra services as separate kagerou projects",
-			len(p.Services), MaxServices)
-	}
-
 	// これから Dockerfile 雛形を生成する場合、その listen ポートは自分が決める
 	// (variant の既定)。template.yaml の AWS_LWA_PORT にも同じ値を使わないと、
 	// 「雛形は 8080 で listen、LWA は 3000 を見にいく」で最初のデプロイから 502 になる。
@@ -567,18 +557,6 @@ func (p Params) LambdaALB() bool { return p.ALB() && !p.ECS() }
 // 意味を持つ(ホストで分けられるのが ALB の利点。DESIGN §13)。
 func (p Params) MultiService() bool { return p.LambdaALB() && len(p.Services) > 1 }
 
-// MaxServices は 1 環境に立てられるサービス数の上限。
-//
-// リスナールールの優先度は `${EnvRulePriority}${Index}` の **連結** で作る
-// (CloudFormation に算術が無いため)。連結が単射なのは Index の桁数が
-// 揃っているときだけで、2 桁になると別の環境と衝突する(#187):
-//
-//	PR 4  の Index 21 → "4"  + "21" → 421
-//	PR 42 の Index 1  → "42" + "1"  → 421
-//
-// Index を 1 桁に保つことがそのまま上限になる。
-const MaxServices = 10
-
 // PortOrDefault は LWA に渡す listen ポート(検出値、無ければ framework 既定)。
 func (p Params) PortOrDefault() string {
 	if p.Port != "" {
@@ -618,7 +596,10 @@ type ServiceSpec struct {
 	Index   int    // 0,1,2 — リスナールール優先度の枝番
 	Host    string // api-${EnvKagerouEnv}.example.com(!Sub の中で使う)
 	EnvKey  string // API_URL — 他サービスの URL を届ける環境変数名
-	Primary bool   // 環境の代表(url_template が指す先)
+	// Upper は env キーに使うサービス名(API)。優先度を手で固定したい人が
+	// --env RULE_PRIORITY_API と書けるように、生成物へそのまま出す(#189)
+	Upper   string
+	Primary bool // 環境の代表(url_template が指す先)
 }
 
 // primaryNames は「代表サービス」に選ばれやすい名前(先頭が強い)。
@@ -643,11 +624,6 @@ func (p Params) PrimaryService() string {
 func (p Params) ServiceSpecs() []ServiceSpec {
 	primary := p.PrimaryService()
 	svcs := p.Services
-	if len(svcs) > MaxServices {
-		// 黙って切ると「テンプレートに出てこないサービス」ができる。
-		// Run が先に弾くので、ここに来るのは呼び出し側の取りこぼし
-		svcs = svcs[:MaxServices]
-	}
 	out := make([]ServiceSpec, 0, len(svcs))
 	for i, name := range svcs {
 		out = append(out, ServiceSpec{
@@ -656,6 +632,7 @@ func (p Params) ServiceSpecs() []ServiceSpec {
 			Index:   i,
 			Host:    name + "-${EnvKagerouEnv}." + p.Domain,
 			EnvKey:  envKeyFor(name),
+			Upper:   strings.TrimSuffix(envKeyFor(name), "_URL"),
 			Primary: name == primary,
 		})
 	}
