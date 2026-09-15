@@ -65,6 +65,13 @@ type Params struct {
 	// S3 を守れないので、共有ベースは CloudFront + Lambda@Edge の形
 	// (deploy/preview-base.yaml の代わりに deploy/edge-base.yaml)になる。
 	Auth bool
+	// AuthDomain は通す組織のドメイン。ALB には hd として渡すが、hd は
+	// ヒントでしかないので、生成物にはアプリ側で検証する手順も書き出す。
+	AuthDomain string
+	// AuthSecretArn は client_id / client_secret を収めた Secrets Manager の
+	// シークレット。テンプレートは {{resolve:secretsmanager:…}} で読むので、
+	// 秘密はテンプレートにも kagerou.yaml にも載らない(#112)。
+	AuthSecretArn string
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
 	Routing string

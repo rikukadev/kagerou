@@ -403,6 +403,44 @@ NAT 経由 egress の本番乖離を縮めたい場合は、alb-base の `TaskSu
 - `_shared` は project 名として使えない文字(`_`)で始まるので、実在の
   project と衝突しない
 
+### 認証(`auth:`)
+
+`kagerou.yaml` に `auth:` を書くと、プレビューがログインの後ろに入る。
+
+```yaml
+auth:
+  provider: google-oidc
+  domain: example.com   # 任意。通す組織のドメイン
+  secret_arn: arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:kagerou/shop-AbCdEf
+```
+
+**client_secret はここに書けない。** このファイルはコミットされるので、
+置き場は Secrets Manager 固定にしてある(`{"client_id": …, "client_secret": …}`)。
+`auth.client_secret` のようなキーは `kagerou validate` と設定の読み込みが
+理由つきで弾く。
+
+置き場を Secrets Manager にしたのは、SSM の `ssm-secure` 動的参照が
+**11 のリソース型にしか対応しておらず、ELBv2 を含まない**ため。
+`secretsmanager` は「すべてのリソースプロパティで使える」と明記がある。
+
+入口ごとに実装が変わる:
+
+| 入口 | 認証の担い手 | アプリ側のコード |
+|---|---|---|
+| `alb` | ALB の `authenticate-oidc` | 0 行(ただし下の検証は必須) |
+| 静的配信 | CloudFront + Lambda@Edge | 0 行(関数が肩代わり) |
+
+**`domain` を書いても、それだけでは組織外を締め出せない。** ALB には `hd` を
+認可リクエストの追加パラメータとして渡すが、`hd` は**ヒントであって強制ではない**
+(ログイン画面の既定が変わるだけで、他ドメインのアカウントでも認証は通る)。
+最終的な関門はアプリ側で、ALB が付ける `x-amzn-oidc-data`(ALB が署名した JWT)の
+`hd` / `email` クレームを検証すること。生成されるテンプレートは、その手順と
+検証に使う環境変数 `KAGEROU_AUTH_DOMAIN` を書き出す。
+
+デプロイロールには `secretsmanager:GetSecretValue` が要る(CloudFormation が
+動的参照を**デプロイロールの資格情報で**解決するため)。`kagerou iam-policy` が
+テンプレートから導いて、読むシークレットの ARN に絞って出す。
+
 ### 認証つきのベース(edge)
 
 `kagerou init --auth` は preview base の代わりに **edge base**

@@ -407,7 +407,10 @@ func cmdInit(args []string, out *os.File) error {
 	sashiki := fs.Bool("sashiki", false, "include sashiki hooks / DB env")
 	compute := fs.String("compute", "lambda", "how environments run: lambda (LWA, idle $0) | ecs (Fargate + shared ALB)")
 	entrypoint := fs.String("entrypoint", "alb", "how environments are exposed: alb (shared ALB, custom domain) | apigateway (lambda: raw execute-api URL; ecs: HTTP API + VPC Link, no fixed cost)")
-	auth := fs.Bool("auth", false, "put previews behind an OIDC login (CloudFront + Lambda@Edge)")
+	auth := fs.Bool("auth", false, "put previews behind an OIDC login "+
+		"(ALB: authenticate-oidc / static: CloudFront + Lambda@Edge)")
+	authDomain := fs.String("auth-domain", "", "organisation domain allowed to sign in (e.g. example.com)")
+	authSecret := fs.String("auth-secret-arn", "", "Secrets Manager ARN holding client_id / client_secret")
 	domain := fs.String("domain", "", "preview domain (e.g. myapp.example.com). Default: detected from your Route53 zone")
 	force := fs.Bool("force", false, "overwrite kagerou.yaml and workflows (template.yaml is never overwritten)")
 	dir := fs.String("dir", ".", "output directory")
@@ -447,7 +450,8 @@ func cmdInit(args []string, out *os.File) error {
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
 		DockerfileName: det.DockerfileName, DockerfileDir: det.DockerfileDir,
 		Wants: det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
-		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames, Auth: *auth}
+		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames, Auth: *auth,
+		AuthDomain: *authDomain, AuthSecretArn: *authSecret}
 	// routing は preview base から配るときにだけ意味がある。compute が
 	// ルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {

@@ -94,6 +94,26 @@ func ssmParamARNs(paths []string) any {
 	return out
 }
 
+// secretARNs はシークレットの識別子を ARN にする。
+//
+// 名前で書かれていたときに末尾へ "-*" を足すのは、Secrets Manager の ARN が
+// 名前 + 6 文字のランダム接尾辞になるため。ここを付けないと、名前で指定した
+// 構成で必ず AccessDenied になる。
+func secretARNs(ids []string) any {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if strings.HasPrefix(id, "arn:") {
+			out = append(out, id)
+			continue
+		}
+		out = append(out, "arn:aws:secretsmanager:*:*:secret:"+id+"-*")
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return out
+}
+
 func ensureLeadingSlash(p string) string {
 	if strings.HasPrefix(p, "/") {
 		return p
@@ -260,6 +280,16 @@ func Build(o Options) (Policy, error) {
 				"ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource",
 			},
 			Resource: "*",
+		})
+	}
+	if o.Template != nil && len(o.Template.Secrets) > 0 {
+		// SSM と同じ理屈: CloudFormation は {{resolve:secretsmanager:…}} を
+		// **このロールの資格情報で** 解決する。ALB の authenticate-oidc が
+		// client_secret をここから読む(#112)。
+		sts = append(sts, Statement{
+			Sid: "ResolveSecretsManagerReferences", Effect: "Allow",
+			Action:   []string{"secretsmanager:GetSecretValue"},
+			Resource: secretARNs(o.Template.Secrets),
 		})
 	}
 	if o.Template != nil && len(o.Template.SSMParams) > 0 {
