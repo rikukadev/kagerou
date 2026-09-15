@@ -19,7 +19,10 @@
         "cloudformation:UntagResource",
         "cloudformation:UpdateStack"
       ],
-      "Resource": "arn:aws:cloudformation:*:*:stack/kge2e-*/*"
+      "Resource": [
+        "arn:aws:cloudformation:*:*:stack/kge2e-*/*",
+        "arn:aws:cloudformation:*:*:stack/kge2e-alb-*/*"
+      ]
     },
     {
       "Sid": "CloudFormationGlobalReads",
@@ -90,7 +93,10 @@
         "lambda:UpdateFunctionCode",
         "lambda:UpdateFunctionConfiguration"
       ],
-      "Resource": "arn:aws:lambda:*:*:function:kge2e-*"
+      "Resource": [
+        "arn:aws:lambda:*:*:function:kge2e-*",
+        "arn:aws:lambda:*:*:function:kge2e-alb-*"
+      ]
     },
     {
       "Sid": "ExecutionRole",
@@ -110,7 +116,10 @@
         "iam:TagRole",
         "iam:UntagRole"
       ],
-      "Resource": "arn:aws:iam::*:role/kge2e-*"
+      "Resource": [
+        "arn:aws:iam::*:role/kge2e-*",
+        "arn:aws:iam::*:role/kge2e-alb-*"
+      ]
     },
     {
       "Sid": "LogGroups",
@@ -125,7 +134,10 @@
         "logs:TagResource",
         "logs:UntagResource"
       ],
-      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/kge2e-*"
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/aws/lambda/kge2e-*",
+        "arn:aws:logs:*:*:log-group:/aws/lambda/kge2e-alb-*"
+      ]
     },
     {
       "Sid": "HttpApiCompromise",
@@ -257,6 +269,23 @@
       "Resource": "*"
     },
     {
+      "Sid": "ResolveSsmDynamicReferences",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb/alb_dns_name",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb/alb_listener_arn",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_cluster",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_namespace_id",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_subnets",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_task_security_group",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_vpc_link_id"
+      ]
+    },
+    {
       "Sid": "EcsCluster",
       "Effect": "Allow",
       "Action": [
@@ -372,18 +401,6 @@
         "elasticloadbalancing:RemoveTags"
       ],
       "Resource": "*"
-    },
-    {
-      "Sid": "ResolveSsmDynamicReferences",
-      "Effect": "Allow",
-      "Action": [
-        "ssm:GetParameter",
-        "ssm:GetParameters"
-      ],
-      "Resource": [
-        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb/alb_dns_name",
-        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb/alb_listener_arn"
-      ]
     }
   ]
 }

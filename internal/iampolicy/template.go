@@ -156,13 +156,18 @@ type tmplResource struct {
 // ScanTemplate はテンプレート本文から TemplateFacts を作る。
 func ScanTemplate(body []byte) (TemplateFacts, error) {
 	var t struct {
-		Resources map[string]tmplResource `yaml:"Resources"`
+		Resources  map[string]tmplResource  `yaml:"Resources"`
+		Parameters map[string]tmplParameter `yaml:"Parameters"`
 	}
 	if err := yaml.Unmarshal(body, &t); err != nil {
 		return TemplateFacts{}, err
 	}
 	f := TemplateFacts{Counts: map[string]int{}}
 	unknown := map[string]bool{}
+	// SSM パラメータ型(AWS::SSM::Parameter::Value<...>)の Default も、
+	// デプロイ時に **このロールの資格情報で** 解決される。{{resolve:ssm:}} では
+	// ないので本文の走査には引っかからないが、要る権限は同じ
+	scanSSMParameterTypes(t.Parameters, &f)
 	for _, r := range t.Resources {
 		if r.Type == "" {
 			continue
@@ -280,4 +285,40 @@ func nodeValue(n *yaml.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+// tmplParameter は Parameters の 1 つ。型と既定値だけ見る。
+type tmplParameter struct {
+	Type    string `yaml:"Type"`
+	Default string `yaml:"Default"`
+}
+
+// ssmParamTypeRe は SSM パラメータ型。List 版・型指定版も同じ扱い。
+//
+//	AWS::SSM::Parameter::Value<String>
+//	AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
+var ssmParamTypeRe = regexp.MustCompile(`^AWS::SSM::Parameter::Value<.+>$`)
+
+// scanSSMParameterTypes は SSM パラメータ型の Default にあるパスを集める。
+//
+// 動的参照(#171)とは書き方が違うだけで、CFN がデプロイ時にデプロイロールの
+// 資格情報で読む点は同じ。拾わないと ssm:GetParameters が出ず、**スタックの
+// 作成そのものが 400 で落ちる**(compute: ecs の雛形がこの形)。
+func scanSSMParameterTypes(params map[string]tmplParameter, f *TemplateFacts) {
+	seen := map[string]bool{}
+	for _, p := range f.SSMParams {
+		seen[p] = true
+	}
+	for _, p := range params {
+		if !ssmParamTypeRe.MatchString(strings.TrimSpace(p.Type)) {
+			continue
+		}
+		path := strings.TrimSpace(p.Default)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		f.SSMParams = append(f.SSMParams, path)
+	}
+	sort.Strings(f.SSMParams)
 }

@@ -650,3 +650,42 @@ func TestNoECSStatementsWithoutECS(t *testing.T) {
 		}
 	}
 }
+
+// SSM パラメータ型(AWS::SSM::Parameter::Value<...>)の Default も、デプロイ時に
+// デプロイロールの資格情報で解決される。{{resolve:ssm:}} ではないので本文の
+// 走査には引っかからないが、**拾わないとスタック作成そのものが 400 で落ちる**
+// (compute: ecs の雛形がこの形。CI で踏んだ)。
+func TestSSMParameterTypeDefaultsNeedGetParameters(t *testing.T) {
+	f, err := ScanTemplate([]byte(`
+Parameters:
+  BaseSubnets:
+    Type: AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
+    Default: /kagerou/base/todo/alb_subnets
+  Plain:
+    Type: String
+    Default: /not/an/ssm/path
+Resources:
+  Svc:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: "{{resolve:ssm:/kagerou/base/todo/alb_cluster}}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 動的参照とパラメータ型の両方が集まる
+	got := strings.Join(f.SSMParams, ",")
+	for _, want := range []string{"/kagerou/base/todo/alb_subnets", "/kagerou/base/todo/alb_cluster"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("SSMParams に %q が無い: %v", want, f.SSMParams)
+		}
+	}
+	// 素の String パラメータの Default は SSM ではない
+	if strings.Contains(got, "/not/an/ssm/path") {
+		t.Errorf("SSM でない Default を拾っている: %v", f.SSMParams)
+	}
+	s := mustJSON(t, Options{Prefix: "p-", Template: &f})
+	if !strings.Contains(s, "parameter/kagerou/base/todo/alb_subnets") {
+		t.Error("生成ポリシーが subnets のパスを許可していない")
+	}
+}
