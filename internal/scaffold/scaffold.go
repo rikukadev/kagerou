@@ -134,7 +134,7 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	}
 	if sel.Dockerfile && p.Port == "" {
 		if variant, ok := dockerfileVariant(p.Framework); ok {
-			if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+			if !p.hasExistingDockerfile(dir) {
 				p.Port = defaultPort(variant)
 			}
 		}
@@ -162,9 +162,10 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	// static はコンテナを作らないので、そもそも出さない(#81)。
 	if sel.Dockerfile && !p.Static() {
 		if variant, ok := dockerfileVariant(p.Framework); ok {
-			dst := filepath.Join(dir, "Dockerfile")
-			if _, err := os.Stat(dst); err == nil {
-				res.Skipped = append(res.Skipped, "Dockerfile")
+			name := p.DockerfileOrDefault()
+			dst := filepath.Join(dir, name)
+			if p.hasExistingDockerfile(dir) {
+				res.Skipped = append(res.Skipped, name)
 			} else {
 				dp := p
 				if dp.Port == "" {
@@ -173,11 +174,29 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 				if err := renderDockerfile(dst, variant, dp); err != nil {
 					return res, err
 				}
-				res.Created = append(res.Created, "Dockerfile")
+				res.Created = append(res.Created, name)
 			}
 		}
 	}
 	return res, nil
+}
+
+// hasExistingDockerfile は「このリポジトリは既に Dockerfile を持っているか」。
+//
+// リテラルの "Dockerfile" を stat してはいけない。LWA を Dockerfile.lambda に
+// 分けている構成では素の Dockerfile が無く、**既に LWA 入りを持っているのに
+// 雛形をもう 1 つ生やす**(#192)。どちらがビルドされるかは workflow 次第なので、
+// 利用者が気づかないまま意図しないほうが使われる。
+//
+// 検出結果(HasDockerfile / DockerfileName)を先に信じ、ディスクは
+// その名前でだけ確かめる。Params が検出を経ていない呼び出し(テスト等)でも
+// 落ちないよう、名前が空なら既定の "Dockerfile" を見る。
+func (p Params) hasExistingDockerfile(dir string) bool {
+	if p.HasDockerfile {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(dir, p.DockerfileOrDefault()))
+	return err == nil
 }
 
 // fileSpec は init が書き出すファイル 1 件。
@@ -261,7 +280,10 @@ func PlannedFiles(p Params, sel Targets) []PlannedFile {
 			case p.HasDockerfile:
 				note = "既存。Lambda Web Adapter の 1 行だけ足す(上書きしない)"
 			}
-			out = append(out, PlannedFile{Path: "Dockerfile", Note: note})
+			// 予告するファイル名も検出値に合わせる。ここを "Dockerfile" 固定に
+			// すると、Dockerfile.lambda の構成で「触らない」と言いながら
+			// 別名のファイルが生えたように読める(#192)
+			out = append(out, PlannedFile{Path: p.DockerfileOrDefault(), Note: note})
 		}
 	}
 	return out
