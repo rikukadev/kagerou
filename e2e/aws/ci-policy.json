@@ -276,8 +276,8 @@
         "ssm:GetParameters"
       ],
       "Resource": [
-        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb/alb_dns_name",
-        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb/alb_listener_arn",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb-*/alb_dns_name",
+        "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e-alb-*/alb_listener_arn",
         "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_cluster",
         "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_namespace_id",
         "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_subnets",
