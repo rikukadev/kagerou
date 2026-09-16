@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.14.0](https://github.com/rikukadev/kagerou/compare/v0.13.0...v0.14.0) (2026-09-16)
+
+
+### Features
+
+* **alb:** リスナールール優先度を up のたびに確保する(PR 番号から導くのをやめる) ([#204](https://github.com/rikukadev/kagerou/issues/204)) ([f25eb85](https://github.com/rikukadev/kagerou/commit/f25eb8509a2fe2d2d5e399adb498e775ab2fa6ea)), closes [#189](https://github.com/rikukadev/kagerou/issues/189)
+* **appscan:** サービスごとの事実を持つ ([#184](https://github.com/rikukadev/kagerou/issues/184) の 1/4) ([#215](https://github.com/rikukadev/kagerou/issues/215)) ([ea395af](https://github.com/rikukadev/kagerou/commit/ea395af17a36e0b761b61352f1611c9a3f70d1dc))
+* **init:** 生成物にバージョンを埋め、validate が古さを警告する ([cbb457b](https://github.com/rikukadev/kagerou/commit/cbb457b2a3578826372521a4105092849b2d2b18)), closes [#207](https://github.com/rikukadev/kagerou/issues/207)
+* **multi:** build each service from its own Dockerfile ([#221](https://github.com/rikukadev/kagerou/issues/221)) ([62dc03f](https://github.com/rikukadev/kagerou/commit/62dc03fdc191750be4ef7683805122d23564c4e5))
+* **upgrade:** report generated files that no longer match this kagerou ([#218](https://github.com/rikukadev/kagerou/issues/218)) ([2f8e17a](https://github.com/rikukadev/kagerou/commit/2f8e17a0c4d813870a2fe9f273bc793eb9775019))
+
+
+### Bug Fixes
+
+* **capacity:** 1 環境あたりの消費量をテンプレートから数える(複数サービスで N 倍に見えていた) ([#201](https://github.com/rikukadev/kagerou/issues/201)) ([9cc0b45](https://github.com/rikukadev/kagerou/commit/9cc0b453daadcace2245b4559b530a38622c235d)), closes [#188](https://github.com/rikukadev/kagerou/issues/188)
+* **ci:** ship v5 of the credentials action, document fork PRs, sweep E2E leftovers ([#214](https://github.com/rikukadev/kagerou/issues/214)) ([3b19988](https://github.com/rikukadev/kagerou/commit/3b199882d0d96d5f2c15b3af59ba54687453597f))
+* **e2e-alb:** keep the fixture's project tag fixed so the nightly sweep can reap it ([#220](https://github.com/rikukadev/kagerou/issues/220)) ([ac19404](https://github.com/rikukadev/kagerou/commit/ac1940472b3f06bc987563f9dc4da77259767c7f))
+
 ## [0.13.0](https://github.com/rikukadev/kagerou/compare/v0.12.0...v0.13.0) (2026-09-15)
 
 
