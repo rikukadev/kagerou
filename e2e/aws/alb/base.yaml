@@ -20,6 +20,9 @@ Parameters:
   Project:
     Type: String
     Default: kagerou-e2e-alb
+    # CI は run ごとの値(kagerou-e2e-alb-<run_id>)を渡し、template.yaml の
+    # {{resolve:ssm}} も同じ語に置換する。こうしないと並行する run が同じ
+    # 契約パスを奪い合うので、job を直列化するしかなくなる(#210)
     Description: SSM 契約の名前空間。環境テンプレート側の {{resolve:ssm}} と一致させること
   VpcId:
     Type: AWS::EC2::VPC::Id
