@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -404,9 +403,10 @@ func TestScaffoldComputeECS(t *testing.T) {
 	if strings.Contains(ky, "packaged.yaml") {
 		t.Error("ecs では sam package を前提にしてはいけない")
 	}
-	// preview workflow: docker push + IMAGE_URI/RULE_PRIORITY を kagerou に渡す
+	// preview workflow: docker push + IMAGE_URI を kagerou に渡す
+	// (優先度は渡さない。kagerou が up のたびに確保する。#189)
 	pv := read(t, dir, ".github/workflows/kagerou-preview.yml")
-	for _, want := range []string{"docker push", "IMAGE_URI=", "RULE_PRIORITY="} {
+	for _, want := range []string{"docker push", "IMAGE_URI="} {
 		if !strings.Contains(pv, want) {
 			t.Errorf("ecs preview.yml missing %q", want)
 		}
@@ -496,9 +496,14 @@ func TestScaffoldLambdaOnALB(t *testing.T) {
 	if !strings.Contains(ky, "ttl: 72h") {
 		t.Error("lambda はアイドル $0 なので TTL は 72h のまま")
 	}
+	// 優先度を workflow から渡さない(kagerou が確保する。#189)。
+	// lambda は CI でイメージを push しないので IMAGE_URI も渡らない
 	pv := read(t, dir, ".github/workflows/kagerou-preview.yml")
-	if !strings.Contains(pv, "RULE_PRIORITY=") || strings.Contains(pv, "IMAGE_URI=") {
-		t.Errorf("lambda+alb workflow: RULE_PRIORITY だけ渡すはず:\n%s", pv)
+	if strings.Contains(pv, "RULE_PRIORITY=") || strings.Contains(pv, "IMAGE_URI=") {
+		t.Errorf("lambda+alb workflow が env を渡している:\n%s", pv)
+	}
+	if strings.Contains(pv, "% 4999") {
+		t.Errorf("PR 番号から優先度を導く step が残っている:\n%s", pv)
 	}
 }
 
@@ -541,9 +546,12 @@ func TestScaffoldMultiServiceOnALB(t *testing.T) {
 		// ホストで分ける(パス分割しない)
 		`api-${EnvKagerouEnv}.shop.example.com`,
 		`gateway-${EnvKagerouEnv}.shop.example.com`,
-		// 優先度は base + 枝番
-		`Priority: !Sub "${EnvRulePriority}0"`,
-		`Priority: !Sub "${EnvRulePriority}2"`,
+		// 優先度はサービスごとの独立したパラメータ。kagerou が up のたびに
+		// 共有リスナーの空きから確保する(#189。枝番の連結はやめた)
+		"Priority: !Ref EnvRulePriorityApi",
+		"Priority: !Ref EnvRulePriorityWorker",
+		"EnvRulePriorityGateway:",
+		"RULE_PRIORITY_GATEWAY", // 手で固定したい人向けの案内
 		// 相互に URL が届く(発見のための設定が要らない)
 		"API_URL:", "GATEWAY_URL:", "WORKER_URL:",
 	} {
@@ -766,54 +774,38 @@ func TestMultiServiceTemplateUsesDetectedDockerfile(t *testing.T) {
 	}
 }
 
-// 優先度は `${EnvRulePriority}${Index}` の連結で作る(CFN に算術が無い)。
-// 連結が単射なのは Index が 1 桁のときだけなので、そこを上限として固定する(#187)。
-func TestServiceCountIsCappedForPriority(t *testing.T) {
-	names := make([]string, MaxServices+1)
+// サービス数に上限は無い(#189)。優先度はサービスごとの独立したパラメータに
+// なり、kagerou が up のたびに空きを確保するので、枝番を 1 桁に保つ必要が消えた。
+// かつては 10 個で弾いていた(#187)。
+func TestManyServicesGetTheirOwnPriorityParameter(t *testing.T) {
+	names := make([]string, 12)
 	for i := range names {
 		names[i] = fmt.Sprintf("svc%d", i)
 	}
+	dir := t.TempDir()
 	p := Params{Project: "relay", Region: "r", Entrypoint: "alb",
 		Domain: "relay.example.com", Services: names}
-	_, err := Run(t.TempDir(), p, AllTargets(), false)
-	if err == nil {
-		t.Fatal("上限を超えたサービス数を受け入れている(優先度が衝突する)")
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatalf("12 サービスが通らない: %v", err)
 	}
-	if !strings.Contains(err.Error(), "at most") {
-		t.Fatalf("理由が伝わらない: %v", err)
-	}
-
-	// 上限ちょうどは通り、Index は 1 桁に収まる
-	ok := p
-	ok.Services = names[:MaxServices]
-	if _, err := Run(t.TempDir(), ok, AllTargets(), false); err != nil {
-		t.Fatalf("上限ちょうどは通るはず: %v", err)
-	}
-	for _, s := range ok.ServiceSpecs() {
-		if s.Index > 9 {
-			t.Fatalf("Index が 2 桁になっている: %d", s.Index)
+	tp := read(t, dir, "template.yaml")
+	seen := map[string]bool{}
+	for _, spec := range p.ServiceSpecs() {
+		param := "EnvRulePriority" + spec.Logical
+		if !strings.Contains(tp, param+":") {
+			t.Errorf("%s のパラメータが無い", spec.Name)
 		}
-	}
-}
-
-// 連結が単射であること自体を、上限の範囲で総当たりして固定する。
-func TestRulePriorityIsInjectiveWithinLimits(t *testing.T) {
-	seen := map[int]string{}
-	for base := 1; base <= 4999; base++ { // workflow が mod で畳む範囲
-		for idx := 0; idx < MaxServices; idx++ {
-			prio, err := strconv.Atoi(fmt.Sprintf("%d%d", base, idx))
-			if err != nil {
-				t.Fatal(err)
-			}
-			key := fmt.Sprintf("base=%d idx=%d", base, idx)
-			if prev, dup := seen[prio]; dup {
-				t.Fatalf("優先度 %d が衝突: %s と %s", prio, prev, key)
-			}
-			if prio < 1 || prio > 50000 {
-				t.Fatalf("優先度 %d が ALB の範囲 1..50000 を外れる (%s)", prio, key)
-			}
-			seen[prio] = key
+		if !strings.Contains(tp, "Priority: !Ref "+param) {
+			t.Errorf("%s のルールが自分のパラメータを参照していない", spec.Name)
 		}
+		if seen[param] {
+			t.Errorf("パラメータ名が衝突している: %s", param)
+		}
+		seen[param] = true
+	}
+	// 連結をやめたので、枝番はテンプレートに出てこない
+	if strings.Contains(tp, "${EnvRulePriority}") {
+		t.Error("優先度の連結が残っている")
 	}
 }
 

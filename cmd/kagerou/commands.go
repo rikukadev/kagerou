@@ -164,6 +164,7 @@ func cmdUp(args []string, out *os.File) error {
 		return err
 	}
 	info, err := drv.Up(ctx, stack.UpInput{
+		RuleListener: ruleListener(ctx, cfg, f.cfgPath),
 		StackName:    cfg.StackName(f.name),
 		Name:         f.name,
 		Project:      cfg.Project,
@@ -1136,4 +1137,20 @@ var lookupRepoIDs = func(repo string) (ownerID, repoID string, ok bool) {
 		return "", "", false
 	}
 	return o, r, true
+}
+
+// ruleListener は「優先度の確保に使う共有 ALB のリスナー」を返す(#189)。
+//
+// テンプレートがリスナールールを作る構成のときだけ SSM を引く。ALB を使わない
+// 構成(static / HTTP API 入口)で毎回問い合わせると、要らない待ちが増えるため。
+// 引けなければ空 — 確保はせず、テンプレートの Default に任せる(従来どおり)。
+func ruleListener(ctx context.Context, cfg config.Config, cfgPath string) string {
+	facts := loadTemplateFacts(cfg.Template, cfgPath)
+	if facts == nil || facts.Counts["AWS::ElasticLoadBalancingV2::ListenerRule"] == 0 {
+		return ""
+	}
+	if cfg.Project == "" {
+		return ""
+	}
+	return lookupListenerARN(ctx, cfg.Region, cfg.Project)
 }
