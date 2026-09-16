@@ -249,6 +249,8 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 		p.Compute = "lambda"
 	}
 	p.Services = m.det.Facts.ServiceNames
+	// サービスごとの Dockerfile(#184)。無ければ 1 イメージ複数バイナリとして扱う
+	p.ServiceFacts = m.det.Facts.ServiceFacts
 	// routing は preview base から配るときにだけ意味がある(#86)。
 	// compute がルーティングを持つ構成で渡すと、設定と実際がずれる。
 	if p.Static() {

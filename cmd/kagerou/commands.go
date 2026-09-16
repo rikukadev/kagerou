@@ -458,7 +458,11 @@ func cmdInit(args []string, out *os.File) error {
 		// 起動は止まらない。検査として黙って無意味になる
 		HealthPath: det.HealthPath,
 		Wants:      det.Wants, Driver: scaffold.DriverFor(det), Compute: *compute, Entrypoint: *entrypoint,
-		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames, Auth: *auth,
+		URLShape: det.Facts.URLShape, Services: det.Facts.ServiceNames,
+		// サービスごとの Dockerfile(#184)。名前だけでは「どのサービスが
+		// どのイメージから来るか」を持てず、multi 版が全サービスに同じ
+		// イメージを指してしまう
+		ServiceFacts: det.Facts.ServiceFacts, Auth: *auth,
 		AuthDomain: *authDomain, AuthSecretArn: *authSecret,
 		Memory: *memory, Timeout: *timeout}
 	// routing は preview base から配るときにだけ意味がある。compute が

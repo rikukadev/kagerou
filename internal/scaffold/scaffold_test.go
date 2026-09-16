@@ -962,3 +962,100 @@ func TestParseGenRecordAbsent(t *testing.T) {
 		t.Error("無い記録を読めたことにしている")
 	}
 }
+
+// #184 2/4: モノレポでサービスごとに Dockerfile がある構成。
+//
+// ここが壊れると「複数サービスを検出 → multi 版を生成」まで通ったうえで、
+// 出てくるテンプレートが全サービスに同じイメージを指す。生成後に手で書き直す
+// ことになり、それなら最初から手で書くのと変わらない。
+func TestMultiServiceUsesEachServiceOwnDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "shop", Region: "r", Compute: "lambda", Entrypoint: "alb",
+		Domain: "shop.example.com",
+		// ルートの検出値。サービスごとの事実があるほうが優先される
+		DockerfileName: "Dockerfile", Port: "3000",
+		Services: []string{"api", "web"},
+		ServiceFacts: []appscan.ServiceFact{
+			{Name: "api", Dir: "api", Dockerfile: "Dockerfile.lambda", Port: "8080", HealthPath: "/api/health"},
+			{Name: "web", Dir: "web", Dockerfile: "Dockerfile"},
+		}}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		"DockerContext: ./api",
+		"Dockerfile: Dockerfile.lambda",
+		"DockerContext: ./web",
+		// 検出できたぶんはサービスごとの値になる
+		`AWS_LWA_PORT: "8080"`,
+		"AWS_LWA_READINESS_CHECK_PATH: /api/health",
+		// web は自分の値が無いのでルートの検出値に落ちる
+		`AWS_LWA_PORT: "3000"`,
+		"AWS_LWA_READINESS_CHECK_PATH: /healthz",
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("サービスごとのビルド元が出ていない %q:\n%s", want, tp)
+		}
+	}
+	// サービス専用のイメージなら entrypoint はイメージ側が持つ。Command を
+	// 被せるとそちらが無視されるので出さない
+	if strings.Contains(tp, "ImageConfig") {
+		t.Errorf("Dockerfile が分かれているのに ImageConfig.Command を出している:\n%s", tp)
+	}
+}
+
+// 1 イメージ複数バイナリ(cmd/<name>/main.go)は従来どおり。#184 の受け入れ条件。
+func TestMultiServiceWithoutPerServiceDockerfileKeepsSharedImage(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "shop", Region: "r", Compute: "lambda", Entrypoint: "alb",
+		Domain: "shop.example.com", Port: "8080",
+		Services: []string{"api", "worker"}} // ServiceFacts は空
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	tp := read(t, dir, "template.yaml")
+	for _, want := range []string{
+		`Command: ["/api"]`, `Command: ["/worker"]`,
+		"DockerContext: .", "Dockerfile: Dockerfile",
+	} {
+		if !strings.Contains(tp, want) {
+			t.Errorf("共有イメージの形が崩れている %q:\n%s", want, tp)
+		}
+	}
+	if strings.Contains(tp, "DockerContext: ./") {
+		t.Errorf("サービスごとのコンテキストを出してはいけない:\n%s", tp)
+	}
+}
+
+// 事実はあるが Dockerfile が無い(compose の image: 指定など)。ディレクトリだけを
+// コンテキストにすると、存在しない Dockerfile をビルドしにいく。
+func TestServiceFactWithoutDockerfileFallsBackToRoot(t *testing.T) {
+	p := Params{Project: "shop", Domain: "shop.example.com", Entrypoint: "alb",
+		DockerfileName: "Dockerfile.lambda",
+		Services:       []string{"api"},
+		ServiceFacts:   []appscan.ServiceFact{{Name: "api", Dir: "api"}}}
+	got := p.ServiceSpecs()[0]
+	if !got.SharedImage {
+		t.Error("Dockerfile の無い事実は共有イメージ扱いにするはず")
+	}
+	if got.DockerContext != "." || got.Dockerfile != "Dockerfile.lambda" {
+		t.Errorf("ルートの値に落ちていない: context=%q dockerfile=%q", got.DockerContext, got.Dockerfile)
+	}
+}
+
+// 生成記録(#207)は Params の JSON。古い記録には serviceFacts が無いので、
+// 読み直したときに共有イメージの形へ落ちること — つまり v0.13 以前に生成した
+// リポジトリで upgrade --check が幻の差分を出さないこと。
+func TestGenRecordWithoutServiceFactsStaysSharedImage(t *testing.T) {
+	body := []byte(`# kagerou:generated {"project":"shop","domain":"shop.example.com","entrypoint":"alb","services":["api","web"]}`)
+	p, ok := ParseGenRecord(body)
+	if !ok {
+		t.Fatal("記録を読めていない")
+	}
+	for _, s := range p.ServiceSpecs() {
+		if !s.SharedImage {
+			t.Errorf("%s: 記録に serviceFacts が無いなら共有イメージのはず", s.Name)
+		}
+	}
+}

@@ -62,6 +62,14 @@ type Params struct {
 	// ALB 入口では 1 環境の中で **ホストで分ける**(<service>-<env>.<domain>)。
 	// パス分割を採らないのは DESIGN §10/§13 の決定。
 	Services []string `json:"services,omitempty"`
+	// ServiceFacts は「サービスごとにディレクトリと Dockerfile が分かれている」
+	// 構成でだけ埋まる(#184)。Services と**どちらか一方ではない**: 名前の並びは
+	// Services が持ち、その名前にビルド元があるかをここで引く。
+	//
+	// 空のままなら 1 イメージ複数バイナリ(cmd/<name>/main.go)の構成として
+	// 扱い、従来どおり全サービスが同じイメージを ImageConfig.Command で
+	// 使い分ける。両方の形が実在するので、どちらかに寄せない。
+	ServiceFacts []appscan.ServiceFact `json:"serviceFacts,omitempty"`
 	// Dist は static のときに同期する成果物ディレクトリ。
 	Dist string `json:"dist,omitempty"`
 	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
@@ -642,11 +650,15 @@ func (p Params) DockerfileOrDefault() string {
 // SAM は DockerContext をテンプレートからの相対、Dockerfile をその
 // DockerContext からの相対で解決する。モノレポで api/Dockerfile を検出したなら
 // コンテキストも api/ を指さないと、ビルドが別の場所を見る。
-func (p Params) DockerContext() string {
-	if p.DockerfileDir == "" {
-		return "."
+func (p Params) DockerContext() string { return dockerContextFor(p.DockerfileDir) }
+
+// HealthPathOrDefault は LWA の readiness チェック先。検出できなければ
+// 従来どおり /healthz(#182)。
+func (p Params) HealthPathOrDefault() string {
+	if p.HealthPath != "" {
+		return p.HealthPath
 	}
-	return "./" + filepath.ToSlash(p.DockerfileDir)
+	return "/healthz"
 }
 
 // ServiceSpec はテンプレートに渡す 1 サービスぶんの値。
@@ -660,6 +672,18 @@ type ServiceSpec struct {
 	// --env RULE_PRIORITY_API と書けるように、生成物へそのまま出す(#189)
 	Upper   string
 	Primary bool // 環境の代表(url_template が指す先)
+
+	// ここから下はサービスごとのビルド元(#184)。ServiceFacts に対応する
+	// 事実があればそれ、無ければルートの検出値に落ちる。
+	DockerContext string // ./api — SAM はテンプレートからの相対で解決する
+	Dockerfile    string // Dockerfile.lambda — DockerContext からの相対
+	// SharedImage は全サービスが 1 つのイメージを共有する構成か。
+	// true のときだけ ImageConfig.Command でバイナリを使い分ける。
+	// サービスごとに Dockerfile があるならイメージ側の entrypoint が正しく、
+	// Command を被せると**そちらが無視される**ので出さない。
+	SharedImage bool
+	Port        string // このサービスの listen ポート
+	HealthPath  string // LWA の readiness チェック先
 }
 
 // primaryNames は「代表サービス」に選ばれやすい名前(先頭が強い)。
@@ -686,7 +710,7 @@ func (p Params) ServiceSpecs() []ServiceSpec {
 	svcs := p.Services
 	out := make([]ServiceSpec, 0, len(svcs))
 	for i, name := range svcs {
-		out = append(out, ServiceSpec{
+		s := ServiceSpec{
 			Name:    name,
 			Logical: logicalID(name),
 			Index:   i,
@@ -694,9 +718,53 @@ func (p Params) ServiceSpecs() []ServiceSpec {
 			EnvKey:  envKeyFor(name),
 			Upper:   strings.TrimSuffix(envKeyFor(name), "_URL"),
 			Primary: name == primary,
-		})
+		}
+		s.applySource(p, p.serviceFact(name))
+		out = append(out, s)
 	}
 	return out
+}
+
+// serviceFact は名前でサービスの事実を引く。無ければ nil。
+func (p Params) serviceFact(name string) *appscan.ServiceFact {
+	for i := range p.ServiceFacts {
+		if p.ServiceFacts[i].Name == name {
+			return &p.ServiceFacts[i]
+		}
+	}
+	return nil
+}
+
+// applySource はビルド元と検出値を埋める。サービスごとの事実が無い、または
+// あっても Dockerfile が無いなら、ルートの値に落として SharedImage にする。
+//
+// 「事実があるのに Dockerfile が無い」は起こりうる(compose の image: 指定など)。
+// そのときにサービスのディレクトリだけを DockerContext にすると、存在しない
+// Dockerfile をビルドしにいくので、ルートごと落とす。
+func (s *ServiceSpec) applySource(p Params, f *appscan.ServiceFact) {
+	s.Port, s.HealthPath = p.PortOrDefault(), p.HealthPathOrDefault()
+	if f != nil {
+		if f.Port != "" {
+			s.Port = f.Port
+		}
+		if f.HealthPath != "" {
+			s.HealthPath = f.HealthPath
+		}
+	}
+	if f == nil || f.Dockerfile == "" {
+		s.DockerContext, s.Dockerfile = p.DockerContext(), p.DockerfileOrDefault()
+		s.SharedImage = true
+		return
+	}
+	s.DockerContext, s.Dockerfile = dockerContextFor(f.Dir), f.Dockerfile
+}
+
+// dockerContextFor はリポジトリ相対のディレクトリを SAM の DockerContext に直す。
+func dockerContextFor(dir string) string {
+	if dir == "" {
+		return "."
+	}
+	return "./" + filepath.ToSlash(dir)
 }
 
 // logicalID は CFN の論理 ID に使える形(英数字のみ・先頭大文字)に直す。
