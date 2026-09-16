@@ -38,6 +38,10 @@ func TestE2EPolicyMatchesGenerated(t *testing.T) {
 		"--config", "e2e/aws/worker/kagerou.yaml",
 		"--config", "e2e/aws/apigw/kagerou.yaml",
 		"--config", "e2e/aws/alb/kagerou.yaml",
+		// ベースは kagerou.yaml から指されていないが CI がデプロイする。
+		// 含めないと、ベースが作る SSM / ALB の権限が生成側から抜ける
+		"--template", "e2e/aws/alb/base.yaml",
+		"--template", "e2e/aws/apigw/base.yaml",
 		"--check", "e2e/aws/ci-policy.json",
 	}, out)
 	if err != nil {

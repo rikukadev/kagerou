@@ -3,6 +3,7 @@
 package scaffold
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"github.com/rikukadev/kagerou/internal/genstamp"
@@ -31,23 +32,23 @@ func parseTmpl(name string) (*template.Template, error) {
 }
 
 type Params struct {
-	Project       string
-	Region        string
-	Sashiki       bool   // sashiki 併用の hooks / DB env を含める
-	Port          string // アプリの listen ポート(検出値。空なら framework 既定)
-	HasDockerfile bool   // 既存 Dockerfile を使う(template の TODO 文言が変わる)
+	Project       string `json:"project,omitempty"`
+	Region        string `json:"region,omitempty"`
+	Sashiki       bool   `json:"sashiki,omitempty"`       // sashiki 併用の hooks / DB env を含める
+	Port          string `json:"port,omitempty"`          // アプリの listen ポート(検出値。空なら framework 既定)
+	HasDockerfile bool   `json:"hasDockerfile,omitempty"` // 既存 Dockerfile を使う(template の TODO 文言が変わる)
 	// DockerfileName は template.yaml がビルドに使うファイル名(既定 "Dockerfile")。
 	// LWA を `Dockerfile.lambda` に分ける構成があるので、検出した名前をそのまま
 	// 生成物に流す。ここを固定にすると、LWA の無いイメージが Lambda に載る(#160)。
-	DockerfileName string
+	DockerfileName string `json:"dockerfileName,omitempty"`
 	// DockerfileDir は Dockerfile のあるディレクトリ(ルートからの相対)。
 	// モノレポでは api/ 等に置かれるので、ビルドコンテキストもそこを指す。
-	DockerfileDir string
-	Framework     string // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
-	Driver        string // "stack"(既定)/ "static"
+	DockerfileDir string `json:"dockerfileDir,omitempty"`
+	Framework     string `json:"framework,omitempty"` // 検出フレームワーク(Dockerfile 雛形の選択に使う。#61)
+	Driver        string `json:"driver,omitempty"`    // "stack"(既定)/ "static"
 	// Compute は stack driver の実行形。"lambda"(既定: LWA で包む、アイドル $0)
 	// または "ecs"(Fargate + 共有 ALB。常駐プロセスやサイドカーが要るアプリ向け)。
-	Compute string
+	Compute string `json:"compute,omitempty"`
 	// Entrypoint は環境を公開する入口。"alb"(既定: 共有 ALB。独自ドメインで
 	// 配る)または "apigateway"。
 	//
@@ -56,49 +57,49 @@ type Params struct {
 	//   ecs    … HTTP API + VPC Link + Cloud Map(固定費ゼロの ALB 代替)
 	// どちらも「HTTP API から公開する」という点で同じで、ALB の固定費を
 	// 持たない代わりにリクエストが 30 秒で切れる。
-	Entrypoint string
+	Entrypoint string `json:"entrypoint,omitempty"`
 	// Services は appscan が見つけたサービス名(cmd/<name>/main.go 等)。
 	// ALB 入口では 1 環境の中で **ホストで分ける**(<service>-<env>.<domain>)。
 	// パス分割を採らないのは DESIGN §10/§13 の決定。
-	Services []string
+	Services []string `json:"services,omitempty"`
 	// Dist は static のときに同期する成果物ディレクトリ。
-	Dist string
+	Dist string `json:"dist,omitempty"`
 	// BaseBucket は検出済み preview base のバケット。空なら TODO を書き出す。
-	BaseBucket string
-	Domain     string // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
+	BaseBucket string `json:"baseBucket,omitempty"`
+	Domain     string `json:"domain,omitempty"` // プレビュードメイン(例 preview.example.com)。空なら生 AWS URL 運用
 	// DomainFromSSM は Domain が既存ベースの SSM キー(§9)由来であることを示す。
 	// このときだけ kagerou.yaml に {base_domain} を書ける — 書いた先が実在する
 	// と分かっているため(#139)。
-	DomainFromSSM bool
+	DomainFromSSM bool `json:"domainFromSSM,omitempty"`
 	// HealthPath はアプリのヘルスチェック用パス(appscan 検出、#165)。
 	// readiness の既定 "/" はルートが重い SSR で無駄に遅く、リダイレクトする
 	// アプリでは誤判定する。**検出できたときだけ** readiness_path に書く。
-	HealthPath string
-	SetupBase  bool // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
+	HealthPath string `json:"healthPath,omitempty"`
+	SetupBase  bool   `json:"setupBase,omitempty"` // preview base をこれから作る(deploy/preview-base.yaml を書き出す)
 	// Auth はプレビューにログインを必須にするか。ALB の authenticate-oidc は
 	// S3 を守れないので、共有ベースは CloudFront + Lambda@Edge の形
 	// (deploy/preview-base.yaml の代わりに deploy/edge-base.yaml)になる。
-	Auth bool
+	Auth bool `json:"auth,omitempty"`
 	// AuthDomain は通す組織のドメイン。ALB には hd として渡すが、hd は
 	// ヒントでしかないので、生成物にはアプリ側で検証する手順も書き出す。
-	AuthDomain string
+	AuthDomain string `json:"authDomain,omitempty"`
 	// AuthSecretArn は client_id / client_secret を収めた Secrets Manager の
 	// シークレット。テンプレートは {{resolve:secretsmanager:…}} で読むので、
 	// 秘密はテンプレートにも kagerou.yaml にも載らない(#112)。
-	AuthSecretArn string
+	AuthSecretArn string `json:"authSecretArn,omitempty"`
 	// Memory は Lambda の MemorySize(MB)。0 なら既定(512)。
 	// 適正値はリポジトリのファイルからは分からないので検出しない。宣言で受ける。
-	Memory int
+	Memory int `json:"memory,omitempty"`
 	// Timeout は Lambda のタイムアウト(秒)。0 なら入口ごとの既定。
 	//
 	// **入口によって上限が違う**: HTTP API は応答 30 秒で切れるので、それ以上を
 	// 設定しても無駄(Lambda は動き続けるが応答は返らない)。ALB 入口は
 	// アイドルタイムアウトまで伸ばせる。
-	Timeout int
+	Timeout int `json:"timeout,omitempty"`
 
 	// Routing は拡張子の無いパスの解決方法(directory | spa)。preview base を
 	// 作るときに決まる。SPA を directory で配るとディープリンクが 403 になる(#86)。
-	Routing string
+	Routing string `json:"routing,omitempty"`
 
 	// Wants は appscan が依存から推定した周辺リソース。DynamoDB / SQS / S3 は
 	// per-env でもアイドル $0 なので template.yaml に同梱し、Redis / OpenSearch は
@@ -106,7 +107,7 @@ type Params struct {
 	Wants appscan.Wants
 	// URLShape は appscan の URL 構成推定("" | "path" | "cross")。cross のとき
 	// kagerou.yaml に peer: の雛形コメントを出す(#99/#109)。
-	URLShape string
+	URLShape string `json:"uRLShape,omitempty"`
 }
 
 type Result struct {
@@ -390,22 +391,28 @@ func renderDockerfile(dst, variant string, p Params) error {
 }
 
 func renderTo(dst, name string, p Params) error {
-	t, err := parseTmpl(name)
+	body, err := render(name, p)
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(dst)
+	return os.WriteFile(dst, body, 0o644)
+}
+
+// render は書き出さずにテンプレートを描画する。upgrade --check が
+// 「いま生成するとどうなるか」を作るのに使う(Run と同じ経路を通す)。
+func render(name string, p Params) ([]byte, error) {
+	t, err := parseTmpl(name)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := t.Execute(f, p); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("%s: %w", name, err)
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, p); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	return f.Close()
+	return buf.Bytes(), nil
 }
 
 // SetupScriptName は AWS セットアップスクリプトの生成先。

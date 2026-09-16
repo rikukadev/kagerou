@@ -88,6 +88,7 @@ var knownTypes = map[string]bool{
 	"AWS::EC2::SecurityGroupIngress":             true,
 	"AWS::EC2::SecurityGroupEgress":              true,
 	"AWS::ApiGatewayV2::VpcLink":                 true, // apigateway:* でカバー
+	"AWS::SSM::Parameter":                        true, // BaseSsmParameters でカバー
 }
 
 // ssmRefRe は CloudFormation の動的参照 {{resolve:ssm:<path>}} / {{resolve:ssm-secure:<path>}}。

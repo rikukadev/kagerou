@@ -455,6 +455,8 @@ jobs:
             --config e2e/aws/worker/kagerou.yaml \
             --config e2e/aws/apigw/kagerou.yaml \
             --config e2e/aws/alb/kagerou.yaml \
+            --template e2e/aws/alb/base.yaml \
+            --template e2e/aws/apigw/base.yaml \
             --check e2e/aws/ci-policy.json
 
   vuln:
