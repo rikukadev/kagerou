@@ -44,24 +44,29 @@ Resources:
 {{- range .ServiceSpecs}}
 
   # --- {{.Name}}{{if .Primary}}(代表: url_template が指す先){{end}} ------------
-  # 同じイメージを command で使い分ける(push は 1 回で済む)
+{{- if .SharedImage}}
+  # このサービス専用の Dockerfile は見つからなかったので、全サービスで
+  # 1 つのイメージを共有し、command でバイナリを使い分ける(push は 1 回)
+{{- else}}
+  # {{.DockerContext}}/{{.Dockerfile}} から、このサービス専用のイメージを作る(#184)
+{{- end}}
   {{.Logical}}Function:
     Type: AWS::Serverless::Function
     Metadata:
-      # range の中なので $ でルートを見る(. は ServiceSpec)。
-      # サービスごとに Dockerfile を分ける構成はまだ扱っていない(#160)
-      DockerContext: {{$.DockerContext}}
-      Dockerfile: {{$.DockerfileOrDefault}}
+      DockerContext: {{.DockerContext}}
+      Dockerfile: {{.Dockerfile}}
       DockerTag: !Ref EnvKagerouEnv
     Properties:
       PackageType: Image
+{{- if .SharedImage}}
       ImageConfig:
         Command: ["/{{.Name}}"] # TODO: match the entrypoint of this service in your image
+{{- end}}
       Environment:
         Variables:
-          AWS_LWA_PORT: "{{$.PortOrDefault}}"
+          AWS_LWA_PORT: "{{.Port}}"
           # 検出できたアプリのパス。無ければ従来どおり /healthz(#182)
-          AWS_LWA_READINESS_CHECK_PATH: {{if $.HealthPath}}{{$.HealthPath}}{{else}}/healthz{{end}}
+          AWS_LWA_READINESS_CHECK_PATH: {{.HealthPath}}
           KAGEROU_ENV: !Ref EnvKagerouEnv
           KAGEROU_URL: !Ref EnvKagerouUrl
 {{- range $.ServiceSpecs}}
