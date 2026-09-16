@@ -176,6 +176,116 @@
       ]
     },
     {
+      "Sid": "BaseSsmParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:AddTagsToResource",
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:LabelParameterVersion",
+        "ssm:ListTagsForResource",
+        "ssm:PutParameter",
+        "ssm:RemoveTagsFromResource"
+      ],
+      "Resource": "arn:aws:ssm:*:*:parameter/kagerou/base/*"
+    },
+    {
+      "Sid": "EcsCluster",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:CreateCluster",
+        "ecs:DeleteCluster",
+        "ecs:DescribeClusters"
+      ],
+      "Resource": "arn:aws:ecs:*:*:cluster/kge2e-*"
+    },
+    {
+      "Sid": "EcsTags",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:ListTagsForResource",
+        "ecs:TagResource",
+        "ecs:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:ecs:*:*:cluster/kge2e-*",
+        "arn:aws:ecs:*:*:service/kge2e-*/*",
+        "arn:aws:ecs:*:*:task-definition/kge2e-*:*"
+      ]
+    },
+    {
+      "Sid": "CloudMapDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "servicediscovery:CreatePrivateDnsNamespace",
+        "servicediscovery:CreateService",
+        "servicediscovery:DeleteNamespace",
+        "servicediscovery:DeleteService",
+        "servicediscovery:GetNamespace",
+        "servicediscovery:GetOperation",
+        "servicediscovery:GetService",
+        "servicediscovery:ListInstances",
+        "servicediscovery:ListNamespaces",
+        "servicediscovery:ListServices",
+        "servicediscovery:ListTagsForResource",
+        "servicediscovery:TagResource",
+        "servicediscovery:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudMapPrivateZone",
+      "Effect": "Allow",
+      "Action": [
+        "route53:ChangeResourceRecordSets",
+        "route53:ChangeTagsForResource",
+        "route53:CreateHealthCheck",
+        "route53:CreateHostedZone",
+        "route53:DeleteHealthCheck",
+        "route53:DeleteHostedZone",
+        "route53:GetChange",
+        "route53:GetHealthCheck",
+        "route53:GetHostedZone",
+        "route53:ListHostedZones",
+        "route53:ListHostedZonesByName",
+        "route53:ListResourceRecordSets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TaskNetworking",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:DeleteSecurityGroup",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ContainerLogGroups",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/kagerou/*"
+    },
+    {
       "Sid": "EcrAuth",
       "Effect": "Allow",
       "Action": [
@@ -284,100 +394,6 @@
         "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_task_security_group",
         "arn:aws:ssm:*:*:parameter/kagerou/base/kagerou-e2e/apigw_vpc_link_id"
       ]
-    },
-    {
-      "Sid": "EcsCluster",
-      "Effect": "Allow",
-      "Action": [
-        "ecs:CreateCluster",
-        "ecs:DeleteCluster",
-        "ecs:DescribeClusters"
-      ],
-      "Resource": "arn:aws:ecs:*:*:cluster/kge2e-*"
-    },
-    {
-      "Sid": "EcsTags",
-      "Effect": "Allow",
-      "Action": [
-        "ecs:ListTagsForResource",
-        "ecs:TagResource",
-        "ecs:UntagResource"
-      ],
-      "Resource": [
-        "arn:aws:ecs:*:*:cluster/kge2e-*",
-        "arn:aws:ecs:*:*:service/kge2e-*/*",
-        "arn:aws:ecs:*:*:task-definition/kge2e-*:*"
-      ]
-    },
-    {
-      "Sid": "CloudMapDiscovery",
-      "Effect": "Allow",
-      "Action": [
-        "servicediscovery:CreatePrivateDnsNamespace",
-        "servicediscovery:CreateService",
-        "servicediscovery:DeleteNamespace",
-        "servicediscovery:DeleteService",
-        "servicediscovery:GetNamespace",
-        "servicediscovery:GetOperation",
-        "servicediscovery:GetService",
-        "servicediscovery:ListInstances",
-        "servicediscovery:ListNamespaces",
-        "servicediscovery:ListServices",
-        "servicediscovery:ListTagsForResource",
-        "servicediscovery:TagResource",
-        "servicediscovery:UntagResource"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "CloudMapPrivateZone",
-      "Effect": "Allow",
-      "Action": [
-        "route53:ChangeResourceRecordSets",
-        "route53:ChangeTagsForResource",
-        "route53:CreateHealthCheck",
-        "route53:CreateHostedZone",
-        "route53:DeleteHealthCheck",
-        "route53:DeleteHostedZone",
-        "route53:GetChange",
-        "route53:GetHealthCheck",
-        "route53:GetHostedZone",
-        "route53:ListHostedZones",
-        "route53:ListHostedZonesByName",
-        "route53:ListResourceRecordSets"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "TaskNetworking",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:AuthorizeSecurityGroupEgress",
-        "ec2:AuthorizeSecurityGroupIngress",
-        "ec2:CreateSecurityGroup",
-        "ec2:CreateTags",
-        "ec2:DeleteSecurityGroup",
-        "ec2:DescribeSecurityGroups",
-        "ec2:DescribeSubnets",
-        "ec2:DescribeVpcs",
-        "ec2:RevokeSecurityGroupEgress",
-        "ec2:RevokeSecurityGroupIngress"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "ContainerLogGroups",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:DeleteLogGroup",
-        "logs:DescribeLogGroups",
-        "logs:ListTagsForResource",
-        "logs:PutRetentionPolicy",
-        "logs:TagResource",
-        "logs:UntagResource"
-      ],
-      "Resource": "arn:aws:logs:*:*:log-group:/kagerou/*"
     },
     {
       "Sid": "SharedAlbEntrypoint",

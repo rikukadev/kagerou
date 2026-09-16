@@ -753,8 +753,13 @@ func splitCSV(s string) []string {
 
 func cmdIamPolicy(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("iam-policy", flag.ContinueOnError)
+	var extraTemplates stringsFlag
 	var cfgPaths stringsFlag
 	fs.Var(&cfgPaths, "config", "config file (repeatable; with --check the generated policies are unioned)")
+	// ベースのテンプレート(deploy/alb-base.yaml 等)は kagerou.yaml から
+	// 指されていないのに **CI がデプロイする**。config 経由では見えないので、
+	// 直接渡せるようにする。渡さないとベースが作る SSM / ALB の権限が出ない
+	fs.Var(&extraTemplates, "template", "extra CloudFormation template to cover, e.g. a base deployed by CI (repeatable)")
 	doc := fs.String("doc", "policy", "which document to emit: policy | trust | boundary | execution")
 	prefix := fs.String("prefix", "", "ARN scope prefix (default: name_prefix in kagerou.yaml)")
 	ecr := fs.Bool("with-ecr", false, "Lambda container image (SSR etc.): ECR auth + push")
@@ -870,6 +875,19 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	switch *doc {
 	case "policy":
 		pol, err = buildPolicy(cfg, cfgPaths.first())
+		for _, tp := range extraTemplates {
+			if err != nil {
+				break
+			}
+			// テンプレートだけで prefix は同じ。config 側の設定は引き継ぐ
+			bc := cfg
+			bc.Template = tp
+			var bp iampolicy.Policy
+			bp, err = buildPolicy(bc, cfgPaths.first())
+			if err == nil {
+				pol = iampolicy.Union(pol, bp)
+			}
+		}
 		if err == nil && len(cfgPaths) > 1 {
 			// 1 ロールを複数構成が共有する場合、出力も判定も和集合で見る
 			pols := []iampolicy.Policy{pol}

@@ -395,6 +395,22 @@ func Build(o Options) (Policy, error) {
 		"AWS::ServiceDiscovery::PrivateDnsNamespace", "AWS::ServiceDiscovery::Service") {
 		sts = append(sts, cloudMapStatements(p)...)
 	}
+	if o.Template != nil && o.Template.has("AWS::SSM::Parameter") {
+		sts = append(sts, Statement{
+			// ベースが SSM に書く契約値(CONTRACT §9)。**読む権限とは別**で、
+			// ResolveSsmDynamicReferences(GetParameter)があっても作成はできない。
+			// これが無いと base スタックが PutParameter の AccessDenied で
+			// CREATE_FAILED になり、巻き戻しの削除も落ちてスタックが residue になる
+			Sid: "BaseSsmParameters", Effect: "Allow",
+			Action: []string{
+				"ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters",
+				"ssm:GetParameter", "ssm:GetParameters",
+				"ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:ListTagsForResource",
+				"ssm:LabelParameterVersion",
+			},
+			Resource: "arn:aws:ssm:*:*:parameter/kagerou/base/*",
+		})
+	}
 	if wantS3 {
 		sts = append(sts, Statement{
 			// SPA 配布バケット。Tagging 系は kagerou がタグで環境を識別するため(CONTRACT §1)

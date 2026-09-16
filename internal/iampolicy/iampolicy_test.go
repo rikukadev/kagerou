@@ -689,3 +689,48 @@ Resources:
 		t.Error("生成ポリシーが subnets のパスを許可していない")
 	}
 }
+
+// ベースは SSM に契約値を書く(CONTRACT §9)。**読む権限とは別**で、
+// ResolveSsmDynamicReferences があっても PutParameter はできない。
+// 無いと base スタックが CREATE_FAILED になり、巻き戻しの削除も落ちて
+// スタックが残る = 次の run が名前衝突で全部落ちる(CI で踏んだ)。
+func TestBaseSSMParameterWrites(t *testing.T) {
+	f, err := ScanTemplate([]byte(`
+Resources:
+  SsmDomain:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /kagerou/base/todo/domain
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Unknown) != 0 {
+		t.Errorf("未知型として警告している: %v", f.Unknown)
+	}
+	p, err := Build(Options{Prefix: "p-", Template: &f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := findSid(t, p, "BaseSsmParameters")
+	joined := strings.Join(st.Action, ",")
+	for _, want := range []string{"ssm:PutParameter", "ssm:DeleteParameter"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%q が無い: %v", want, st.Action)
+		}
+	}
+	if got, _ := st.Resource.(string); got != "arn:aws:ssm:*:*:parameter/kagerou/base/*" {
+		t.Errorf("契約のパス以外にも書けてしまう: %#v", st.Resource)
+	}
+}
+
+// SSM パラメータを作らないテンプレートには書き込み権限を出さない。
+func TestNoSSMWritesWithoutParameters(t *testing.T) {
+	f, err := ScanTemplate([]byte("Resources:\n  Fn:\n    Type: AWS::Serverless::Function\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := mustJSON(t, Options{Prefix: "p-", Template: &f}); strings.Contains(s, "ssm:PutParameter") {
+		t.Error("SSM を作らない構成に書き込み権限が出ている")
+	}
+}
