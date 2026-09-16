@@ -7,6 +7,11 @@ name: release-please
 # 2 job に分けているのは、release-please が既定の GITHUB_TOKEN で作ったタグ
 # push が他の workflow を起動しないため(GitHub の再帰防止)。needs +
 # release_created 出力でぶら下げる。
+#
+# 同じ再帰防止で Release PR のブランチ push も pull_request を起こさず、
+# required check が pending のままマージできなかった(毎リリース close/reopen で
+# 蹴っていた)。workflow_dispatch / repository_dispatch だけは GITHUB_TOKEN 起点でも
+# workflow を起動できる例外なので、kick-ci job が ci.yml をその口で起動する。
 on:
   push:
     branches: [main]
@@ -21,12 +26,30 @@ jobs:
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
+      prs_created: ${{ steps.rp.outputs.prs_created }}
+      pr: ${{ steps.rp.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: rp
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Release PR を作った/更新したら、そのブランチで ci.yml を起動する。
+  # main が動くたびに release-please がブランチを force-push してチェックが
+  # stale になる問題も、これで毎回勝手に走り直すようになる。
+  kick-ci:
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh workflow run ci.yml --repo "$REPO" --ref "$BRANCH"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
 
   goreleaser:
     needs: release-please

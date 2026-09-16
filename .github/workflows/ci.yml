@@ -3,6 +3,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release-please の PR は bot の GITHUB_TOKEN が push するため pull_request が
+  # 発火せず、required check が永遠に pending になる(#101 #147 #163 #213 で
+  # 毎回 close/reopen していた)。workflow_dispatch は GITHUB_TOKEN 起点でも
+  # workflow を起動できる例外なので、release-please.yml がこの口を叩く。
+  # チェックはブランチ先頭のコミットに付くから、required check は名前で一致する。
+  workflow_dispatch:
 
 jobs:
   test:
@@ -106,7 +112,7 @@ jobs:
   # PR の required check をキャンセルする**。required にした途端、
   # 誰かがマージするたびに他の PR がマージ不能になる。
   e2e-aws-3tier:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -143,7 +149,7 @@ jobs:
   # 1 個の構成では出ない問題を見る: サービス間の URL 受け渡し(CFN 参照)、
   # 全サービスの CORS 許可、ready の意味。
   e2e-aws-multi:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -175,7 +181,7 @@ jobs:
   # URL を持たない compute が初登場する構成。readiness は API の 200 しか
   # 見ないので、worker が動くかは verify がジョブを流して確かめる。
   e2e-aws-worker:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -210,7 +216,7 @@ jobs:
   # VPC とサブネットはアカウント固有なのでリポジトリに書けない。既定 VPC を
   # その場で引く(読み取りのみ)。既定 VPC が無いアカウントでは vars で渡す。
   e2e-aws-apigw:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -249,7 +255,7 @@ jobs:
   # ベースは **この job が作って壊す**。常設すると月 $18 前後の固定費になるが、
   # run ごとなら数分ぶんで済む。残った状態のおかげで通ることも無くなる。
   e2e-aws-alb:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -366,7 +372,7 @@ jobs:
           aws cloudformation wait stack-delete-complete --stack-name "$BASE-base" || true
 
   e2e-aws-ssr:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # arm64 イメージ(template の Architectures)をネイティブでビルドする
     runs-on: ubuntu-24.04-arm
     permissions:
