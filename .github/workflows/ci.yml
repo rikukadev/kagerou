@@ -293,30 +293,35 @@ jobs:
           echo "vpc=$VPC" >> "$GITHUB_OUTPUT"
           echo "subnets=$SUBNETS" >> "$GITHUB_OUTPUT"
 
-      # SSM の契約パスは project ごと。fixture は 1 つの名前を直書きしているので、
-      # そのままだと並行する run が互いのベースを上書きする。**直列化すると
-      # 待機中の run が cancelled になり、本当の失敗が埋もれる**(#210)ので、
-      # 名前のほうを run ごとに分ける。
+      # ベースの SSM 契約パス(/kagerou/base/<ns>/alb_*)は fixture に 1 つだけ
+      # 直書きしてあるので、そのままだと並行する run が互いのベースを上書きする。
+      # **直列化すると待機中の run が cancelled になり、本当の失敗が埋もれる**
+      # (#210)ので、名前のほうを run ごとに分ける。
       #
       # 動的参照({{resolve:ssm:…}})はパラメータで組み立てられないため、
-      # テンプレートの文字列を置換するしかない。置換は 1 語だけに閉じてある。
+      # テンプレートの文字列を置換するしかない。置換は template.yaml の
+      # **その 2 行だけ**で、kagerou.yaml は触らない。あちらの project は
+      # kagerou:project タグにしかならず、run ごとにすると夜間 sweep
+      # (e2e-sweep.yml)がどの run とも一致しなくなる(#219)
       - name: Give this run its own base namespace
         id: ns
         run: |
           set -euo pipefail
-          PROJECT="kagerou-e2e-alb-${{ github.run_id }}"
-          sed -i "s/kagerou-e2e-alb/$PROJECT/g" \
-            e2e/aws/alb/template.yaml e2e/aws/alb/kagerou.yaml
-          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          NS="kagerou-e2e-alb-${{ github.run_id }}"
+          sed -i "s|/kagerou/base/kagerou-e2e-alb/|/kagerou/base/$NS/|g" \
+            e2e/aws/alb/template.yaml
+          grep -q "/kagerou/base/$NS/" e2e/aws/alb/template.yaml \
+            || { echo "::error::置換が効いていない(契約パスが変わった?)"; exit 1; }
+          echo "ns=$NS" >> "$GITHUB_OUTPUT"
 
       # 環境スタックが {{resolve:ssm}} で読む先。これが無いと up は解決に失敗する
       - name: Deploy the shared ALB base
         run: |
           aws cloudformation deploy \
             --template-file e2e/aws/alb/base.yaml \
-            --stack-name "${{ steps.ns.outputs.project }}-base" \
+            --stack-name "${{ steps.ns.outputs.ns }}-base" \
             --parameter-overrides \
-              Project="${{ steps.ns.outputs.project }}" \
+              Project="${{ steps.ns.outputs.ns }}" \
               VpcId=${{ steps.vpc.outputs.vpc }} \
               SubnetIds=${{ steps.vpc.outputs.subnets }} \
             --no-fail-on-empty-changeset
@@ -332,7 +337,7 @@ jobs:
       - name: Run E2E
         env:
           NAME: e2e-alb-${{ github.run_id }}
-          KAGEROU_E2E_ALB_PROJECT: ${{ steps.ns.outputs.project }}
+          KAGEROU_E2E_ALB_BASE_PROJECT: ${{ steps.ns.outputs.ns }}
         run: ./e2e/aws/run.sh bin/kagerou e2e/aws/alb/kagerou.yaml "$NAME"
 
       - name: Clean up the environment
@@ -355,7 +360,7 @@ jobs:
         run: |
           # ns より前で落ちるとベースは作られていない。空の名前で叩くと
           # 「消し損ねた」のか「そもそも無い」のかがログで区別できなくなる
-          BASE="${{ steps.ns.outputs.project }}"
+          BASE="${{ steps.ns.outputs.ns }}"
           [ -n "$BASE" ] || { echo "base was never created; nothing to delete"; exit 0; }
           aws cloudformation delete-stack --stack-name "$BASE-base" || true
           aws cloudformation wait stack-delete-complete --stack-name "$BASE-base" || true

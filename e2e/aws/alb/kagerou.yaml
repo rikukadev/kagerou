@@ -1,9 +1,11 @@
 # 実 AWS E2E(共有 ALB 入口 → Lambda 版)。名前は CI が --name で渡す。
 #
-# project 名は共有ベースの SSM 契約(/kagerou/base/<project>/alb_*)と対になる。
-# template.yaml の {{resolve:ssm}} に同じパスが書いてあるので、ここを変えるなら
-# base.yaml と template.yaml の両方を直すこと。
-project: kagerou-e2e-alb
+# project は他の fixture と揃える。これは kagerou:project タグにしかならず、
+# **ベースの SSM 契約パスとは無関係**(あちらは template.yaml の
+# {{resolve:ssm}} と base.yaml の Project パラメータで決まり、CI が run ごとに
+# ずらす)。揃えておかないと夜間 sweep の reap が拾えない(#219)。
+# fixture 同士はスタック名の name_prefix で分かれる。
+project: kagerou-e2e
 driver: stack
 template: e2e/aws/alb/template.yaml
 region: ap-northeast-1

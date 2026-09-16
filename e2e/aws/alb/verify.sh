@@ -13,9 +13,13 @@ set -euo pipefail
 
 STACK=${1:?usage: verify.sh <stack> <url>}
 URL=${2:?usage: verify.sh <stack> <url>}
-# SSM の契約パスは project ごと。並行する run が互いのベースを壊さないよう、
-# CI が run ごとの project 名を渡す(#210)。手元で回すときの既定も置く。
-PROJECT=${KAGEROU_E2E_ALB_PROJECT:-kagerou-e2e-alb}
+# ベースの SSM 契約パスの名前空間。並行する run が互いのベースを壊さないよう、
+# CI が run ごとの値を渡す(#210)。手元で回すときの既定は base.yaml の
+# Project パラメータの既定と同じ。
+#
+# **kagerou.yaml の project とは別物**。あちらは kagerou:project タグ用で、
+# 他の fixture と揃えてある(#219)。
+BASE_PROJECT=${KAGEROU_E2E_ALB_BASE_PROJECT:-kagerou-e2e-alb}
 
 fail() { echo "ALB VERIFY FAILED: $*" >&2; exit 1; }
 log() { echo; echo "=== $* ==="; }
@@ -38,7 +42,7 @@ log "ルールが共有リスナーの上に載っている"
 # ここが本題。テンプレートは ListenerArn を {{resolve:ssm}} でしか知らないので、
 # 一致するということは動的参照がデプロイロールの資格情報で解決されたということ。
 # ssm:GetParameters が抜けると CFN はここまで来ずに落ちる(#170 で落ちていた)。
-BASE_LISTENER=$(ssm "/kagerou/base/$PROJECT/alb_listener_arn")
+BASE_LISTENER=$(ssm "/kagerou/base/$BASE_PROJECT/alb_listener_arn")
 RULE_LISTENER=$(aws elbv2 describe-rules --rule-arns "$RULE_ARN" \
   --query 'Rules[0].RuleArn' --output text)
 # describe-rules は ListenerArn を返さないので、リスナー側から引いて突き合わせる
@@ -47,7 +51,7 @@ aws elbv2 describe-rules --listener-arn "$BASE_LISTENER" \
   || fail "ルール $RULE_LISTENER が共有リスナー($BASE_LISTENER)に無い"
 
 log "URL がベースの DNS 名から組まれている"
-BASE_DNS=$(ssm "/kagerou/base/$PROJECT/alb_dns_name")
+BASE_DNS=$(ssm "/kagerou/base/$BASE_PROJECT/alb_dns_name")
 case "$URL" in
   *"$BASE_DNS"*) ;;
   *) fail "環境 URL($URL)がベースの DNS($BASE_DNS)を指していない" ;;
