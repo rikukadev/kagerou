@@ -16,6 +16,7 @@ package appscan
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +28,7 @@ import (
 type Facts struct {
 	Owner, Repo   string // .git/config の remote origin(ルートのみ)
 	Region        string // samconfig.toml(ルートのみ・ファイル由来)
-	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go / yii / laravel / php
+	Framework     string // next / remix / react-router / astro / nuxt / sveltejs / node / go / yii / laravel / php / spring-boot / quarkus / micronaut / java
 	DBDriver      string // mysql2 / pg / go-sql-driver/mysql など(空 = DB 依存なし)
 	HasDockerfile bool
 	HasLWA        bool   // いずれかの Dockerfile に Lambda Web Adapter が入っているか
@@ -219,15 +220,23 @@ func frameworkRank(fw string) int {
 		return 0
 	case fw == "node", fw == "php":
 		return 1
-	case fw == "go":
+	case fw == "go", fw == "java":
 		return 2
-	case isPHPFramework(fw):
-		// composer.json はデプロイされるアプリそのものを指す。JS のフレームワークは
-		// PHP アプリに同梱された assets バンドルとしても出てくるので、同点にしない。
+	case isPHPFramework(fw), isJavaFramework(fw):
+		// composer.json / pom.xml はデプロイされるアプリそのものを指す。JS の
+		// フレームワークは同梱された assets バンドルとしても出てくるので、同点にしない。
 		return 4
 	default: // next / remix-run / react-router / astro / nuxt / sveltejs
 		return 3
 	}
+}
+
+func isJavaFramework(fw string) bool {
+	switch fw {
+	case "spring-boot", "quarkus", "micronaut":
+		return true
+	}
+	return false
 }
 
 func isPHPFramework(fw string) bool {
@@ -361,10 +370,21 @@ func serviceCount(dir string) int {
 	if m := cmdMainCount(dir); m > n {
 		n = m
 	}
-	if n == 0 && (exists(filepath.Join(dir, "Dockerfile")) || goModuleMain(dir)) {
+	if n == 0 && (exists(filepath.Join(dir, "Dockerfile")) || goModuleMain(dir) || javaModule(dir)) {
 		n = 1
 	}
 	return n
+}
+
+// javaModule は「このディレクトリが Java アプリ 1 個か」。pom.xml か build.gradle が
+// あればサービスとして数える。packaging=pom(モノレポの集約 pom)はアプリでは
+// ないので除く。これが無いと Dockerfile の無い Spring Boot が services 0 になり、
+// recommend が「サーバが見つからない → static」と自信満々に間違える(#228)。
+func javaModule(dir string) bool {
+	if b, err := os.ReadFile(filepath.Join(dir, "pom.xml")); err == nil {
+		return !strings.Contains(string(b), "<packaging>pom<")
+	}
+	return exists(filepath.Join(dir, "build.gradle")) || exists(filepath.Join(dir, "build.gradle.kts"))
 }
 
 var packageMainRe = regexp.MustCompile(`(?m)^package\s+main\b`)
@@ -537,6 +557,33 @@ var (
 	nodeDBs = []string{"mysql2", "mysql", "pg", "postgres", "@prisma/client", "drizzle-orm"}
 	goDBs   = []string{"go-sql-driver/mysql", "jackc/pgx", "lib/pq"}
 
+	// Maven / Gradle の依存(groupId:artifactId のどこかに一致)から拾う。
+	// 上から順に見て最初の一致を採る(composer と同じ流儀)。
+	javaFrameworks = [][2]string{
+		{"spring-boot", "spring-boot"}, // starter 群も parent もこの語を含む
+		{"io.quarkus", "quarkus"},
+		{"io.micronaut", "micronaut"},
+	}
+	javaDBs = []string{"mysql-connector-j", "mysql-connector-java", "postgresql", "mariadb-java-client"}
+	// AWS SDK は v2(software.amazon.awssdk:dynamodb)と v1(aws-java-sdk-dynamodb)の
+	// 両方の artifact 名に一致するよう、サービス名の語で引っ掛ける
+	javaWants = map[string]func(*Wants){
+		"dynamodb":                  func(w *Wants) { w.DynamoDB = true },
+		"aws-sdk-java-sns":          func(w *Wants) { w.SNS = true },
+		":sns":                      func(w *Wants) { w.SNS = true },
+		"aws-java-sdk-sns":          func(w *Wants) { w.SNS = true },
+		":sqs":                      func(w *Wants) { w.SQS = true },
+		"aws-java-sdk-sqs":          func(w *Wants) { w.SQS = true },
+		"spring-cloud-aws-sqs":      func(w *Wants) { w.SQS = true },
+		":s3":                       func(w *Wants) { w.S3 = true },
+		"aws-java-sdk-s3":           func(w *Wants) { w.S3 = true },
+		"data-redis":                func(w *Wants) { w.Redis = true },
+		"jedis":                     func(w *Wants) { w.Redis = true },
+		"lettuce-core":              func(w *Wants) { w.Redis = true },
+		"opensearch":                func(w *Wants) { w.OpenSearch = true },
+		"spring-data-elasticsearch": func(w *Wants) { w.OpenSearch = true },
+	}
+
 	nodeWants = map[string]func(*Wants){
 		"@aws-sdk/client-dynamodb":       func(w *Wants) { w.DynamoDB = true },
 		"dynamoose":                      func(w *Wants) { w.DynamoDB = true },
@@ -561,6 +608,52 @@ var (
 		"go-elasticsearch": func(w *Wants) { w.OpenSearch = true },
 	}
 )
+
+// javaCoordinates は pom.xml / build.gradle(.kts) から依存の座標
+// (groupId:artifactId)を集める。バージョン解決はしない — 何に依存して
+// いるかが分かれば、フレームワークと周辺リソースの推定には足りる。
+func javaCoordinates(dir string) []string {
+	var out []string
+	if b, err := os.ReadFile(filepath.Join(dir, "pom.xml")); err == nil {
+		var pom struct {
+			Packaging string `xml:"packaging"`
+			Parent    struct {
+				GroupID    string `xml:"groupId"`
+				ArtifactID string `xml:"artifactId"`
+			} `xml:"parent"`
+			Dependencies struct {
+				Dependency []struct {
+					GroupID    string `xml:"groupId"`
+					ArtifactID string `xml:"artifactId"`
+				} `xml:"dependency"`
+			} `xml:"dependencies"`
+		}
+		if xml.Unmarshal(b, &pom) == nil {
+			if pom.Parent.ArtifactID != "" {
+				out = append(out, pom.Parent.GroupID+":"+pom.Parent.ArtifactID)
+			}
+			for _, d := range pom.Dependencies.Dependency {
+				out = append(out, d.GroupID+":"+d.ArtifactID)
+			}
+			// 依存が 1 つも無い pom でも「Java のアプリ」ではある
+			if len(out) == 0 {
+				out = append(out, "pom:"+pom.Packaging)
+			}
+		}
+	}
+	for _, name := range []string{"build.gradle", "build.gradle.kts"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+			// gradle は構文が広すぎるので go.mod と同じテキスト扱い。
+			// 行ごとに残すのは、部分一致の対象を依存宣言の粒度に近づけるため
+			for _, line := range strings.Split(string(b), "\n") {
+				if t := strings.TrimSpace(line); t != "" {
+					out = append(out, t)
+				}
+			}
+		}
+	}
+	return out
+}
 
 var composeFiles = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
 
@@ -645,6 +738,34 @@ func depsOf(dir string) (framework, dbDriver string, wants Wants) {
 		}
 		for frag, mark := range goWants {
 			if strings.Contains(s, frag) {
+				mark(&wants)
+			}
+		}
+	}
+	// Maven / Gradle。coordinates(groupId:artifactId)の文字列に対して部分一致で
+	// 引く。pom は XML(stdlib)で読み、gradle はテキスト走査(go.mod と同じ扱い)。
+	if coords := javaCoordinates(dir); len(coords) > 0 {
+		all := strings.Join(coords, "\n")
+		fw := "java"
+		for _, f := range javaFrameworks {
+			if strings.Contains(all, f[0]) {
+				fw = f[1]
+				break
+			}
+		}
+		if frameworkRank(fw) > frameworkRank(framework) {
+			framework = fw
+		}
+		if dbDriver == "" {
+			for _, db := range javaDBs {
+				if strings.Contains(all, db) {
+					dbDriver = db
+					break
+				}
+			}
+		}
+		for frag, mark := range javaWants {
+			if strings.Contains(all, frag) {
 				mark(&wants)
 			}
 		}

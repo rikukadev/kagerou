@@ -351,6 +351,10 @@ func dockerfileVariant(framework string) (string, bool) {
 		return "next", true
 	case "node", "remix-run", "react-router", "nuxt", "sveltejs", "astro":
 		return "node", true
+	case "spring-boot":
+		// quarkus / micronaut は実行形(jar 名・起動コマンド)が違いすぎるので
+		// 雛形を出さない(検出だけ)。Spring Boot は fat jar 一択で外しにくい
+		return "java", true
 	default:
 		return "", false
 	}
@@ -358,7 +362,7 @@ func dockerfileVariant(framework string) (string, bool) {
 
 // defaultPort は Port が検出できなかったときの listen ポート既定。
 func defaultPort(variant string) string {
-	if variant == "go" {
+	if variant == "go" || variant == "java" {
 		return "8080"
 	}
 	return "3000" // node / next の慣習
