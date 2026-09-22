@@ -1,0 +1,24 @@
+{{generatedBy "#"}}
+# syntax=docker/dockerfile:1
+# kagerou init が生成した雛形(Spring Boot / Maven)。TODO を自分のビルドに合わせて調整すること。
+# Gradle のときはビルドステージを gradle イメージ + `gradle bootJar` に読み替える。
+FROM maven:3-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY pom.xml .
+# 依存だけ先に落としてレイヤーを分ける(pom が変わらない限りキャッシュが効く)
+RUN mvn -q -DskipTests dependency:go-offline || true
+COPY . .
+RUN mvn -q -DskipTests package
+
+FROM public.ecr.aws/docker/library/eclipse-temurin:21-jre
+# Lambda Web Adapter: kagerou のプレビュー環境で Lambda として動かすための拡張。
+# Lambda の外(docker run / ECS)では何もしないので本番イメージに残してよい。
+{{.LWALine}}
+ENV PORT={{.Port}}
+ENV SERVER_PORT={{.Port}}
+EXPOSE {{.Port}}
+# TODO: fat jar が 1 個でなければパターンを絞る(例 target/api-*.jar)
+COPY --from=build /src/target/*.jar /app/app.jar
+# Tomcat(組み込み)の起動はコールドスタートで数秒かかる。プレビュー用途なら
+# 許容範囲だが、気になるなら compute: ecs か SnapStart を検討する
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
