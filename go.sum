@@ -16,6 +16,8 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.3 h1:fuSCw4Z2qfRCztMPO3GXJNSiEp6W
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.3/go.mod h1:6SxcHheD1pPR5+kWm1wGvjlL/YqUsh267sAfEmN4K7A=
 github.com/aws/aws-sdk-go-v2/service/cloudformation v1.81.0 h1:HAYwS6/mgbd+M+enVmjjkHcpPfSzDKy9pVnT2YGXVYU=
 github.com/aws/aws-sdk-go-v2/service/cloudformation v1.81.0/go.mod h1:FyOhT3yf+nXnwVKSDfP9vPodJtzyxfNQVvgcDnKKd3Q=
+github.com/aws/aws-sdk-go-v2/service/costexplorer v1.73.0 h1:QKVz+emfv3yXrPKdkq3cZWwvNcnhHPvfah6h5M7mFmI=
+github.com/aws/aws-sdk-go-v2/service/costexplorer v1.73.0/go.mod h1:j/2mz73u4sqC6BOp3TXxDBXqQQ6QjaHHMgju4wVsX70=
 github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.63.0 h1:1DabWJRKuH0NlRFz46Hjre4JiG1rFveqhJCp6opWcrY=
 github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.63.0/go.mod h1:b4kwulEESlsKCSoAFD0PuUJlFskjwct+7odV4wCBJYE=
 github.com/aws/aws-sdk-go-v2/service/iam v1.64.0 h1:CjgiPuyW26WQeQ934DxMNuwkDg6+ziqgPN9lHQ5rwYA=

@@ -90,9 +90,12 @@ if [ -z "$ZONE_ID" ]; then
   exit 1
 fi
 echo "deploying preview base for *.${DOMAIN} (takes ~15 min: certificate validation + CloudFront)"
+# タグを付けるのは `kagerou cost` が基盤の固定費を環境と分けて見るため
+# (CONTRACT §1。コスト配分タグの有効化は Billing 側で 1 回だけ必要)
 aws cloudformation deploy --region us-east-1 \
   --stack-name "kagerou-preview-base-${PROJECT}" \
   --template-file deploy/preview-base.yaml \
+  --tags kagerou:managed=true kagerou:project="$PROJECT" kagerou:role=base \
   --parameter-overrides Project="$PROJECT" DomainName="$DOMAIN" HostedZoneId="$ZONE_ID" \
     Routing="{{.Routing}}"
 {{- end}}
@@ -106,6 +109,7 @@ next: 共有 ALB のベース(アプリごとに 1 回。既にあれば不要 �
 
   aws cloudformation deploy --stack-name kagerou-alb-base-${PROJECT} \\
     --template-file deploy/alb-base.yaml \\
+    --tags kagerou:managed=true kagerou:project=${PROJECT} kagerou:role=base \\
     --parameter-overrides Project=${PROJECT} DomainName=${DOMAIN} \\
       HostedZoneId=${ZONE_SHOW} VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>
 
@@ -122,6 +126,7 @@ next: 共有 VPC Link のベース(アプリごとに 1 回。固定費なし)
 
   aws cloudformation deploy --stack-name kagerou-apigw-base-${PROJECT} \\
     --template-file deploy/apigw-base.yaml \\
+    --tags kagerou:managed=true kagerou:project=${PROJECT} kagerou:role=base \\
     --parameter-overrides Project=${PROJECT} DomainName=${DOMAIN} \\
       HostedZoneId=${ZONE_SHOW} VpcId=<vpc> SubnetIds=<subnet-a>,<subnet-b>
 

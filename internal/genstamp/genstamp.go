@@ -50,6 +50,14 @@ type Fix struct {
 // Fixes は新しい順。生成物に影響した修正だけを載せる。
 var Fixes = []Fix{
 	{
+		// Version はこの修正が **実際に入ったリリース**。PR を書いた時点の
+		// 次リリース見込みを書くと、間のリリースで init した人(まさに
+		// このバグを持つ人)に警告が出ない
+		Version: "v0.15.0",
+		Files:   "kagerou-setup.sh(preview base / alb base / apigw base の deploy)",
+		Summary: "ベーススタックに kagerou タグが付かず、`kagerou cost` が基盤の固定費を 0 円として出す",
+	},
+	{
 		Version: "v0.12.0",
 		Files:   ".github/workflows/preview.yml, template.yaml(入口 = alb)",
 		Summary: "5000 番台以降の PR でリスナールールの優先度が衝突し、環境の作成が CREATE_FAILED になる",
