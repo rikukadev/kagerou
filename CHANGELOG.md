@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0](https://github.com/rikukadev/kagerou/compare/v0.14.0...v0.15.0) (2026-09-22)
+
+
+### Features
+
+* **appscan:** Maven / Gradle を読み、Java アプリを検出する ([#229](https://github.com/rikukadev/kagerou/issues/229)) ([2784131](https://github.com/rikukadev/kagerou/commit/2784131c190e94f67ceda1faf566dcfa63fbca59)), closes [#228](https://github.com/rikukadev/kagerou/issues/228)
+* **cost:** kagerou cost — タグ由来の費用を基盤と環境に分けて出す ([#216](https://github.com/rikukadev/kagerou/issues/216)) ([928fe1c](https://github.com/rikukadev/kagerou/commit/928fe1c474c13a7b6a3cf5913a504904e8f4abf2))
+
 ## [0.14.0](https://github.com/rikukadev/kagerou/compare/v0.13.0...v0.14.0) (2026-09-16)
 
 
