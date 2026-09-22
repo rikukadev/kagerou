@@ -50,7 +50,10 @@ type Fix struct {
 // Fixes は新しい順。生成物に影響した修正だけを載せる。
 var Fixes = []Fix{
 	{
-		Version: "v0.13.0",
+		// Version はこの修正が **実際に入ったリリース**。PR を書いた時点の
+		// 次リリース見込みを書くと、間のリリースで init した人(まさに
+		// このバグを持つ人)に警告が出ない
+		Version: "v0.15.0",
 		Files:   "kagerou-setup.sh(preview base / alb base / apigw base の deploy)",
 		Summary: "ベーススタックに kagerou タグが付かず、`kagerou cost` が基盤の固定費を 0 円として出す",
 	},

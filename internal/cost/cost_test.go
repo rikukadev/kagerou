@@ -95,9 +95,14 @@ func TestFetchFollowsPages(t *testing.T) {
 	if len(rep.PerEnv) != 2 || rep.Calls != 2 {
 		t.Errorf("ページを辿っていない: %+v calls=%d", rep.PerEnv, rep.Calls)
 	}
-	// --all-projects 相当ではフィルタを付けない
-	if api.last.Filter != nil {
-		t.Errorf("project 未指定でフィルタが付いている: %+v", api.last.Filter)
+	// --all-projects でも「kagerou:project を持つもの」には絞る。無フィルタだと
+	// name の付かないグループ = アカウントの kagerou と無関係な支出すべてが
+	// Base に流れ込み、「基盤 $8,000」を平然と出す
+	f := api.last.Filter
+	if f == nil || f.Not == nil || f.Not.Tags == nil ||
+		f.Not.Tags.Key == nil || *f.Not.Tags.Key != TagProject ||
+		len(f.Not.Tags.MatchOptions) != 1 || f.Not.Tags.MatchOptions[0] != cetypes.MatchOptionAbsent {
+		t.Errorf("project 未指定は Not(ABSENT kagerou:project) で絞るはず: %+v", f)
 	}
 }
 

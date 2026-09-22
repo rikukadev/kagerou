@@ -92,7 +92,7 @@ type API interface {
 // now から 2 日前を終端にするのは、CE がおよそ 24 時間遅れるため。直近日を
 // 含めると「今日は 0 円」に見えてしまう。
 func Window(now time.Time, days int) (start, end time.Time) {
-	end = now.UTC().Truncate(24 * time.Hour).AddDate(0, 0, -1)
+	end = now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
 	start = end.AddDate(0, 0, -days)
 	return start, end
 }
@@ -118,6 +118,19 @@ func Fetch(ctx context.Context, api API, project string, start, end time.Time) (
 				Key:          aws.String(TagProject),
 				Values:       []string{project},
 				MatchOptions: []cetypes.MatchOption{cetypes.MatchOptionEquals},
+			},
+		}
+	} else {
+		// --all-projects でも「kagerou:project が付いているもの」には絞る。
+		// 無フィルタだと、name の付かないグループ = **アカウントの kagerou と
+		// 無関係な支出すべて**が Base に流れ込み、「基盤 $8,000」のような
+		// 数字を平然と出してしまう
+		in.Filter = &cetypes.Expression{
+			Not: &cetypes.Expression{
+				Tags: &cetypes.TagValues{
+					Key:          aws.String(TagProject),
+					MatchOptions: []cetypes.MatchOption{cetypes.MatchOptionAbsent},
+				},
 			},
 		}
 	}
