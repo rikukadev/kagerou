@@ -185,12 +185,12 @@ func TestRunSkipsExistingAndForce(t *testing.T) {
 
 func TestStepsAndPlain(t *testing.T) {
 	det := Detection{VarsSet: map[string]bool{}}
-	base := Steps(Params{Region: "r"}, det, SetupSkip)
-	withSashiki := Steps(Params{Region: "r", Sashiki: true}, det, SetupSkip)
+	base := Steps(Params{Region: "r"}, det, SetupSkip, nil)
+	withSashiki := Steps(Params{Region: "r", Sashiki: true}, det, SetupSkip, nil)
 	if len(withSashiki) != len(base)+2 {
 		t.Fatalf("sashiki steps not added: %d vs %d", len(withSashiki), len(base))
 	}
-	plain := PlainSteps(Params{Region: "ap-northeast-1"}, det)
+	plain := PlainSteps(Params{Region: "ap-northeast-1"}, det, nil)
 	if !strings.Contains(plain, "1. ") || !strings.Contains(plain, "ECR") {
 		t.Fatalf("plain steps: %s", plain)
 	}
@@ -228,9 +228,9 @@ func TestWriteSetupScript(t *testing.T) {
 func TestStepsSetupModes(t *testing.T) {
 	det := Detection{VarsSet: map[string]bool{}}
 	p := Params{Region: "r"}
-	skip := Steps(p, det, SetupSkip)
-	script := Steps(p, det, SetupScript)
-	applied := Steps(p, det, SetupApplied)
+	skip := Steps(p, det, SetupSkip, nil)
+	script := Steps(p, det, SetupScript, nil)
+	applied := Steps(p, det, SetupApplied, nil)
 	if len(script) != len(skip)-2 || len(applied) != len(skip)-2 {
 		t.Fatalf("script/applied should fold 3 steps into 1: skip=%d script=%d applied=%d", len(skip), len(script), len(applied))
 	}
@@ -1056,6 +1056,38 @@ func TestGenRecordWithoutServiceFactsStaysSharedImage(t *testing.T) {
 	for _, s := range p.ServiceSpecs() {
 		if !s.SharedImage {
 			t.Errorf("%s: 記録に serviceFacts が無いなら共有イメージのはず", s.Name)
+		}
+	}
+}
+
+// 生成直後の案内が生成結果を知らないと、いま雛形を出したばかりの人に
+// 「Write a Dockerfile」と言う(#95)。
+func TestStepsReflectWhatWasJustGenerated(t *testing.T) {
+	det := Detection{}
+
+	// 雛形を出した → 「書け」ではなく「出したものを直せ」
+	generated := Steps(Params{Region: "r", Framework: "go"}, det, SetupSkip, []string{"Dockerfile", "template.yaml"})
+	if !strings.Contains(generated[0].Title, "generated Dockerfile") {
+		t.Errorf("生成済みなのに %q", generated[0].Title)
+	}
+
+	// 出していない(未知フレームワーク等)→ 従来どおり「書け」
+	missing := Steps(Params{Region: "r", Framework: "rust"}, det, SetupSkip, nil)
+	if !strings.Contains(missing[0].Title, "Write a Dockerfile") {
+		t.Errorf("未生成なのに %q", missing[0].Title)
+	}
+
+	// 既存 + LWA 済みは従来どおり済み扱い
+	done := Steps(Params{Region: "r"}, Detection{HasDockerfile: true, HasLWA: true}, SetupSkip, nil)
+	if !done[0].Done {
+		t.Error("既存+LWA が済みになっていない")
+	}
+
+	// static に Dockerfile / template.yaml は無い。「書け」は嘘
+	static := Steps(Params{Region: "r", Driver: "static"}, det, SetupSkip, nil)
+	for _, s := range static {
+		if strings.Contains(s.Title, "Dockerfile") {
+			t.Errorf("static に Dockerfile の作業を出している: %q", s.Title)
 		}
 	}
 }
