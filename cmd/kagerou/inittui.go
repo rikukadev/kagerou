@@ -328,7 +328,7 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setupMode = scaffold.SetupApplied
 		}
-		m.steps = scaffold.Steps(m.params, m.det, m.setupMode)
+		m.steps = scaffold.Steps(m.params, m.det, m.setupMode, m.result.Created)
 		m.phase = phaseResult
 		return m, nil
 	}
@@ -397,7 +397,7 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case setupRun:
 				if _, err := scaffold.WriteSetupScript(m.dir, p, m.det); err != nil {
 					m.setupErr, m.setupMode = err, scaffold.SetupSkip
-					m.steps = scaffold.Steps(p, m.det, m.setupMode)
+					m.steps = scaffold.Steps(p, m.det, m.setupMode, m.result.Created)
 					m.phase = phaseResult
 					return m, nil
 				}
@@ -418,7 +418,7 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				m.setupMode = scaffold.SetupSkip
 			}
-			m.steps = scaffold.Steps(p, m.det, m.setupMode)
+			m.steps = scaffold.Steps(p, m.det, m.setupMode, m.result.Created)
 			m.phase = phaseResult
 		}
 	case phaseConfirmAWS:
@@ -431,7 +431,7 @@ func (m initModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// ここで消すと「確認したせいで選択肢が減る」ことになる。
 			m.setupMode = scaffold.SetupScript
 			m.result.Created = append(m.result.Created, scaffold.SetupScriptName)
-			m.steps = scaffold.Steps(m.params, m.det, m.setupMode)
+			m.steps = scaffold.Steps(m.params, m.det, m.setupMode, m.result.Created)
 			m.phase = phaseResult
 		}
 	case phaseResult:
