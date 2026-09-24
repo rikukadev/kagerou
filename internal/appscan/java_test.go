@@ -134,3 +134,29 @@ func TestJavaScanDoesNotTouchOtherStacks(t *testing.T) {
 		t.Errorf("go の検出が変わった: %q / %q", f.Framework, f.DBDriver)
 	}
 }
+
+// framework は検出できたのに Dockerfile が無いディレクトリは「環境に載らない」。
+// 黙って落とすと framework 表示と生成物が食い違うので、事実として持つ(#227)。
+func TestWithoutImageRecordsDroppedDirs(t *testing.T) {
+	dir := t.TempDir()
+	writeJava(t, filepath.Join(dir, "services", "api"), "Dockerfile", "FROM golang:1.25\nEXPOSE 8080\n")
+	writeJava(t, filepath.Join(dir, "services", "api"), "go.mod", "module api\n")
+	writeJava(t, filepath.Join(dir, "web"), "package.json", `{"dependencies":{"next":"15"}}`)
+	// ルートのマーカーは「リポジトリ全体」の話なのでサービス扱いしない
+	writeJava(t, dir, "package.json", `{"dependencies":{"typescript":"5"}}`)
+
+	f := Scan(dir)
+	if len(f.WithoutImage) != 1 {
+		t.Fatalf("WithoutImage = %+v (want web だけ)", f.WithoutImage)
+	}
+	w := f.WithoutImage[0]
+	if w.Name != "web" || w.Framework != "next" || w.Dir != "web" {
+		t.Errorf("%+v", w)
+	}
+	// Dockerfile を持つ側は ServiceFacts に居て、WithoutImage には居ない
+	for _, s := range f.WithoutImage {
+		if s.Name == "api" {
+			t.Error("Dockerfile 持ちが WithoutImage に入っている")
+		}
+	}
+}

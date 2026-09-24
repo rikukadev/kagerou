@@ -52,6 +52,10 @@ type Facts struct {
 	// ServiceNames は残す。1 イメージ複数バイナリ(cmd/*/main.go)の構成では
 	// ディレクトリが分かれないので、こちらには載らない。
 	ServiceFacts []ServiceFact
+	// WithoutImage は「フレームワークは検出できたが Dockerfile が無い」ディレクトリ
+	// (ルートは除く)。複数サービス構成では **環境に載らない** — framework には
+	// 出るのに生成物のどこにも現れない、という黙った脱落を防ぐために持つ(#227)。
+	WithoutImage []ServiceFact
 	Realtime     bool // WebSocket / SSE の痕跡(30 秒上限のある入口を避ける根拠)
 	// HealthPath は アプリのヘルスチェック用パス(#165)。LWA の readiness 設定 /
 	// Dockerfile の HEALTHCHECK / compose の healthcheck から拾う。
@@ -266,6 +270,13 @@ func scanDir(dir, rel string, f *Facts) {
 	// サービスごとの事実。**マージ前に**、そのディレクトリで見えたものを記録する。
 	// 既存のフィールドは「先着が勝つ」で 1 つに畳むので、ここを後から復元できない。
 	recordService(dir, rel, fw, f)
+	// フレームワークの痕跡はあるのにコンテナにできないディレクトリを覚える。
+	// ルート(rel=="")は「リポジトリ全体」の話なのでサービス扱いしない
+	if rel != "" && fw != "" && len(dockerfilesIn(dir)) == 0 {
+		f.WithoutImage = append(f.WithoutImage, ServiceFact{
+			Name: filepath.Base(rel), Dir: rel, Framework: fw,
+		})
+	}
 
 	if !f.HasDockerfile {
 		if names := dockerfilesIn(dir); len(names) > 0 {
