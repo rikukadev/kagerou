@@ -142,6 +142,16 @@ func AllTargets() Targets {
 func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 	var res Result
 
+	// ecs × 複数サービスはまだ生成できない(#103)。ここで止めないと、単一イメージ
+	// 前提のテンプレート + ルートに無い Dockerfile を build する workflow という
+	// **最初の PR で確実に落ちる生成物**を黙って出してしまう(#226)。
+	// できないことは、できる形が入るまで言って止める。
+	if p.ECS() && len(p.Services) > 1 {
+		return res, fmt.Errorf("%d services with compute: ecs — multi-service ECS environments are not generated yet (#103). "+
+			"Options: keep compute: lambda (services split by host on the shared ALB), "+
+			"or init one service at a time as its own project", len(p.Services))
+	}
+
 	// これから Dockerfile 雛形を生成する場合、その listen ポートは自分が決める
 	// (variant の既定)。template.yaml の AWS_LWA_PORT にも同じ値を使わないと、
 	// 「雛形は 8080 で listen、LWA は 3000 を見にいく」で最初のデプロイから 502 になる。

@@ -1059,3 +1059,52 @@ func TestGenRecordWithoutServiceFactsStaysSharedImage(t *testing.T) {
 		}
 	}
 }
+
+// ecs × 複数サービスは生成できない(#103)。黙って出すと「単一イメージの
+// テンプレート + ルートに無い Dockerfile を build する workflow」という、
+// 最初の PR で確実に落ちる形になる(#226)。理由と逃げ道つきで止める。
+func TestScaffoldECSMultiServiceRefusesWithReason(t *testing.T) {
+	p := Params{Project: "mono", Region: "r", Compute: "ecs", Entrypoint: "alb",
+		Domain: "mono.example.com", Services: []string{"api", "worker"}}
+	_, err := Run(t.TempDir(), p, AllTargets(), false)
+	if err == nil {
+		t.Fatal("ecs × 複数サービスを黙って受け入れている")
+	}
+	for _, want := range []string{"#103", "lambda", "one service"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("エラーに %q が無い(理由と逃げ道を言う): %v", want, err)
+		}
+	}
+	// 単一サービスの ecs は従来どおり通る
+	ok := p
+	ok.Services = []string{"api"}
+	if _, err := Run(t.TempDir(), ok, AllTargets(), false); err != nil {
+		t.Fatalf("単一サービスの ecs が通らない: %v", err)
+	}
+}
+
+// ecs の workflow は検出した Dockerfile の場所で build する。ルート直書きだと
+// モノレポ(services/api/Dockerfile)で最初の PR から落ちる(#226)。
+func TestScaffoldECSBuildsFromDetectedContext(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "mono", Region: "r", Compute: "ecs", Entrypoint: "alb",
+		Domain: "mono.example.com", Services: []string{"api"},
+		HasDockerfile: true, DockerfileName: "Dockerfile", DockerfileDir: "services/api"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	pv := read(t, dir, ".github/workflows/kagerou-preview.yml")
+	if !strings.Contains(pv, `-f "./services/api/Dockerfile" "./services/api"`) {
+		t.Errorf("検出した場所で build していない:\n%s", pv)
+	}
+
+	// ルート直下の従来構成は . のまま
+	dir2 := t.TempDir()
+	p2 := Params{Project: "web", Region: "r", Compute: "ecs", Entrypoint: "alb", Domain: "web.example.com"}
+	if _, err := Run(dir2, p2, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	if pv2 := read(t, dir2, ".github/workflows/kagerou-preview.yml"); !strings.Contains(pv2, `-f "./Dockerfile" "."`) {
+		t.Errorf("ルート構成の build 先が変わっている:\n%s", pv2)
+	}
+}
