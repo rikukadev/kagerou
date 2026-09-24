@@ -110,7 +110,7 @@ func TestSetupScriptAuthDoesNotDeploy(t *testing.T) {
 
 	// Next steps にも残作業として出ること
 	var titles []string
-	for _, s := range Steps(p, det(), SetupScript) {
+	for _, s := range Steps(p, det(), SetupScript, nil) {
 		titles = append(titles, s.Title)
 	}
 	if !strings.Contains(strings.Join(titles, "\n"), "edge-base.yaml") {

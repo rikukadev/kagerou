@@ -549,7 +549,7 @@ func cmdInit(args []string, out *os.File) error {
 	if _, err := fmt.Fprintf(out, "\n%s\n", scaffold.BuildAWSPlan(p, det).Render()); err != nil {
 		return err
 	}
-	_, err = fmt.Fprint(out, scaffold.PlainSteps(p, det))
+	_, err = fmt.Fprint(out, scaffold.PlainSteps(p, det, res.Created))
 	return err
 }
 

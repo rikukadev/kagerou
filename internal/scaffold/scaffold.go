@@ -9,6 +9,7 @@ import (
 	"github.com/rikukadev/kagerou/internal/genstamp"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -495,7 +496,9 @@ func or(v, placeholder string) string {
 // Steps は生成後に残る手作業のチェックリスト。検出できた値(アカウント ID・
 // リポジトリ名・設定済み Variables)は実値で埋め、済みの項目は Done にする。
 // mode により AWS セットアップ 3 手順は 1 行(スクリプト実行)や済みに畳まれる。
-func Steps(p Params, d Detection, mode SetupMode) []Step {
+// created は Run が今つくったファイル(Result.Created)。生成の**前**の Detection
+// だけを見ると、いま雛形を出したばかりの人に「Write a Dockerfile」と言う(#95)。
+func Steps(p Params, d Detection, mode SetupMode, created []string) []Step {
 	acct := or(d.AccountID, "<account>")
 	repo := or(d.Repo, "<repo>")
 	region := or(p.Region, or(d.Region, "<region>"))
@@ -509,13 +512,23 @@ func Steps(p Params, d Detection, mode SetupMode) []Step {
 		oidcDetail = "trust policy sub: repo:" + d.Owner + "/" + d.Repo + ":* (or the ID-style form)\n" + oidcDetail
 	}
 
-	steps := []Step{
-		{
+	var steps []Step
+	switch {
+	case p.Static():
+		// static に Dockerfile も template.yaml も無い。「書け」は嘘になる
+	case slices.Contains(created, "Dockerfile"):
+		// いま雛形を出したばかり。「書け」ではなく「出したものを直せ」
+		steps = append(steps, Step{
+			Title:  "Fill the TODOs in the generated Dockerfile and template.yaml",
+			Detail: "the scaffold runs, but check the build steps and the listen port match your app",
+		})
+	default:
+		steps = append(steps, Step{
 			Title:  "Write a Dockerfile and fill the TODOs in template.yaml",
 			Detail: "run your app as an HTTP server and wrap it with Lambda Web Adapter",
 			// 既存 Dockerfile + LWA 済み(注入含む)なら残作業なし
 			Done: d.HasDockerfile && (d.HasLWA || d.HasTemplate),
-		},
+		})
 	}
 	switch mode {
 	case SetupApplied:
@@ -580,10 +593,10 @@ gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
 }
 
 // PlainSteps は非 TTY(CI 等)向けのプレーンテキスト版チェックリスト。
-func PlainSteps(p Params, d Detection) string {
+func PlainSteps(p Params, d Detection, created []string) string {
 	var b strings.Builder
 	b.WriteString("\nNext steps (once per repository):\n\n")
-	for i, s := range Steps(p, d, SetupSkip) {
+	for i, s := range Steps(p, d, SetupSkip, created) {
 		mark := " "
 		if s.Done {
 			mark = "x"
