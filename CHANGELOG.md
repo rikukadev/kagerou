@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/rikukadev/kagerou/compare/v0.15.0...v0.15.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **init:** harden generated AWS role setup ([#240](https://github.com/rikukadev/kagerou/issues/240)) ([fea598b](https://github.com/rikukadev/kagerou/commit/fea598b74052f9b6f8d308aea3fa3006fcb4908f))
+
 ## [0.15.0](https://github.com/rikukadev/kagerou/compare/v0.14.0...v0.15.0) (2026-09-22)
 
 
