@@ -146,7 +146,8 @@ func cmdUp(args []string, out *os.File) error {
 	// CREATE_FAILED(相手不在で 4 分半 rollback)を up 前の即決に変える。
 	var peerEnv, peerURL string
 	if cfg.Peer.Project != "" {
-		infos, err := drv.List(ctx)
+		// 探すのは相手 project の同名 env なので、相手 project で絞って引く(#243)。
+		infos, err := drv.List(ctx, cfg.Peer.Project)
 		if err != nil {
 			return err
 		}
@@ -553,6 +554,15 @@ func cmdInit(args []string, out *os.File) error {
 	return err
 }
 
+// listProject は driver の List に渡す project を決める。--all-projects なら
+// 空文字(= 全スタック走査)。絞れる方が権限も狭くできるので、既定は project 指定。
+func listProject(project string, allProjects bool) string {
+	if allProjects {
+		return ""
+	}
+	return project
+}
+
 // filterByProject は kagerou:project タグで環境を絞る(#48: reap / list の分離境界)。
 // allProjects なら素通し。そうでなければ project タグが cfg.Project に一致するものだけ。
 // 別プロジェクト(別リポジトリ)の環境を list / reap が巻き込まないようにする。
@@ -586,7 +596,10 @@ func cmdList(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	infos, err := drv.List(ctx)
+	// 列挙は driver 側で project に絞る(#243)。--all-projects は空文字で全件。
+	// filterByProject はそのまま通す — タグ検索の結果を鵜呑みにせず、
+	// 手で付け替えられたタグが混ざっても境界が崩れないようにする。
+	infos, err := drv.List(ctx, listProject(cfg.Project, *allProjects))
 	if err != nil {
 		return err
 	}
@@ -631,7 +644,10 @@ func cmdReap(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	infos, err := drv.List(ctx)
+	// 列挙は driver 側で project に絞る(#243)。--all-projects は空文字で全件。
+	// filterByProject はそのまま通す — タグ検索の結果を鵜呑みにせず、
+	// 手で付け替えられたタグが混ざっても境界が崩れないようにする。
+	infos, err := drv.List(ctx, listProject(cfg.Project, *allProjects))
 	if err != nil {
 		return err
 	}
@@ -777,6 +793,7 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	instanceTag := fs.String("instance-tag", "", "scope --with-sashiki-ssm by instance tag 'Key=Value' instead of a fixed id")
 	cf := fs.Bool("with-cloudfront", false, "CloudFront cache invalidation")
 	r53 := fs.Bool("with-route53", false, "Route53 record changes")
+	allProjects := fs.Bool("with-all-projects", false, "list --all-projects / serve: adds DescribeStacks on every stack (reads all stacks' outputs)")
 	zone := fs.String("hosted-zone-id", "", "hosted zone for --with-route53")
 	// --doc trust / boundary 用
 	repo := fs.String("repo", "", "owner/name for the OIDC trust policy (--doc trust)")
@@ -881,6 +898,9 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			BaseDomain: cfg.UsesBaseDomain(),
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
 			BaseBucket: *baseBucket,
+			// 横断ビュー(--all-projects / serve)だけが要る広い読み取り。
+			// 既定で出さないので、単一 project の CI ロールは狭いままになる(#243)
+			AllProjects: *allProjects,
 		})
 	}
 

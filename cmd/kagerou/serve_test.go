@@ -15,9 +15,17 @@ import (
 type fakeLister struct {
 	infos []*stack.Info
 	err   error
+	// gotProject は List に渡された project を記録する。serve は横断ビューなので
+	// 空文字(全 project)で呼ぶことを固定する(#243)。
+	gotProject *string
 }
 
-func (f fakeLister) List(context.Context) ([]*stack.Info, error) { return f.infos, f.err }
+func (f fakeLister) List(_ context.Context, project string) ([]*stack.Info, error) {
+	if f.gotProject != nil {
+		*f.gotProject = project
+	}
+	return f.infos, f.err
+}
 
 func info(name, project, status string) *stack.Info {
 	return &stack.Info{
@@ -125,5 +133,23 @@ func TestServeListerError(t *testing.T) {
 	rec := doGET(t, h, "/environments")
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("driver エラーは 502 のはず: %d", rec.Code)
+	}
+}
+
+// TestServeListsAllProjects は serve が横断ビューとして **project を絞らずに**
+// List を呼ぶことを固定する(#243)。ここで project を渡してしまうと、
+// 他プロジェクトの環境が一覧から消える。
+func TestServeListsAllProjects(t *testing.T) {
+	var got string
+	h := newTestServer(fakeLister{gotProject: &got, infos: []*stack.Info{
+		info("pr-1", "todo", "CREATE_COMPLETE"),
+	}})
+	rec := httptest.NewRecorder()
+	h.mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/environments", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if got != "" {
+		t.Errorf("serve が project を絞って List を呼んだ: %q (want \"\")", got)
 	}
 }

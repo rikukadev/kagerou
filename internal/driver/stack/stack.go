@@ -20,6 +20,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	cfntypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
+	tagtypes "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/rikukadev/kagerou/internal/albrule"
@@ -60,6 +62,9 @@ const MaxLifetime = 30 * 24 * time.Hour
 type Driver struct {
 	cfn *cloudformation.Client
 	sts *sts.Client
+	// tagging は project 指定の List で使う(#243)。タグで絞って ARN を引くため、
+	// IAM 側で「この project のスタックしか見えない」を作れる。
+	tagging *resourcegroupstaggingapi.Client
 	// reserve は共有リスナーの空き優先度を確保する(#189)。テストで差し替える。
 	reserve func(ctx context.Context, listenerARN string, n int, seed string) ([]int, error)
 }
@@ -74,8 +79,9 @@ func New(ctx context.Context, region string) (*Driver, error) {
 		return nil, err
 	}
 	return &Driver{
-		cfn: cloudformation.NewFromConfig(cfg),
-		sts: sts.NewFromConfig(cfg),
+		cfn:     cloudformation.NewFromConfig(cfg),
+		sts:     sts.NewFromConfig(cfg),
+		tagging: resourcegroupstaggingapi.NewFromConfig(cfg),
 		reserve: func(ctx context.Context, listenerARN string, n int, seed string) ([]int, error) {
 			return albrule.Reserve(ctx, region, listenerARN, n, seed)
 		},
@@ -404,9 +410,40 @@ func (d *Driver) Info(ctx context.Context, stackName string) (*Info, error) {
 }
 
 // List は kagerou 管理(kagerou:managed=true)のスタックを列挙する。
-// v0.1 は stack driver のみなので CFN の走査で足りる。Resource Groups
-// Tagging API への切り替えは非 CFN リソースを持つ driver が入るとき(§8)。
-func (d *Driver) List(ctx context.Context) ([]*Info, error) {
+//
+// project を渡すとその project のものだけを返す。空文字なら全 project
+// (list --all-projects / serve の横断ビュー)。
+//
+// **project の有無で列挙の API が変わる**(#243)。
+//
+//   - project あり: Resource Groups Tagging API でタグで絞って ARN を引き、
+//     ARN ごとに DescribeStacks を呼ぶ。IAM は tag:GetResources を
+//     kagerou:project の Condition で絞れるうえ、DescribeStacks 側も
+//     スタック ARN(name_prefix)で絞ったままにできる。
+//   - project なし: StackName を渡さない DescribeStacks で全件走査する。
+//     この呼び方はリソースを特定しないので IAM で絞れず、**アカウント内の
+//     全スタックの Outputs を読む権限**が要る。--all-projects は本質的に
+//     そういう操作なので、必要な権限もそう宣言する(CONTRACT §8)。
+//
+// タグ検索は結果整合なので、up 直後の list に数秒現れないことがある。
+// 作成直後の環境を確実に見たい場合は up の出力か Info を使う。
+func (d *Driver) List(ctx context.Context, project string) ([]*Info, error) {
+	var infos []*Info
+	var err error
+	if project != "" {
+		infos, err = d.listByTag(ctx, project)
+	} else {
+		infos, err = d.listAllStacks(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Tags[TagName] < infos[j].Tags[TagName] })
+	return infos, nil
+}
+
+// listAllStacks は全スタックを走査して kagerou 管理のものを拾う(project 指定なし)。
+func (d *Driver) listAllStacks(ctx context.Context) ([]*Info, error) {
 	var infos []*Info
 	p := cloudformation.NewDescribeStacksPaginator(d.cfn, &cloudformation.DescribeStacksInput{})
 	for p.HasMorePages() {
@@ -415,15 +452,71 @@ func (d *Driver) List(ctx context.Context) ([]*Info, error) {
 			return nil, fmt.Errorf("describe stacks: %w", err)
 		}
 		for _, s := range page.Stacks {
-			info := infoFromStack(s)
-			if info.Tags[TagManaged] != "true" || s.StackStatus == cfntypes.StackStatusDeleteComplete {
-				continue
+			if info := managedInfo(s); info != nil {
+				infos = append(infos, info)
 			}
-			infos = append(infos, info)
 		}
 	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].Tags[TagName] < infos[j].Tags[TagName] })
 	return infos, nil
+}
+
+// listByTag は kagerou:project と kagerou:managed で絞って ARN を引き、
+// ARN ごとに DescribeStacks する。
+//
+// managed をタグ検索側にも入れるのは、権限を絞るためではなく往復を減らすため
+// (managed でないスタックを describe しない)。判定は managedInfo が最終的に行う。
+func (d *Driver) listByTag(ctx context.Context, project string) ([]*Info, error) {
+	in := &resourcegroupstaggingapi.GetResourcesInput{
+		ResourceTypeFilters: []string{"cloudformation:stack"},
+		TagFilters: []tagtypes.TagFilter{
+			{Key: aws.String(TagProject), Values: []string{project}},
+			{Key: aws.String(TagManaged), Values: []string{"true"}},
+		},
+	}
+	var infos []*Info
+	p := resourcegroupstaggingapi.NewGetResourcesPaginator(d.tagging, in)
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("get resources by tag (project=%s): %w", project, err)
+		}
+		for _, r := range page.ResourceTagMappingList {
+			arn := aws.ToString(r.ResourceARN)
+			if arn == "" {
+				continue
+			}
+			// ARN をそのまま StackName に渡せる。IAM 上も stack/<name>/<id> として
+			// 評価されるので、name_prefix で絞ったポリシーで通る。
+			out, err := d.cfn.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{StackName: &arn})
+			if err != nil {
+				// タグ検索は結果整合なので、既に消えたスタックが返ることがある。
+				// 列挙全体を落とさず、その 1 件だけ飛ばす。
+				if isNotExistErr(err) {
+					continue
+				}
+				return nil, fmt.Errorf("describe stack %s: %w", arn, err)
+			}
+			for _, s := range out.Stacks {
+				if info := managedInfo(s); info != nil {
+					infos = append(infos, info)
+				}
+			}
+		}
+	}
+	return infos, nil
+}
+
+// managedInfo は kagerou 管理かつ削除済みでないスタックだけ Info にする。
+// 判定を 1 箇所に置き、列挙経路が 2 つあっても同じ基準にする。
+func managedInfo(s cfntypes.Stack) *Info {
+	if s.StackStatus == cfntypes.StackStatusDeleteComplete {
+		return nil
+	}
+	info := infoFromStack(s)
+	if info.Tags[TagManaged] != "true" {
+		return nil
+	}
+	return info
 }
 
 // Expired は kagerou:expires-at を過ぎた環境か判定する(reap の判定部)。

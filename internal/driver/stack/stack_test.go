@@ -6,6 +6,7 @@ package stack
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,7 +147,7 @@ func TestListReturnsOnlyManaged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	infos, err := d.List(ctx)
+	infos, err := d.List(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +238,7 @@ func TestReapLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	infos, err := d.List(ctx)
+	infos, err := d.List(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,5 +443,53 @@ func TestUpDeliversPeerParams(t *testing.T) {
 	}
 	if got["EnvPeerEnv"] != "pr-42" || got["EnvPeerUrl"] != "https://pr-42.pub-demo.example.com" {
 		t.Fatalf("peer params not delivered: %v", got)
+	}
+}
+
+// TestListByProjectUsesTagFilter は project 指定の List が、その project の
+// スタックだけを返すことを確かめる(#243)。列挙が Resource Groups Tagging API
+// 経由になるため、全件走査と同じ結果になるかを実物(moto)で見る。
+func TestListByProjectUsesTagFilter(t *testing.T) {
+	d, ctx := testDriver(t)
+
+	mine := "kagerou-test-listproj-mine"
+	other := "kagerou-test-listproj-other"
+	t.Cleanup(func() { _ = d.Down(ctx, mine); _ = d.Down(ctx, other) })
+	if _, err := d.Up(ctx, UpInput{StackName: mine, Name: "listproj-mine", Project: "alpha", TemplateBody: testTemplate}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Up(ctx, UpInput{StackName: other, Name: "listproj-other", Project: "beta", TemplateBody: testTemplate}); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := d.List(ctx, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, info := range infos {
+		names = append(names, info.StackName)
+		if got := info.Tags[TagProject]; got != "alpha" {
+			t.Errorf("project=alpha の List に別 project が混ざった: %s (project=%s)", info.StackName, got)
+		}
+	}
+	if !slices.Contains(names, mine) {
+		t.Errorf("自 project のスタックが返らない: %v", names)
+	}
+	if slices.Contains(names, other) {
+		t.Errorf("別 project のスタックが返った: %v", names)
+	}
+
+	// 空文字なら全件走査に切り替わり、両方見える
+	all, err := d.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var allNames []string
+	for _, info := range all {
+		allNames = append(allNames, info.StackName)
+	}
+	if !slices.Contains(allNames, mine) || !slices.Contains(allNames, other) {
+		t.Errorf("project 未指定の List が全件を返さない: %v", allNames)
 	}
 }
