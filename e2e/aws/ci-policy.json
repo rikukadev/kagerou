@@ -112,6 +112,8 @@
         "iam:ListAttachedRolePolicies",
         "iam:ListRolePolicies",
         "iam:PassRole",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:PutRolePermissionsBoundary",
         "iam:PutRolePolicy",
         "iam:TagRole",
         "iam:UntagRole"

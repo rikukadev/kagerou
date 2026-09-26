@@ -280,6 +280,11 @@ hooks:
 | `boundary` | 自己サーブ用の permissions boundary(`--regions`) | デプロイロール **と** それが作るロールの両方 |
 | `execution` | preview の Lambda がランタイムで使う最小ポリシー(`--allow 'actions=resources'` で宣言、`--with-vpc` で ENI) | Lambda の実行(ランタイム)ロール |
 
+旧 `kagerou-setup.sh` で作ったロールに `AdministratorAccess` が残っている場合は、
+最新の `kagerou init` で setup script を再生成して実行する。新しい script は限定 trust、
+最小権限 policy、boundary を先に適用し、最後に `AdministratorAccess` を detach するので、
+既存ロールも同じ手順で安全に移行できる。
+
 `--check <file>` を付けると、生成する代わりに、実際に attach 済みのポリシー JSON を
 読んで **生成される最小ポリシーとのアクション差分**を報告する(`policy` / `boundary` /
 `execution` に対応。`trust` は対象外)。過剰権限(`extra`)があれば非 0 で終了するので、
@@ -310,8 +315,8 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
   ワイルドカードが残る前提で、boundary が全体を封じる。
 - **preview リソースは permissions boundary 配下で作られる**。boundary は上限
   (実効権限 = 権限ポリシー ∩ boundary)として次を強制する:
-  - 許可した region 以外の regional アクションを Deny(`StringNotEqualsIfExists aws:RequestedRegion`。
-    グローバルサービスは誤爆させない)
+  - 許可した region 以外の regional アクションを Deny(`StringNotEquals aws:RequestedRegion` +
+    `Null=false`。region キーの無いグローバルサービスは誤爆させない)
   - IAM 昇格(ユーザ/アクセスキー/グループ/ポリシー版/IdP の作成)を Deny
   - `name_prefix` 名前空間外のロールへの IAM 書込・`PassRole` を Deny
   - 新規ロール作成時に **同じ boundary の付与を必須化**(付けないと作れない=子ロールも同じ天井に)

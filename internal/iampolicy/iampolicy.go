@@ -143,7 +143,7 @@ func Build(o Options) (Policy, error) {
 
 	// テンプレートがあれば「テンプレートが作るもの」はそこから導出。
 	// 無ければ従来どおり(Lambda/API は常時、S3/VPC はフラグ)。
-	wantLambda, wantAPI := true, true
+	wantLambda, wantAPI, wantRoles := true, true, true
 	wantS3, wantVPC := o.S3, o.VPC
 	// Route53 だけはフラグとの OR。テンプレートが RecordSet を持たなくても、
 	// 共有 base 側のゾーンに CI がレコードを足す構成があり得る
@@ -153,6 +153,7 @@ func Build(o Options) (Policy, error) {
 		wantLambda = t.has("AWS::Serverless::Function", "AWS::Lambda::Function")
 		wantAPI = t.has("AWS::Serverless::HttpApi", "AWS::Serverless::Api",
 			"AWS::ApiGatewayV2::Api", "AWS::ApiGateway::RestApi")
+		wantRoles = wantLambda || t.has("AWS::IAM::Role")
 		wantS3 = t.has("AWS::S3::Bucket")
 		wantVPC = t.HasVPC
 	}
@@ -208,36 +209,41 @@ func Build(o Options) (Policy, error) {
 	}
 
 	if wantLambda {
-		sts = append(sts,
-			Statement{
-				Sid: "LambdaFunction", Effect: "Allow",
-				Action: []string{
-					"lambda:CreateFunction", "lambda:DeleteFunction", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
-					"lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:GetPolicy", "lambda:ListVersionsByFunction",
-					"lambda:AddPermission", "lambda:RemovePermission",
-					"lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
-				},
-				Resource: fmt.Sprintf("arn:aws:lambda:*:*:function:%s*", p),
+		sts = append(sts, Statement{
+			Sid: "LambdaFunction", Effect: "Allow",
+			Action: []string{
+				"lambda:CreateFunction", "lambda:DeleteFunction", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
+				"lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:GetPolicy", "lambda:ListVersionsByFunction",
+				"lambda:AddPermission", "lambda:RemovePermission",
+				"lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
 			},
-			Statement{
-				// PassRole が無いと Lambda を作れない(最も分かりにくい失敗)
-				Sid: "ExecutionRole", Effect: "Allow",
-				Action: []string{
-					"iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PassRole",
-					"iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
-					"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies",
-					"iam:TagRole", "iam:UntagRole",
-				},
-				Resource: fmt.Sprintf("arn:aws:iam::*:role/%s*", p),
+			Resource: fmt.Sprintf("arn:aws:lambda:*:*:function:%s*", p),
+		})
+	}
+	if wantRoles {
+		sts = append(sts, Statement{
+			// Lambda の暗黙 role と、ECS 等の明示 AWS::IAM::Role の両方。
+			// PassRole に加え、boundary を CreateRole に載せる権限も要る。
+			Sid: "ExecutionRole", Effect: "Allow",
+			Action: []string{
+				"iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PassRole",
+				"iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
+				"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies",
+				"iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+				"iam:TagRole", "iam:UntagRole",
 			},
-			Statement{
-				Sid: "LogGroups", Effect: "Allow",
-				Action: []string{
-					"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:DescribeLogStreams",
-					"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
-				},
-				Resource: fmt.Sprintf("arn:aws:logs:*:*:log-group:/aws/lambda/%s*", p),
-			})
+			Resource: fmt.Sprintf("arn:aws:iam::*:role/%s*", p),
+		})
+	}
+	if wantLambda {
+		sts = append(sts, Statement{
+			Sid: "LogGroups", Effect: "Allow",
+			Action: []string{
+				"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:DescribeLogStreams",
+				"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
+			},
+			Resource: fmt.Sprintf("arn:aws:logs:*:*:log-group:/aws/lambda/%s*", p),
+		})
 	}
 	if wantAPI {
 		sts = append(sts, Statement{
@@ -391,9 +397,13 @@ func Build(o Options) (Policy, error) {
 				Resource: "arn:aws:lambda:*:*:event-source-mapping:*",
 			})
 	}
-	if o.Template != nil && o.Template.has("AWS::ECS::Cluster",
-		"AWS::ServiceDiscovery::PrivateDnsNamespace", "AWS::ServiceDiscovery::Service") {
+	hasCloudMap := o.Template != nil && o.Template.has("AWS::ECS::Cluster",
+		"AWS::ServiceDiscovery::PrivateDnsNamespace", "AWS::ServiceDiscovery::Service")
+	if hasCloudMap {
 		sts = append(sts, cloudMapStatements(p)...)
+	}
+	if o.Template != nil && o.Template.has("AWS::Logs::LogGroup") && !hasCloudMap {
+		sts = append(sts, containerLogStatement())
 	}
 	if o.Template != nil && o.Template.has("AWS::SSM::Parameter") {
 		sts = append(sts, Statement{
@@ -649,12 +659,16 @@ func BuildBoundary(o BoundaryOptions) (Policy, error) {
 			Action: []string{"*"}, Resource: "*",
 		},
 		{
-			// region ロック。IfExists にしないと region キーを持たない
-			// グローバルサービス(IAM/CloudFront/Route53 等)まで落ちる。
+			// region ロック。Deny + StringNotEqualsIfExists はキーが無い場合も
+			// true になり、IAM/CloudFront/Route53 等のグローバル操作まで落とす。
+			// Null=false を AND して「キーが存在し、かつ許可外」だけ拒否する。
 			Sid: "DenyOutsideRegions", Effect: "Deny",
-			Action:    []string{"*"},
-			Resource:  "*",
-			Condition: map[string]any{"StringNotEqualsIfExists": map[string]any{"aws:RequestedRegion": o.Regions}},
+			Action:   []string{"*"},
+			Resource: "*",
+			Condition: map[string]any{
+				"StringNotEquals": map[string]any{"aws:RequestedRegion": o.Regions},
+				"Null":            map[string]any{"aws:RequestedRegion": "false"},
+			},
 		},
 		{
 			// IAM 昇格の定番経路を塞ぐ(ユーザ/グループ/ポリシー版/IdP)。
@@ -942,16 +956,20 @@ func cloudMapStatements(p string) []Statement {
 			},
 			Resource: "*",
 		},
-		{
-			// コンテナのログ。雛形の規約は /kagerou/<env>(Lambda の
-			// /aws/lambda/... とは別の名前空間)
-			Sid: "ContainerLogGroups", Effect: "Allow",
-			Action: []string{
-				"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups",
-				"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
-			},
-			Resource: "arn:aws:logs:*:*:log-group:/kagerou/*",
+		containerLogStatement(),
+	}
+}
+
+// containerLogStatement は生成テンプレートの明示 AWS::Logs::LogGroup 用。
+// 雛形の規約は /kagerou/<env>(Lambda の /aws/lambda/... とは別の名前空間)。
+func containerLogStatement() Statement {
+	return Statement{
+		Sid: "ContainerLogGroups", Effect: "Allow",
+		Action: []string{
+			"logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups",
+			"logs:PutRetentionPolicy", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource",
 		},
+		Resource: "arn:aws:logs:*:*:log-group:/kagerou/*",
 	}
 }
 

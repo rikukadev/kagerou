@@ -425,8 +425,11 @@ const SetupScriptName = "kagerou-setup.sh"
 func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 	data := struct {
 		Owner, Repo, Region, Domain, Project string
+		BaseBucket                           string
 		SetupBase                            bool
 		Routing                              string
+		Static                               bool
+		DomainFromSSM                        bool
 		// Auth のとき配信ベースは preview-base ではなく edge-base になる。
 		// これを渡さないと、生成されていない preview-base.yaml を deploy
 		// しようとするスクリプトが出る(#194)。
@@ -442,7 +445,8 @@ func WriteSetupScript(dir string, p Params, d Detection) (string, error) {
 		// 任せた直後に "base https://…" と出すと、まだ開かない URL を出来たものと
 		// して見せることになる。SSM 由来のドメインなら既に在るので出してよい。
 		BaseReady bool
-	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.SetupBase, p.RoutingOrDefault(),
+	}{d.Owner, d.Repo, or(p.Region, d.Region), p.Domain, p.Project, p.BaseBucket,
+		p.SetupBase, p.RoutingOrDefault(), p.Static(), p.DomainFromSSM,
 		p.Auth, p.AuthDomain, p.ALB(), p.APIGatewayVPCLink(),
 		p.SetupBase || handOff(p), !handOff(p) || p.DomainFromSSM}
 	t, err := parseTmpl("setup.sh.tmpl")
@@ -504,9 +508,10 @@ func Steps(p Params, d Detection, mode SetupMode) []Step {
 
 	varsDone := d.VarsSet["AWS_ROLE_ARN"] && d.VarsSet["AWS_REGION"] && d.VarsSet["ECR_REPOSITORY"]
 
-	oidcDetail := "note: newer orgs use ID-style sub claims (repo:org@ID/repo@ID:*)"
+	oidcDetail := "allow only pull_request and ref:refs/heads/main; newer orgs use the equivalent ID-style subject"
 	if d.Owner != "" && d.Repo != "" {
-		oidcDetail = "trust policy sub: repo:" + d.Owner + "/" + d.Repo + ":* (or the ID-style form)\n" + oidcDetail
+		oidcDetail = "trust policy subjects: repo:" + d.Owner + "/" + d.Repo + ":pull_request and " +
+			"repo:" + d.Owner + "/" + d.Repo + ":ref:refs/heads/main\n" + oidcDetail
 	}
 
 	steps := []Step{
@@ -520,13 +525,13 @@ func Steps(p Params, d Detection, mode SetupMode) []Step {
 	switch mode {
 	case SetupApplied:
 		steps = append(steps, Step{
-			Title: "AWS setup (role / ECR / variables)",
+			Title: "AWS setup (least-privilege role / boundary / ECR / variables)",
 			Done:  true,
 		})
 	case SetupScript:
 		steps = append(steps, Step{
 			Title:  "Review and run ./" + SetupScriptName,
-			Detail: "creates the OIDC role and ECR repository, and sets the 3 GitHub variables",
+			Detail: "creates a least-privilege OIDC role with a permissions boundary, the ECR repository, and the 3 GitHub variables",
 		})
 	default: // SetupSkip: 手動でやる人向けにコマンドを列挙する
 		steps = append(steps,
@@ -555,7 +560,7 @@ gh variable set ECR_REPOSITORY --body "` + ecrURI + `"`,
 		// 「やること」が 1 つも見えないまま最初のプレビューが 403 になる(#194)。
 		steps = append(steps, Step{
 			Title: "Deploy the auth base (deploy/edge-base.yaml) and put the OIDC values in SSM",
-			Detail: "sam deploy --template-file deploy/edge-base.yaml --region us-east-1 --capabilities CAPABILITY_IAM\n" +
+			Detail: "sam deploy --template-file deploy/edge-base.yaml --region us-east-1 --capabilities CAPABILITY_NAMED_IAM\n" +
 				"secrets: /kagerou/edge-auth/<domain>/{issuer,client_id,client_secret,session_secret}\n" +
 				"IdP redirect_uri: https://auth.<domain>/_kagerou/auth/callback (1 本だけ)",
 		})

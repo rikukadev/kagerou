@@ -6,7 +6,78 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rikukadev/kagerou/internal/appscan"
 )
+
+func TestSetupScriptHardensDeployRole(t *testing.T) {
+	dir := t.TempDir()
+	p := Params{Project: "app", Region: "ap-northeast-1", Framework: "go"}
+	if _, err := Run(dir, p, AllTargets(), false); err != nil {
+		t.Fatal(err)
+	}
+	path, err := WriteSetupScript(dir, p, det())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := readFile(t, path)
+
+	for _, want := range []string{
+		"iam-policy --doc trust", "iam-policy --doc boundary", "iam-policy --config",
+		"put-role-permissions-boundary", "--permissions-boundary", "put-role-policy",
+		"detach-role-policy", "AdministratorAccess",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("hardened setup missing %q:\n%s", want, script)
+		}
+	}
+	for _, bad := range []string{
+		"attach-role-policy --role-name \"$ROLE\" --policy-arn arn:aws:iam::aws:policy/AdministratorAccess",
+		"repo:${OWNER}/${REPO}:*",
+		"StringLike",
+	} {
+		if strings.Contains(script, bad) {
+			t.Errorf("unsafe IAM setup reintroduced %q:\n%s", bad, script)
+		}
+	}
+	if out, err := exec.Command("sh", "-n", path).CombinedOutput(); err != nil {
+		t.Fatalf("generated hardened setup is invalid shell: %v\n%s", err, out)
+	}
+}
+
+func TestGeneratedRolesHavePermissionsBoundary(t *testing.T) {
+	boundary := `PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/app-boundary"`
+	cases := []struct {
+		name, tmpl string
+		p          Params
+		want       int
+	}{
+		{"lambda", "template.yaml.tmpl", Params{Project: "app"}, 1},
+		{"multi", "template.multi.yaml.tmpl", Params{Project: "app", Services: []string{"api", "web"}}, 2},
+		{"ecs", "template.ecs.yaml.tmpl", Params{Project: "app", Wants: appscan.Wants{S3: true}}, 2},
+		{"apigw", "template.apigw.yaml.tmpl", Params{Project: "app", Wants: appscan.Wants{S3: true}}, 2},
+		{"edge", "edgebase.yaml.tmpl", Params{Project: "app"}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := render(tc.tmpl, tc.p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(body), boundary); got != tc.want {
+				t.Errorf("permissions boundary count = %d, want %d:\n%s", got, tc.want, body)
+			}
+		})
+	}
+
+	edge, err := render("edgebase.yaml.tmpl", Params{Project: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(edge), `RoleName: !Sub "${Project}-edge-auth"`) {
+		t.Errorf("edge role must stay in the app-* boundary namespace:\n%s", edge)
+	}
+}
 
 // TestSetupScriptOnlyDeploysGeneratedTemplates は、セットアップスクリプトが
 // **生成されていないテンプレート**を指さないことを固定する。

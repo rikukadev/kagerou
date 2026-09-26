@@ -25,6 +25,8 @@ func TestBuildBaseScopesByPrefix(t *testing.T) {
 		"arn:aws:lambda:*:*:function:myapp-*",
 		"arn:aws:iam::*:role/myapp-*",       // PassRole のスコープ
 		"iam:PassRole",                      // 一番分かりにくい必須権限
+		"iam:PutRolePermissionsBoundary",    // 子 role に同じ boundary を付ける
+		"iam:DeleteRolePermissionsBoundary", // CFN の rollback / delete
 		"transform/Serverless-2016-10-31",   // SAM Transform
 		"aws-sam-cli-managed",               // 成果物バケット
 		"cloudformation:GetTemplateSummary", // スタック存在前に呼ばれる
@@ -116,8 +118,10 @@ func TestBuildBoundary(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		"StringNotEqualsIfExists", // region ロックはグローバルサービスを誤爆させない
-		"ap-northeast-1",          // 許可 region
+		"StringNotEquals", // region ロック
+		`"Null"`,          // region キーの無いグローバルサービスを誤爆させない
+		`"false"`,         // キーが存在するときだけ StringNotEquals を評価
+		"ap-northeast-1",  // 許可 region
 		"DenyIamPrivilegeEscalation",
 		"iam:CreateUser",
 		"NotResource",                 // 名前空間外の IAM 書込を落とす
@@ -125,11 +129,14 @@ func TestBuildBoundary(t *testing.T) {
 		"RequireBoundaryOnNewRoles",   // 作成ロールに boundary を強制
 		"iam:PermissionsBoundary",
 		"arn:aws:iam::123456789012:policy/myapp-boundary", // boundary 自身の ARN
-		"organizations:*",                                 // 組織は管轄外
+		"organizations:*", // 組織は管轄外
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("boundary missing %q\n%s", want, s)
 		}
+	}
+	if strings.Contains(s, "StringNotEqualsIfExists") {
+		t.Error("Deny + StringNotEqualsIfExists は region キーの無い IAM まで拒否する")
 	}
 }
 
@@ -551,6 +558,48 @@ func TestBuildEcsService(t *testing.T) {
 			t.Errorf("ECS statement missing %q", want)
 		}
 	}
+}
+
+func TestExplicitRoleNeedsBoundaryLifecyclePermissions(t *testing.T) {
+	tf, err := ScanTemplate([]byte(`
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+  Logs:
+    Type: AWS::Logs::LogGroup
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(Options{Prefix: "app-", Template: &tf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := findSid(t, p, "ExecutionRole")
+	for _, want := range []string{
+		"iam:CreateRole", "iam:PassRole",
+		"iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+	} {
+		if !hasAction(role, want) {
+			t.Errorf("explicit role lifecycle missing %q", want)
+		}
+	}
+	logs := findSid(t, p, "ContainerLogGroups")
+	if !hasAction(logs, "logs:CreateLogGroup") {
+		t.Error("explicit log group lifecycle permissions are missing")
+	}
+	if _, ok := findSidOptional(p, "LambdaFunction"); ok {
+		t.Error("explicit IAM role alone must not add Lambda permissions")
+	}
+}
+
+func findSidOptional(p Policy, sid string) (Statement, bool) {
+	for _, s := range p.Statement {
+		if s.Sid == sid {
+			return s, true
+		}
+	}
+	return Statement{}, false
 }
 
 func hasAction(s Statement, want string) bool {

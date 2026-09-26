@@ -90,7 +90,7 @@ func TestActionsForPlan(t *testing.T) {
 		return false
 	}
 	for _, a := range []string{
-		"iam:CreateRole", "ecr:CreateRepository",
+		"iam:CreateRole", "iam:PutRolePermissionsBoundary", "iam:CreatePolicy", "ecr:CreateRepository",
 		"route53:ChangeResourceRecordSets", // base の DNS(証明書検証と alias)
 		"acm:RequestCertificate", "cloudfront:CreateDistribution",
 		"s3:PutObject", "s3:GetBucketLocation",
@@ -134,7 +134,7 @@ func TestActionsForIncludesTeardown(t *testing.T) {
 	}
 	for _, a := range []string{
 		// IAM は「作れるが消せない」の代表格
-		"iam:DeleteRole", "iam:DetachRolePolicy",
+		"iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DeleteRolePermissionsBoundary", "iam:DeletePolicy",
 		"ecr:DeleteRepository",
 		"cloudformation:DeleteStack", "cloudfront:DeleteDistribution", "s3:DeleteBucket",
 		"s3:DeleteObject",
@@ -144,8 +144,15 @@ func TestActionsForIncludesTeardown(t *testing.T) {
 		}
 	}
 	// 壊す側には印が付いていること(出力で作る側と分けるため)
+	teardown := map[string]bool{
+		"iam:DeleteRole": true, "iam:DeleteRolePolicy": true,
+		"iam:DeleteRolePermissionsBoundary": true, "iam:DeletePolicy": true,
+		"ecr:DeleteRepository": true, "cloudformation:DeleteStack": true,
+		"cloudfront:DeleteDistribution": true, "s3:DeleteBucket": true,
+		"s3:DeleteObject": true,
+	}
 	for _, c := range full {
-		wantTeardown := strings.Contains(c.Action, ":Delete") || strings.Contains(c.Action, ":Detach")
+		wantTeardown := teardown[c.Action]
 		if c.Teardown != wantTeardown {
 			t.Errorf("%s: Teardown = %v (want %v)", c.Action, c.Teardown, wantTeardown)
 		}

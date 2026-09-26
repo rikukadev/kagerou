@@ -52,6 +52,7 @@ Resources:
   ExecutionRole:
     Type: AWS::IAM::Role
     Properties:
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/{{.Project}}-boundary"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -66,6 +67,7 @@ Resources:
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/{{.Project}}-boundary"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

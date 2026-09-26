@@ -2,9 +2,59 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestStaticPolicyDoesNotFallBackToComputePermissions(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `project: spa
+driver: static
+region: ap-northeast-1
+name_prefix: spa-
+url_template: https://{name}.example.test
+static:
+  dist: dist
+  bucket: kagerou-base-spa-123
+`
+	path := filepath.Join(dir, "kagerou.yaml")
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// static は template を持たない。たまたま同居する別用途の template.yaml を
+	// 読んで compute 権限を足してはいけない。
+	if err := os.WriteFile(filepath.Join(dir, "template.yaml"), []byte(`
+Resources:
+  Unrelated:
+    Type: AWS::Serverless::Function
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.CreateTemp(dir, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = out.Close() })
+	if err := cmdIamPolicy([]string{
+		"--config", path, "--base-bucket", "kagerou-base-spa-123",
+	}, out); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "SharedWebBucketSync") {
+		t.Fatalf("static policy must allow sync to its base bucket:\n%s", s)
+	}
+	for _, bad := range []string{"lambda:CreateFunction", "apigateway:*", "ecr:PutImage"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("static policy unexpectedly contains compute permission %q:\n%s", bad, s)
+		}
+	}
+}
 
 // E2E のデプロイロールに attach しているポリシーが、生成器の出す最小権限と
 // 一致していることを固定する(#135)。
