@@ -475,6 +475,67 @@ jobs:
             --template e2e/aws/apigw/base.yaml \
             --check e2e/aws/ci-policy.json
 
+  # 上の drift は **ファイル同士**(e2e/aws/ci-policy.json ↔ 生成器)しか見ない。
+  # 実際に attach されているロールは別物で、JSON を更新しても適用を忘れると
+  # CI は全部緑のまま次の e2e-aws-* が 6 本まとめて AccessDenied で落ちる。
+  # 2 回踏んだ(tag:GetResources / cloudformation:DescribeStacks)うえ、気づかない
+  # まま 2 件のずれが溜まっていた(#243)。
+  #
+  # そこで **実ロールの kge2e-deploy を読んで同じ --check にかける**。
+  # ずれていれば「どのアクションが足りないか」と適用コマンドが出る。
+  #
+  # e2e-aws-* の needs にはしていない。needs にすると、このジョブが落ちたとき
+  # e2e が **skip** になり、required status check は skip を成功として数える。
+  # 待ち時間は縮むが保護が弱くなるので、独立したジョブのままにする。
+  # fail-fast にしたいなら iam-policy-live を required check に加えてから
+  # needs を付ける(順序を逆にすると穴が開く)。
+  #
+  # 読み取り権限は kge2e-selfcheck(別 inline policy)。kge2e-deploy に混ぜると
+  # 生成器が出さないアクションが増えて、上の drift が over-permission で落ちる。
+  iam-policy-live:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Check the live deploy role against the repository policy
+        run: |
+          set -euo pipefail
+          role=${AWS_ROLE_ARN##*/}
+          if ! aws iam get-role-policy --role-name "$role" --policy-name kge2e-deploy \
+                 --query PolicyDocument --output json > /tmp/live-policy.json; then
+            echo "::error::実ロール $role の kge2e-deploy を読めない。" \
+                 "kge2e-selfcheck(e2e/aws/selfcheck-policy.json)が attach されているか確認する:" \
+                 "./scripts/apply-e2e-policy.sh"
+            exit 1
+          fi
+          if ! go run ./cmd/kagerou iam-policy \
+                 --config e2e/aws/3tier/kagerou.yaml \
+                 --config e2e/aws/ssr/kagerou.yaml \
+                 --config e2e/aws/multi/kagerou.yaml \
+                 --config e2e/aws/worker/kagerou.yaml \
+                 --config e2e/aws/apigw/kagerou.yaml \
+                 --config e2e/aws/alb/kagerou.yaml \
+                 --template e2e/aws/alb/base.yaml \
+                 --template e2e/aws/apigw/base.yaml \
+                 --check /tmp/live-policy.json; then
+            echo "::error::attach されているポリシーが生成器とずれている。" \
+                 "リポジトリの JSON を適用する: ./scripts/apply-e2e-policy.sh" \
+                 "(差分だけ見るなら --dry-run)"
+            exit 1
+          fi
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+
   vuln:
     runs-on: ubuntu-latest
     steps:
