@@ -28,9 +28,16 @@
       "Sid": "CloudFormationGlobalReads",
       "Effect": "Allow",
       "Action": [
-        "cloudformation:DescribeStacks",
         "cloudformation:GetTemplateSummary",
         "cloudformation:ListStacks"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TagEnumeration",
+      "Effect": "Allow",
+      "Action": [
+        "tag:GetResources"
       ],
       "Resource": "*"
     },

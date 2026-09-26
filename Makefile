@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: build test lint clean
+.PHONY: build test lint clean test-aws e2e-policy e2e-policy-diff
 
 build:
 	go build $(LDFLAGS) -o bin/kagerou ./cmd/kagerou
@@ -22,6 +22,15 @@ test-aws:
 	AWS_ACCESS_KEY_ID=testing AWS_SECRET_ACCESS_KEY=testing AWS_REGION=us-east-1 \
 	go test -race -count=1 ./internal/driver/...; \
 	status=$$?; docker rm -f kagerou-moto >/dev/null; exit $$status
+
+# E2E のデプロイロールへ、リポジトリのポリシーを適用する。
+# iam-policy-drift はファイル同士しか見ないので、生成器を変えたらこれを回す
+# (忘れると e2e-aws-* が 6 本まとめて AccessDenied で落ちる、#243)。
+e2e-policy:
+	./scripts/apply-e2e-policy.sh
+
+e2e-policy-diff:
+	./scripts/apply-e2e-policy.sh --dry-run
 
 clean:
 	rm -rf bin/

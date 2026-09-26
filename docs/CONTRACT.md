@@ -313,6 +313,20 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
   CloudFormation スタック・Lambda・ロール・ロググループは `<name_prefix>*` に限定。
   ARN で絞れないアクション(`apigateway:*`、ENI 系、`cloudfront:CreateInvalidation` 等)は
   ワイルドカードが残る前提で、boundary が全体を封じる。
+- **`list` / `reap` の列挙はタグ検索で行う**(#243)。`kagerou:project` と
+  `kagerou:managed` で `tag:GetResources` を呼び、返った ARN ごとに
+  `DescribeStacks{StackName: <arn>}` を叩く。ARN をそのまま渡すので
+  `DescribeStacks` は上の `<name_prefix>*` スコープのままでよく、
+  **全スタックの Outputs を読む権限は要らない**。
+  `tag:GetResources` は condition key も resource type も持たないので
+  `Resource: "*"` になるが、返るのは ARN とタグだけで Outputs / Parameters は含まない。
+  タグ検索は**結果整合**なので、`up` 直後の `list` に数秒現れないことがある。
+- **`--all-projects` と `serve` だけは別**。project を絞らないので
+  `StackName` を渡さない `DescribeStacks` で全件走査する。この呼び方はリソースを
+  特定しないため ARN で絞れず、**アカウント内の全スタックの Outputs / Parameters を
+  読む権限**になる。横断ビューを出す操作なので避けられないが、
+  `kagerou iam-policy --with-all-projects` を明示したときだけ生成する。
+  単一 project の CI ロールには付けないこと。
 - **preview リソースは permissions boundary 配下で作られる**。boundary は上限
   (実効権限 = 権限ポリシー ∩ boundary)として次を強制する:
   - 許可した region 以外の regional アクションを Deny(`StringNotEquals aws:RequestedRegion` +

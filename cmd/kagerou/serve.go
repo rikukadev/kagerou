@@ -57,7 +57,7 @@ func defaultServeAddr() string {
 
 // lister は serve が必要とする driver の一部(読み取りのみ)。テストで差し替える。
 type lister interface {
-	List(ctx context.Context) ([]*stack.Info, error)
+	List(ctx context.Context, project string) ([]*stack.Info, error)
 }
 
 type serveHandler struct {
@@ -76,7 +76,9 @@ func (h *serveHandler) mux() *http.ServeMux {
 // environments は list 相当の Environment JSON(CONTRACT §3)を全プロジェクト分返す。
 // serve は横断ビュー用なので既定で全件(list の --all-projects 相当)。
 func (h *serveHandler) environments() ([]map[string]any, error) {
-	infos, err := h.lister.List(h.ctx)
+	// serve は横断ビューなので project を絞らない。全スタック走査になるため、
+	// serve を動かす権限は list --all-projects と同じ広さが要る(CONTRACT §8)。
+	infos, err := h.lister.List(h.ctx, "")
 	if err != nil {
 		return nil, err
 	}

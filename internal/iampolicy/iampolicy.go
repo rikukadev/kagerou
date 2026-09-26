@@ -72,6 +72,13 @@ type Options struct {
 	BaseBucket   string // 共有 preview base バケットへの成果物 sync(post_up の aws s3 sync)
 	BaseDomain   bool   // url_template 等で {base_domain} を使う(SSM 契約からドメインを引く)
 
+	// AllProjects は list --all-projects / serve を回すロールで立てる(#243)。
+	// この 2 つは project を絞らないので、StackName を渡さない DescribeStacks
+	// による全件走査が要る。この呼び方はリソースを特定しないため IAM で絞れず、
+	// **アカウント内の全スタックの Outputs / Parameters を読む権限**になる。
+	// 既定(false)では出さない。
+	AllProjects bool
+
 	// Template == nil のときだけ効く従来フラグ(テンプレートがあれば導出が勝つ)。
 	S3  bool // S3 静的配信つき(3 層など)
 	VPC bool // VPC 内リソース(sashiki 等)へ繋ぐ Lambda
@@ -176,10 +183,24 @@ func Build(o Options) (Policy, error) {
 			Resource: fmt.Sprintf("arn:aws:cloudformation:*:*:stack/%s*/*", p),
 		},
 		{
-			// GetTemplateSummary はスタック存在前に呼ばれる。DescribeStacks(無名)と
-			// ListStacks は list / reap の走査用。いずれも読み取りのみ
+			// GetTemplateSummary はスタックが存在する前に呼ばれる(テンプレートを読む
+			// API)ので ARN で絞れない。ListStacks も同様。どちらも読み取りのみ
 			Sid: "CloudFormationGlobalReads", Effect: "Allow",
-			Action:   []string{"cloudformation:GetTemplateSummary", "cloudformation:ListStacks", "cloudformation:DescribeStacks"},
+			Action:   []string{"cloudformation:GetTemplateSummary", "cloudformation:ListStacks"},
+			Resource: "*",
+		},
+		{
+			// list / reap の列挙(#243)。kagerou は kagerou:project のタグで絞って
+			// ARN を引き、ARN ごとに DescribeStacks を呼ぶ。そのため DescribeStacks は
+			// 上の CloudFormationStack(name_prefix)のままでよく、**全スタックの
+			// Outputs を読む権限は要らない**。
+			//
+			// tag:GetResources は condition key も resource type も持たないので
+			// Resource は "*" しか書けない(service authorization reference)。
+			// タグで絞るのは呼び出し側の引数にすぎず、IAM では強制できない。
+			// ただし返るのは ARN とタグだけで、Outputs / Parameters は含まれない。
+			Sid: "TagEnumeration", Effect: "Allow",
+			Action:   []string{"tag:GetResources"},
 			Resource: "*",
 		},
 		{
@@ -208,6 +229,18 @@ func Build(o Options) (Policy, error) {
 		},
 	}
 
+	if o.AllProjects {
+		sts = append(sts, Statement{
+			// list --all-projects / serve は project を絞らないので、StackName を
+			// 渡さない DescribeStacks で全件走査する。この呼び方はリソースを特定
+			// しないため ARN で絞れず、**アカウント内の全スタックの Outputs /
+			// Parameters を読める**ことになる。横断ビューを出す操作なので避けられ
+			// ないが、既定では出さない(単一 project なら TagEnumeration で足りる)。
+			Sid: "CloudFormationListAllProjects", Effect: "Allow",
+			Action:   []string{"cloudformation:DescribeStacks"},
+			Resource: "*",
+		})
+	}
 	if wantLambda {
 		sts = append(sts, Statement{
 			Sid: "LambdaFunction", Effect: "Allow",

@@ -87,3 +87,24 @@ v0.x の間も後方互換を守る(変更はフィールド/タグの追加の�
 足りない権限はローカル(admin)では絶対に再現せず、CI の絞ったロールでだけ
 403 として出る。繰り返し踏んだ原因が 3 つあるので、新しい型を足すときは
 `internal/iampolicy` のパッケージコメントを読むこと。
+
+### 生成器を変えたら、実ロールに適用する
+
+**`iam-policy-drift` が見ているのはファイル同士**(`e2e/aws/ci-policy.json` ↔ 生成器)で、
+**実際に attach されているロールは別物**。JSON を更新しただけでは CI は全部緑になるが、
+適用を忘れると次の `e2e-aws-*` が 6 本まとめて `AccessDenied` で落ちる。
+
+```bash
+./scripts/apply-e2e-policy.sh --dry-run   # 内容で差分を出す(適用しない)
+./scripts/apply-e2e-policy.sh             # 適用する
+```
+
+実ロールを読んで同じ `--check` にかける `iam-policy-live` job があるので、
+ずれていれば足りないアクションと適用コマンドが出る。ただし `e2e-aws-*` の
+`needs` にはしていない(skip が required check の成功として数えられるため)、
+**同じ run で E2E も落ちる**。落ちたらまずこのジョブのメッセージを読むこと。
+
+差分を見るときは **Sid の集合ではなく内容で**比べる。同名 statement の中身が
+違っているのを見落として、権限を狭めたまま気づかなかったことがある
+(`ResolveSsmDynamicReferences` / `ExecutionRole` の 2 件が溜まっていた、#243)。
+スクリプトの `--dry-run` は Action の増減まで出す。

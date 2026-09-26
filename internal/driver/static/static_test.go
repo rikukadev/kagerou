@@ -96,7 +96,7 @@ func TestStaticLifecycle(t *testing.T) {
 		t.Fatalf("EnvironmentURL = %q ok=%v", u, ok)
 	}
 	// list(stack driver 共通)から見える
-	infos, err := d.stack.List(ctx)
+	infos, err := d.stack.List(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
