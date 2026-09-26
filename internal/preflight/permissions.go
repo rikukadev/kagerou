@@ -107,12 +107,25 @@ func actionsFor(p Plan) []Check {
 	var cs []Check
 	if p.Role {
 		cs = append(cs,
+			Check{Action: "iam:GetOpenIDConnectProvider", Why: "GitHub OIDC provider の確認"},
+			Check{Action: "iam:CreateOpenIDConnectProvider", Why: "GitHub OIDC provider の初回作成"},
+			Check{Action: "iam:GetRole", Why: "既存 OIDC ロールの確認"},
 			Check{Action: "iam:CreateRole", Why: "GitHub Actions の OIDC ロール"},
-			Check{Action: "iam:AttachRolePolicy", Why: "ロールへのポリシー付与"},
+			Check{Action: "iam:PutRolePolicy", Why: "最小権限ポリシーの適用"},
+			Check{Action: "iam:PutRolePermissionsBoundary", Why: "ロールへの permissions boundary 適用"},
+			Check{Action: "iam:CreatePolicy", Why: "permissions boundary の作成"},
+			Check{Action: "iam:GetPolicy", Why: "既存 permissions boundary の確認"},
+			Check{Action: "iam:ListPolicyVersions", Why: "permissions boundary version の確認"},
+			Check{Action: "iam:CreatePolicyVersion", Why: "permissions boundary の更新(再実行時)"},
+			Check{Action: "iam:DeletePolicyVersion", Why: "古い boundary version の整理(再実行時)"},
 			Check{Action: "iam:UpdateAssumeRolePolicy", Why: "信頼ポリシーの更新(再実行時)"},
+			Check{Action: "iam:ListAttachedRolePolicies", Why: "旧 AdministratorAccess の検出"},
+			Check{Action: "iam:DetachRolePolicy", Why: "旧 AdministratorAccess の除去"},
 			// IAM は「作れるが消せない」が起きやすい代表格(PowerUser 等)
-			Check{Action: "iam:DetachRolePolicy", Why: "撤収時のポリシー剥がし", Teardown: true},
+			Check{Action: "iam:DeleteRolePermissionsBoundary", Why: "撤収時の boundary 解除", Teardown: true},
+			Check{Action: "iam:DeleteRolePolicy", Why: "撤収時の inline policy 削除", Teardown: true},
 			Check{Action: "iam:DeleteRole", Why: "撤収時のロール削除", Teardown: true},
+			Check{Action: "iam:DeletePolicy", Why: "撤収時の boundary 削除", Teardown: true},
 		)
 	}
 	if p.ECR {

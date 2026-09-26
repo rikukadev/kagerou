@@ -58,6 +58,7 @@ Resources:
       DockerTag: !Ref EnvKagerouEnv
     Properties:
       PackageType: Image
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/{{$.Project}}-boundary"
 {{- if .SharedImage}}
       ImageConfig:
         Command: ["/{{.Name}}"] # TODO: match the entrypoint of this service in your image

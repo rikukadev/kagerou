@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -304,6 +305,11 @@ func applySetup(dir string) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.Command("sh", "./"+scaffold.SetupScriptName)
 		cmd.Dir = dir
+		// setup は IAM 文書を、init を実行したのと同じ kagerou から生成する。
+		// ./bin/kagerou や go run で起動して PATH に無い場合も run-now を壊さない。
+		if exe, err := os.Executable(); err == nil {
+			cmd.Env = append(os.Environ(), "KAGEROU_BIN="+exe)
+		}
 		out, err := cmd.CombinedOutput()
 		return setupDoneMsg{output: strings.TrimSpace(string(out)), err: err}
 	}

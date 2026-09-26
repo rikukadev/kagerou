@@ -12,7 +12,7 @@ Description: >
 #
 # デプロイ(us-east-1 固定。Lambda@Edge の制約):
 #   sam deploy --template-file deploy/edge-base.yaml --region us-east-1 \
-#     --stack-name kagerou-edge-base-{{.Project}} --capabilities CAPABILITY_IAM \
+#     --stack-name kagerou-edge-base-{{.Project}} --capabilities CAPABILITY_NAMED_IAM \
 #     --resolve-s3 --parameter-overrides Project={{.Project}} DomainName=... HostedZoneId=...
 #
 # 認証の設定は **このテンプレートには書かない**。client_secret を
@@ -108,6 +108,9 @@ Resources:
   AuthFunctionRole:
     Type: AWS::IAM::Role
     Properties:
+      # Explicit name keeps the role inside the boundary's {{.Project}}-* namespace.
+      RoleName: !Sub "${Project}-edge-auth"
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/{{.Project}}-boundary"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

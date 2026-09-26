@@ -831,7 +831,17 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		}
 		// テンプレートが読めれば「テンプレートが作るもの」はそこから導出する(#71)。
 		// packaged.yaml(CI 生成物)が無ければ素の template.yaml に落ちる。
-		facts := loadTemplateFacts(cfg.Template, cfgPath)
+		var facts *iampolicy.TemplateFacts
+		// static driver は意図的にテンプレートを持たない。探索すると、たまたま
+		// 同居する無関係な template.yaml から compute 権限を拾ってしまう。
+		// nil のままでも
+		// 後方互換の flag-only モードへ落ち、Lambda / API の権限まで出てしまう。
+		// 空の facts は「テンプレートを読めたが compute は無い」と同じ意味にする。
+		if cfg.Driver == staticdrv.DriverName {
+			facts = &iampolicy.TemplateFacts{Counts: map[string]int{}}
+		} else {
+			facts = loadTemplateFacts(cfg.Template, cfgPath)
+		}
 		if facts != nil {
 			for _, u := range facts.Unknown {
 				fmt.Fprintf(os.Stderr, "kagerou iam-policy: no permission mapping for %s — the generated policy does NOT cover it; add statements by hand\n", u)

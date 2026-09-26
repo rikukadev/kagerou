@@ -198,7 +198,7 @@ func TestStepsAndPlain(t *testing.T) {
 
 func TestWriteSetupScript(t *testing.T) {
 	dir := t.TempDir()
-	path, err := WriteSetupScript(dir, Params{Region: "ap-northeast-1"}, Detection{Owner: "rikukadev", Repo: "myapp"})
+	path, err := WriteSetupScript(dir, Params{Project: "myapp", Region: "ap-northeast-1"}, Detection{Owner: "rikukadev", Repo: "myapp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,10 +208,12 @@ func TestWriteSetupScript(t *testing.T) {
 	}
 	s := string(b)
 	for _, want := range []string{
-		`OWNER="rikukadev"`, `REPO="myapp"`, `REGION="ap-northeast-1"`,
-		"create-open-id-connect-provider",                // provider が無ければ作る
-		"repo:${OWNER}/${REPO}:*",                        // 旧形式 sub
-		"repo:${OWNER}@${OWNER_ID}/${REPO}@${REPO_ID}:*", // ID 形式 sub(新 org)
+		`OWNER="rikukadev"`, `REPO="myapp"`, `REGION="ap-northeast-1"`, `PROJECT="myapp"`,
+		"create-open-id-connect-provider",             // provider が無ければ作る
+		"iam-policy --doc trust",                      // BuildTrust と同じ限定 context を使う
+		`--owner-id "$OWNER_ID" --repo-id "$REPO_ID"`, // ID 形式 sub(新 org)
+		"put-role-permissions-boundary",               // deploy role に boundary
+		"put-role-policy",                             // 最小権限 policy
 		"create-repository",
 		"gh variable set AWS_ROLE_ARN",
 	} {

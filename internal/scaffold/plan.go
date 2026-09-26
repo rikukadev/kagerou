@@ -254,7 +254,7 @@ func baseStacks(p Params) []Prereq {
 			How: []string{
 				"init が deploy/edge-base.yaml を書き出す。us-east-1 で 1 回だけ deploy する:",
 				"sam deploy --template-file deploy/edge-base.yaml --region us-east-1 \\",
-				"  --stack-name kagerou-edge-base-" + p.Project + " --capabilities CAPABILITY_IAM",
+				"  --stack-name kagerou-edge-base-" + p.Project + " --capabilities CAPABILITY_NAMED_IAM",
 				"OIDC の issuer / client_id / client_secret は SSM に置く(テンプレート冒頭の手順)",
 			},
 			Cost: "固定費なし(CloudFront は無料枠内、Lambda@Edge はリクエスト課金)",
