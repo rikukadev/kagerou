@@ -807,6 +807,15 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	var allow allowFlag
 	fs.Var(&allow, "allow", "declared access for --doc execution: 'action1,action2=arn1,arn2' (repeatable)")
 	check := fs.String("check", "", "compare an attached policy JSON file against the generated one and report drift (exit non-zero on over-permission)")
+	// **実物を読む口**(#230)。ファイルとの比較だけでは「AWS に適用済みのロールが
+	// 古い」を誰も見ていない層が残る。そこは実行時に 403 を踏むまで分からず、
+	// 踏むのは schedule の reap(人が見ていない時間)。
+	checkRole := fs.String("check-role", "", "read the role's live inline + attached policies from AWS and report drift against the generated one")
+	// **意図した追加を宣言する口。** --check-role は inline / attached を全部
+	// 和集合にするので、デプロイとは別目的のポリシー(CI の自己点検など)が
+	// そのまま over-permission として出る。黙って無視すると化石も見逃すので、
+	// 明示したものだけ許す。
+	allowExtra := fs.String("allow-extra", "", "comma-separated actions that are intentionally beyond the generated set (--check / --check-role)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -833,6 +842,12 @@ func cmdIamPolicy(args []string, out *os.File) error {
 	// trust は Action 集合の形が違うので drift 検出の対象外。
 	if *check != "" && *doc == "trust" {
 		return fmt.Errorf("--check does not apply to --doc trust")
+	}
+	if *check != "" && *checkRole != "" {
+		return fmt.Errorf("--check and --check-role are mutually exclusive")
+	}
+	if *checkRole != "" && *doc == "trust" {
+		return fmt.Errorf("--check-role does not apply to --doc trust")
 	}
 
 	// buildPolicy は 1 つの config から最小ポリシーを作る。--check の和集合モードで
@@ -1003,11 +1018,25 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		return err
 	}
 
-	// --check: 生成した最小ポリシーを基準に、実 attach ポリシーの差分を報告する(#53 ④)。
-	if *check != "" {
-		data, err := os.ReadFile(*check)
-		if err != nil {
-			return fmt.Errorf("--check: %w", err)
+	// --check / --check-role: 生成した最小ポリシーを基準に差分を報告する(#53 ④ / #230)。
+	if *check != "" || *checkRole != "" {
+		var data []byte
+		var origin string
+		if *check != "" {
+			b, err := os.ReadFile(*check)
+			if err != nil {
+				return fmt.Errorf("--check: %w", err)
+			}
+			data, origin = b, *check
+		} else {
+			doc, sources, err := iampolicy.LiveRolePolicy(context.Background(), *checkRole)
+			if err != nil {
+				return fmt.Errorf("--check-role: %w", err)
+			}
+			// どのポリシーを足し合わせた結果かを出す。和集合にしているので、
+			// これを出さないと「なぜこの権限があるのか」が追えない
+			fmt.Fprintf(os.Stderr, "kagerou: role %s: %s\n", *checkRole, strings.Join(sources, " + "))
+			data, origin = doc, "role "+*checkRole
 		}
 		// pol は和集合済み(複数 config のとき)
 		gen := iampolicy.PolicyAllowActions(pol)
@@ -1015,12 +1044,30 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		if err != nil {
 			return err
 		}
+		if *allowExtra != "" {
+			allowed := map[string]bool{}
+			for _, a := range strings.Split(*allowExtra, ",") {
+				if a = strings.TrimSpace(a); a != "" {
+					allowed[a] = true
+				}
+			}
+			kept := extra[:0:0]
+			for _, a := range extra {
+				if allowed[a] {
+					// 消したことは伝える。黙って落とすと、宣言が古くなっても気づけない
+					fmt.Fprintf(os.Stderr, "kagerou: allow-extra: %s\n", a)
+					continue
+				}
+				kept = append(kept, a)
+			}
+			extra = kept
+		}
 		if len(extra) == 0 && len(missing) == 0 {
-			_, err := fmt.Fprintln(out, "no drift: attached policy matches the generated minimal actions")
+			_, err := fmt.Fprintf(out, "no drift: %s matches the generated minimal actions\n", origin)
 			return err
 		}
 		for _, a := range missing {
-			if _, err := fmt.Fprintf(out, "missing\t%s\t(generated policy needs it; attached may break)\n", a); err != nil {
+			if _, err := fmt.Fprintf(out, "missing\t%s\t(generated policy needs it; %s will 403)\n", a, origin); err != nil {
 				return err
 			}
 		}
@@ -1029,10 +1076,20 @@ func cmdIamPolicy(args []string, out *os.File) error {
 				return err
 			}
 		}
+		// **直し方を出す。** 差分だけ出しても、生成 → 適用の 2 手を思い出せないと
+		// 結局手で足して生成器から乖離する(この issue が起きた経路そのもの)。
+		if *checkRole != "" {
+			fmt.Fprintf(os.Stderr, `
+kagerou: 直すには生成し直して適用する:
+  kagerou iam-policy %s > policy.json
+  aws iam put-role-policy --role-name %s --policy-name <既存の inline policy 名> \
+    --policy-document file://policy.json
+`, strings.Join(regenArgs(cfgPaths, extraTemplates), " "), *checkRole)
+		}
 		if len(missing) > 0 {
 			// 生成器が要求するのに attach に無い = デプロイが 403 で落ちる側。
 			// over-permission より重いので、こちらも必ず失敗させる。
-			return fmt.Errorf("drift: %d action(s) missing from the attached policy", len(missing))
+			return fmt.Errorf("drift: %d action(s) missing from %s", len(missing), origin)
 		}
 		if len(extra) > 0 {
 			return fmt.Errorf("drift: %d action(s) beyond the generated minimal policy", len(extra))
@@ -1049,6 +1106,20 @@ func cmdIamPolicy(args []string, out *os.File) error {
 		return err
 	}
 	return nil
+}
+
+// regenArgs は「このポリシーを作り直すには何を渡せばよいか」を組み立てる。
+// --check-role の出力に入れる。差分だけ出しても、生成 → 適用の 2 手を
+// 思い出せないと結局手で足して生成器から乖離する(#230 が起きた経路)。
+func regenArgs(cfgPaths, templates stringsFlag) []string {
+	var args []string
+	for _, p := range cfgPaths {
+		args = append(args, "--config", p)
+	}
+	for _, t := range templates {
+		args = append(args, "--template", t)
+	}
+	return args
 }
 
 func cmdValidate(args []string, out *os.File) error {

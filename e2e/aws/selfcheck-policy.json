@@ -2,10 +2,23 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadOwnDeployPolicy",
+      "Sid": "ReadOwnPolicies",
       "Effect": "Allow",
-      "Action": "iam:GetRolePolicy",
+      "Action": [
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies"
+      ],
       "Resource": "arn:aws:iam::*:role/kagerou-e2e-github-actions"
+    },
+    {
+      "Sid": "ReadAttachedManagedPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion"
+      ],
+      "Resource": "*"
     }
   ]
 }
