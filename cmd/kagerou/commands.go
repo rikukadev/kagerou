@@ -644,6 +644,13 @@ func cmdReap(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	// static のときだけ S3 も消せる driver を用意する(#238)。
+	var sdrv *staticdrv.Driver
+	if cfg.Driver == staticdrv.DriverName {
+		if sdrv, err = staticdrv.New(ctx, cfg.Region); err != nil {
+			return err
+		}
+	}
 	// 列挙は driver 側で project に絞る(#243)。--all-projects は空文字で全件。
 	// filterByProject はそのまま通す — タグ検索の結果を鵜呑みにせず、
 	// 手で付け替えられたタグが混ざっても境界が崩れないようにする。
@@ -675,7 +682,12 @@ func cmdReap(args []string, out *os.File) error {
 				continue
 			}
 		}
-		if err := drv.Down(ctx, info.StackName); err != nil {
+		// **static は S3 も消す**(#238)。ここで stack driver の Down だけを
+		// 呼ぶと、メタスタックは消えるのに公開オブジェクトが残り、以後どの
+		// 定期処理からも見えなくなる。down 側は分岐していたが reap は
+		// していなかったので、TTL で回収された static 環境の成果物が
+		// **全部** 公開されたまま残っていた。
+		if err := reapDown(ctx, drv, sdrv, cfg, name, info.StackName, *allProjects); err != nil {
 			// 1 件の失敗で全体を止めない(残りは回収する)
 			fmt.Fprintf(os.Stderr, "kagerou: reap %s: %v\n", name, err)
 			continue
@@ -1120,6 +1132,29 @@ func regenArgs(cfgPaths, templates stringsFlag) []string {
 		args = append(args, "--template", t)
 	}
 	return args
+}
+
+// reapDown は driver に応じて環境を消す(#238)。
+//
+// static は **S3 を先に、メタスタックを後に** 消す(static.Down の中でそうする)。
+// sdrv が nil = static ではないので、stack driver だけで足りる。
+//
+// **--all-projects のときは static の S3 を消さない。** 対象がどのリポジトリの
+// 環境か決められないので、この kagerou.yaml の bucket / prefix 規則を他プロジェクトの
+// 環境名に当てると、無関係なプレフィックスを消しかねない。hooks を呼ばないのと同じ理由
+// (#48)。その分はそのプロジェクトの reap が回収する。
+func reapDown(ctx context.Context, drv *stack.Driver, sdrv *staticdrv.Driver, cfg config.Config, name, stackName string, allProjects bool) error {
+	if sdrv == nil {
+		return drv.Down(ctx, stackName)
+	}
+	if allProjects {
+		// この config の bucket / prefix 規則を他プロジェクトの環境名に当てると、
+		// 無関係なプレフィックスを消しかねない。消せないことは黙らずに言う
+		fmt.Fprintf(os.Stderr, "kagerou: warning: reap --all-projects: %s の S3 は消しません"+
+			"(prefix 規則が他プロジェクトに当てられないため)。そのプロジェクトの reap で回収してください\n", name)
+		return drv.Down(ctx, stackName)
+	}
+	return sdrv.Down(ctx, stackName, cfg.Static.Bucket, cfg.StaticPrefix(name))
 }
 
 func cmdValidate(args []string, out *os.File) error {

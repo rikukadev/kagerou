@@ -139,16 +139,22 @@ func (in UpInput) prefix() string {
 	return in.Name
 }
 
-// Down はメタスタックとプレフィックス配下のオブジェクトを消す。どちらも冪等。
+// Down はプレフィックス配下のオブジェクトとメタスタックを消す。どちらも冪等。
 // prefix は Up と同じもの(共有 base では <project>/<name>)を渡すこと。
+//
+// **S3 を先に消し、メタスタックを後に消す**(#238)。逆にすると、S3 の削除が
+// 失敗したときに「公開オブジェクトは生きているのに、list / reap が追う
+// メタスタックは無い」状態になる。以後どの定期処理からも見えず、手で消すしかない。
+//
+// この順なら、途中で失敗してもメタスタックが残るので次の reap が再試行する。
+// 公開物が残ったまま台帳から消えるより、消し残しとして見え続ける方がよい。
 func (d *Driver) Down(ctx context.Context, stackName, bucket, prefix string) error {
-	if err := d.stack.Down(ctx, stackName); err != nil {
-		return err
+	if bucket != "" {
+		if err := d.deletePrefix(ctx, bucket, prefix); err != nil {
+			return err
+		}
 	}
-	if bucket == "" {
-		return nil
-	}
-	return d.deletePrefix(ctx, bucket, prefix)
+	return d.stack.Down(ctx, stackName)
 }
 
 // Sync は dist を s3://bucket/name/ に同期する(ローカルに無いものは消す)。
@@ -260,16 +266,44 @@ func (d *Driver) deletePrefix(ctx context.Context, bucket, prefix string) error 
 func (d *Driver) deleteObjectsWith(ctx context.Context, cli *s3.Client, bucket string, objs []s3types.ObjectIdentifier) error {
 	for len(objs) > 0 {
 		n := min(len(objs), 1000) // DeleteObjects の上限
-		_, err := cli.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		out, err := cli.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: &bucket,
 			Delete: &s3types.Delete{Objects: objs[:n]},
 		})
 		if err != nil {
 			return fmt.Errorf("delete objects in %s: %w", bucket, err)
 		}
+		// **DeleteObjects は HTTP 200 でも要素ごとに失敗を返す**(#238)。
+		// out を捨てると、消えていないオブジェクトを消したことにしてしまう。
+		// down では公開物が残り、sync では古いファイルが公開され続ける。
+		if err := deleteObjectsErr(bucket, out); err != nil {
+			return err
+		}
 		objs = objs[n:]
 	}
 	return nil
+}
+
+// deleteObjectsErr は DeleteObjects の要素ごとの失敗をエラーにする。
+// 全部は出さない(1000 件並ぶと読めない)。件数と先頭いくつかを出す。
+func deleteObjectsErr(bucket string, out *s3.DeleteObjectsOutput) error {
+	if out == nil || len(out.Errors) == 0 {
+		return nil
+	}
+	const show = 3
+	var parts []string
+	for i, e := range out.Errors {
+		if i == show {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s: %s", aws.ToString(e.Key), aws.ToString(e.Message)))
+	}
+	more := ""
+	if len(out.Errors) > show {
+		more = fmt.Sprintf(" (他 %d 件)", len(out.Errors)-show)
+	}
+	return fmt.Errorf("delete objects in %s: %d 件が消えていません: %s%s",
+		bucket, len(out.Errors), strings.Join(parts, ", "), more)
 }
 
 func prefixKey(prefix, rel string) string { return strings.TrimSuffix(prefix, "/") + "/" + rel }

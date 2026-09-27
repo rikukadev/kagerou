@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/rikukadev/kagerou/internal/driver/stack"
 )
 
@@ -281,5 +283,79 @@ func TestSharedPrefixIsolation(t *testing.T) {
 	}
 	if got := keysUnder(t, d, ctx, bucket, "appb/pr-1"); len(got) != 1 {
 		t.Fatalf("appb must survive: %v", got)
+	}
+}
+
+// DeleteObjects は HTTP 200 でも要素ごとに失敗を返す(#238)。out を捨てると
+// 消えていないオブジェクトを消したことにしてしまう。moto では要素ごとの失敗を
+// 作れないので、判定そのものを単体で固定する。
+func TestDeleteObjectsErrSurfacesPerObjectFailures(t *testing.T) {
+	if err := deleteObjectsErr("b", nil); err != nil {
+		t.Errorf("out が nil なら成功のはず: %v", err)
+	}
+	if err := deleteObjectsErr("b", &s3.DeleteObjectsOutput{}); err != nil {
+		t.Errorf("Errors が空なら成功のはず: %v", err)
+	}
+	out := &s3.DeleteObjectsOutput{Errors: []s3types.Error{
+		{Key: aws.String("a/index.html"), Message: aws.String("AccessDenied")},
+		{Key: aws.String("a/app.js"), Message: aws.String("AccessDenied")},
+		{Key: aws.String("a/x.css"), Message: aws.String("AccessDenied")},
+		{Key: aws.String("a/y.css"), Message: aws.String("AccessDenied")},
+	}}
+	err := deleteObjectsErr("b", out)
+	if err == nil {
+		t.Fatal("要素ごとの失敗がエラーにならない")
+	}
+	msg := err.Error()
+	// 件数と、どれが残ったかが分かること
+	if !strings.Contains(msg, "4 件") {
+		t.Errorf("件数が出ていない: %s", msg)
+	}
+	if !strings.Contains(msg, "a/index.html") {
+		t.Errorf("残ったキーが出ていない: %s", msg)
+	}
+	// 1000 件並ぶと読めないので全部は出さない
+	if strings.Contains(msg, "a/y.css") {
+		t.Errorf("4 件目まで出てしまっている(先頭 3 件 + 件数のはず): %s", msg)
+	}
+	if !strings.Contains(msg, "他 1 件") {
+		t.Errorf("省略した件数が出ていない: %s", msg)
+	}
+}
+
+// S3 の削除が失敗したら **メタスタックを残す**(#238)。消してしまうと
+// 公開オブジェクトが生きているのに list / reap から見えなくなり、手で消すしかない。
+func TestDownKeepsStackWhenS3Fails(t *testing.T) {
+	d, ctx := testDriver(t)
+	bucket := "kagerou-test-down-order"
+	makeBucket(t, d, ctx, bucket)
+	stackName := "kagerou-test-down-order-meta"
+	t.Cleanup(func() { _ = d.stack.Down(ctx, stackName) })
+
+	if _, err := d.Up(ctx, UpInput{
+		UpInput: stack.UpInput{StackName: stackName, Name: "down-order", Project: "spa"},
+		Bucket:  bucket,
+		Dist:    writeDist(t, map[string]string{"index.html": "hi"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 存在しないバケットを渡して S3 側を失敗させる
+	err := d.Down(ctx, stackName, "kagerou-test-no-such-bucket-238", "down-order")
+	if err == nil {
+		t.Fatal("S3 の削除が失敗したのにエラーにならない")
+	}
+	infos, lerr := d.stack.List(ctx, "")
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	var found bool
+	for _, info := range infos {
+		if info.StackName == stackName {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("S3 の削除が失敗したのにメタスタックが消えている(孤児になる)")
 	}
 }
