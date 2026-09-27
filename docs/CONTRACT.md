@@ -357,6 +357,11 @@ CI の drift ガードに使える。判定はアクション集合の比較で�
   `DescribeStacks{StackName: <arn>}` を叩く。ARN をそのまま渡すので
   `DescribeStacks` は上の `<name_prefix>*` スコープのままでよく、
   **全スタックの Outputs を読む権限は要らない**。
+- **`tag:GetResources` が無くても動く。** 拒否されたら従来の全件走査に落ちる(#256)。
+  v0.16.0 より前に作ったロールをそのまま使えるようにするため。落ちたことは警告で伝える
+  (黙ると「権限を狭めたつもりで狭まっていない」に気づけない)。**AccessDenied のときだけ**
+  落ちる — 通信断や API の不調を権限の問題と読み替えて隠さないため。
+  走査に落ちる構成では `DescribeStacks` を `Resource: "*"` で持つ必要が残る。
   `tag:GetResources` は condition key も resource type も持たないので
   `Resource: "*"` になるが、返るのは ARN とタグだけで Outputs / Parameters は含まない。
   タグ検索は**結果整合**なので、`up` 直後の `list` に数秒現れないことがある。

@@ -199,6 +199,10 @@ func Build(o Options) (Policy, error) {
 			// Resource は "*" しか書けない(service authorization reference)。
 			// タグで絞るのは呼び出し側の引数にすぎず、IAM では強制できない。
 			// ただし返るのは ARN とタグだけで、Outputs / Parameters は含まれない。
+			//
+			// **無くても動く。** 拒否されたら全件走査に落ちる(#256)。ただしその
+			// 場合は DescribeStacks を Resource: "*" で持つ必要があり、全スタックの
+			// Outputs を読める状態が残る。狭くしたいならこれを足す。
 			Sid: "TagEnumeration", Effect: "Allow",
 			Action:   []string{"tag:GetResources"},
 			Resource: "*",
