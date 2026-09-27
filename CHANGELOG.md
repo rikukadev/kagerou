@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/rikukadev/kagerou/compare/v0.17.0...v0.18.0) (2026-09-27)
+
+
+### Features
+
+* **static:** メタスタックの無い孤児プレフィックスを reap で回収する ([#254](https://github.com/rikukadev/kagerou/issues/254)) ([2be7a39](https://github.com/rikukadev/kagerou/commit/2be7a39dd7864d283e38c1cba3b3ba7cd1988d98))
+
 ## [0.17.0](https://github.com/rikukadev/kagerou/compare/v0.16.2...v0.17.0) (2026-09-27)
 
 
