@@ -1197,20 +1197,25 @@ func reapOrphans(ctx context.Context, sdrv *staticdrv.Driver, cfg config.Config,
 		return err
 	}
 	for _, o := range orphans {
+		var line string
 		switch {
 		case !layout.Deletable:
-			fmt.Fprintf(out, "orphan\t%s\t(%d objects, s3://%s/%s) — 消しません: %s\n",
+			line = fmt.Sprintf("orphan\t%s\t(%d objects, s3://%s/%s) — 消しません: %s\n",
 				o.Name, o.Objects, cfg.Static.Bucket, o.Prefix, layout.Reason)
 		case dryRun:
-			fmt.Fprintf(out, "would delete orphan\t%s\t(%d objects, s3://%s/%s)\n",
+			line = fmt.Sprintf("would delete orphan\t%s\t(%d objects, s3://%s/%s)\n",
 				o.Name, o.Objects, cfg.Static.Bucket, o.Prefix)
 		default:
 			if err := sdrv.DeleteOrphan(ctx, cfg.Static.Bucket, o); err != nil {
+				// 1 件の失敗で残りを諦めない。消せなかったことは stderr に出す
 				fmt.Fprintf(os.Stderr, "kagerou: reap: orphan %s: %v\n", o.Name, err)
 				continue
 			}
-			fmt.Fprintf(out, "deleted orphan\t%s\t(%d objects, s3://%s/%s)\n",
+			line = fmt.Sprintf("deleted orphan\t%s\t(%d objects, s3://%s/%s)\n",
 				o.Name, o.Objects, cfg.Static.Bucket, o.Prefix)
+		}
+		if _, err := out.WriteString(line); err != nil {
+			return err
 		}
 	}
 	return nil
