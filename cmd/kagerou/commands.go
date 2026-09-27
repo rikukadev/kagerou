@@ -705,6 +705,19 @@ func cmdReap(args []string, out *os.File) error {
 			return err
 		}
 	}
+
+	// 孤児プレフィックスの回収(#253)。メタスタックが消えて S3 だけ残ったものは
+	// list にも reap にも出てこない(環境を見つける台帳がスタックだから)。
+	// 公開されたまま誰からも見つけられないので、ここで拾う。
+	//
+	// --all-projects では触らない。この config の prefix 規則を他プロジェクトに
+	// 当てられないのと同じ理由(#48)。
+	if sdrv != nil && !*allProjects {
+		if err := reapOrphans(ctx, sdrv, cfg, infos, *grace, *dryRun, out); err != nil {
+			// 孤児の回収に失敗しても、TTL 回収の結果は返す
+			fmt.Fprintf(os.Stderr, "kagerou: reap: orphan prefixes: %v\n", err)
+		}
+	}
 	return nil
 }
 
@@ -1155,6 +1168,57 @@ func reapDown(ctx context.Context, drv *stack.Driver, sdrv *staticdrv.Driver, cf
 		return drv.Down(ctx, stackName)
 	}
 	return sdrv.Down(ctx, stackName, cfg.Static.Bucket, cfg.StaticPrefix(name))
+}
+
+// reapOrphans はメタスタックの無いプレフィックスを回収する(#253)。
+//
+// 消すのは **project の名前空間に閉じているときだけ**。static.prefix が既定の
+// {name} だとバケット直下に並ぶので、同じバケットを共有する他 project のものと
+// 区別できない。その場合は報告だけにする(黙って見逃すと公開が続く)。
+func reapOrphans(ctx context.Context, sdrv *staticdrv.Driver, cfg config.Config,
+	infos []*stack.Info, grace time.Duration, dryRun bool, out *os.File) error {
+	if cfg.Static.Bucket == "" {
+		return nil
+	}
+	// {project} は展開し {name} は残す。StaticPrefix に環境名として {name} を
+	// 渡すと、テンプレート内の {name} がそのまま残る
+	layout := staticdrv.ParsePrefixLayout(cfg.StaticPrefix("{name}"))
+
+	known := map[string]bool{}
+	for _, info := range infos {
+		if n := info.Tags[stack.TagName]; n != "" {
+			known[n] = true
+		}
+	}
+	// grace の中にあるものは飛ばす。タグ検索は結果整合なので、up 直後の環境は
+	// list に出ないことがある。それを「台帳に無い」と読んで消すと本番事故になる
+	orphans, err := sdrv.FindOrphans(ctx, cfg.Static.Bucket, layout.Parent, known, time.Now().Add(-grace))
+	if err != nil {
+		return err
+	}
+	for _, o := range orphans {
+		var line string
+		switch {
+		case !layout.Deletable:
+			line = fmt.Sprintf("orphan\t%s\t(%d objects, s3://%s/%s) — 消しません: %s\n",
+				o.Name, o.Objects, cfg.Static.Bucket, o.Prefix, layout.Reason)
+		case dryRun:
+			line = fmt.Sprintf("would delete orphan\t%s\t(%d objects, s3://%s/%s)\n",
+				o.Name, o.Objects, cfg.Static.Bucket, o.Prefix)
+		default:
+			if err := sdrv.DeleteOrphan(ctx, cfg.Static.Bucket, o); err != nil {
+				// 1 件の失敗で残りを諦めない。消せなかったことは stderr に出す
+				fmt.Fprintf(os.Stderr, "kagerou: reap: orphan %s: %v\n", o.Name, err)
+				continue
+			}
+			line = fmt.Sprintf("deleted orphan\t%s\t(%d objects, s3://%s/%s)\n",
+				o.Name, o.Objects, cfg.Static.Bucket, o.Prefix)
+		}
+		if _, err := out.WriteString(line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cmdValidate(args []string, out *os.File) error {
