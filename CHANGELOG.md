@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.15.1](https://github.com/rikukadev/kagerou/compare/v0.15.0...v0.15.1) (2026-09-27)
+## [0.16.0](https://github.com/rikukadev/kagerou/compare/v0.15.0...v0.16.0) (2026-09-27)
+
+
+### Features
+
+* **driver:** list / reap の列挙をタグ検索にして、全スタック読み取りを外す ([#244](https://github.com/rikukadev/kagerou/issues/244)) ([3df44eb](https://github.com/rikukadev/kagerou/commit/3df44ebf187c06cc272f8a550e5ee9ad291b157b)), closes [#243](https://github.com/rikukadev/kagerou/issues/243)
 
 
 ### Bug Fixes
