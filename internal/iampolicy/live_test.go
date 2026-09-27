@@ -139,3 +139,111 @@ func TestLiveRolePolicyErrorsWhenNoPolicy(t *testing.T) {
 		t.Errorf("理由が分からないエラー: %v", err)
 	}
 }
+
+// **ワイルドカードを展開する**(#230 の実装の欠陥を直した分)。
+//
+// AdministratorAccess は Action: "*" なので、素の文字列比較だと生成器の全アクションが
+// 「不足」と出て、**admin なのに 403 になると読める**。逆の案内になるので必ず展開する。
+func TestCheckDriftExpandsWildcards(t *testing.T) {
+	gen := map[string]bool{
+		"cloudformation:CreateStack": true,
+		"s3:PutObject":               true,
+		"apigateway:GetRestApis":     true,
+	}
+	for _, tc := range []struct {
+		name            string
+		attached        string
+		wantMissing     int
+		wantExtraSubset []string
+	}{
+		{
+			name:        "AdministratorAccess は不足ゼロ",
+			attached:    `{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`,
+			wantMissing: 0,
+			// admin は当然過剰。それは報告されるべき
+			wantExtraSubset: []string{"*"},
+		},
+		{
+			name:        "サービス単位のワイルドカード",
+			attached:    `{"Statement":[{"Effect":"Allow","Action":["cloudformation:*","s3:*","apigateway:*"],"Resource":"*"}]}`,
+			wantMissing: 0,
+		},
+		{
+			name:        "前方一致",
+			attached:    `{"Statement":[{"Effect":"Allow","Action":["cloudformation:Create*","s3:Put*","apigateway:Get*"],"Resource":"*"}]}`,
+			wantMissing: 0,
+		},
+		{
+			name:        "大文字小文字は区別しない",
+			attached:    `{"Statement":[{"Effect":"Allow","Action":["CLOUDFORMATION:*","S3:*","APIGATEWAY:*"],"Resource":"*"}]}`,
+			wantMissing: 0,
+		},
+		{
+			name:        "関係ないワイルドカードでは埋まらない",
+			attached:    `{"Statement":[{"Effect":"Allow","Action":["lambda:*"],"Resource":"*"}]}`,
+			wantMissing: 3,
+		},
+	} {
+		extra, missing, err := CheckDriftActions(gen, []byte(tc.attached))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(missing) != tc.wantMissing {
+			t.Errorf("%s: missing = %v, want %d 件", tc.name, missing, tc.wantMissing)
+		}
+		for _, want := range tc.wantExtraSubset {
+			var found bool
+			for _, e := range extra {
+				if e == want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s: extra に %q が無い: %v", tc.name, want, extra)
+			}
+		}
+	}
+}
+
+// 生成器側のワイルドカードは attach 側の個別アクションを覆う(過剰としない)。
+// ただし **逆は埋まらない** — 生成器が apigateway:* を要求しているのに実ロールが
+// GET と POST だけなら、本当に足りていない。
+func TestCheckDriftGeneratedWildcardCoversAttached(t *testing.T) {
+	gen := map[string]bool{"apigateway:*": true}
+	extra, missing, err := CheckDriftActions(gen,
+		[]byte(`{"Statement":[{"Effect":"Allow","Action":["apigateway:GET","apigateway:POST"],"Resource":"*"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 生成器の apigateway:* が GET / POST を覆うので過剰は出ない
+	if len(extra) != 0 {
+		t.Errorf("生成器の apigateway:* が attach 側を覆っていない: %v", extra)
+	}
+	// GET と POST しか無いのに apigateway:* を要求されている = 不足
+	if len(missing) != 1 || missing[0] != "apigateway:*" {
+		t.Errorf("missing = %v, want [apigateway:*]", missing)
+	}
+}
+
+func TestWildcardMatch(t *testing.T) {
+	for _, tc := range []struct {
+		pat, s string
+		want   bool
+	}{
+		{"*", "anything", true},
+		{"s3:*", "s3:GetObject", true},
+		{"s3:*", "sqs:GetObject", false},
+		{"s3:Get*", "s3:GetObject", true},
+		{"s3:Get*", "s3:PutObject", false},
+		{"s3:GetObject", "s3:GetObject", true},
+		{"s3:?etObject", "s3:GetObject", true},
+		{"s3:*Object", "s3:GetObject", true},
+		{"s3:*Object", "s3:GetObjectTagging", false},
+		{"", "", true},
+		{"*", "", true},
+	} {
+		if got := wildcardMatch(tc.pat, tc.s); got != tc.want {
+			t.Errorf("wildcardMatch(%q, %q) = %v, want %v", tc.pat, tc.s, got, tc.want)
+		}
+	}
+}
