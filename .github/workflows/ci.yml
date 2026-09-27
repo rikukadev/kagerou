@@ -97,6 +97,15 @@ jobs:
           jq --arg t "$TITLE" '. + [$t]' /tmp/commit-messages.json > /tmp/msgs.json
           node ./.github/scripts/check-commit-parse.mjs /tmp/msgs.json
 
+  # Action の install が checksum 不一致で **本当に止まるか**(#239)。
+  # ここを飛ばすと、配信経路を取られたときに AWS 資格情報を持つプロセスとして
+  # 任意のバイナリが走る(生成 workflow は OIDC 設定の後に Action を呼ぶ)。
+  action-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash action/install_test.sh
+
   lint:
     runs-on: ubuntu-latest
     steps:
