@@ -22,14 +22,19 @@
 //   viewer-request の上限は 5 秒 / 128MB。cold start + discovery + token 交換が
 //   ここに収まる必要がある(discovery とパラメータはコンテナ内で使い回す)。
 
-import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto'
+import { createHmac, timingSafeEqual, randomBytes, createPublicKey, verify as verifySignature } from 'node:crypto'
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm'
 
 const COOKIE = 'kagerou_session'
+const STATE_COOKIE = 'kagerou_oidc_state'
 const CALLBACK_PATH = '/_kagerou/auth/callback'
 const AUTH_LABEL = 'auth' // 受け口のホスト: auth.<domain>
 const SESSION_TTL = 12 * 60 * 60 // 秒。プレビューの TTL より長くする意味は無い
 const STATE_TTL = 10 * 60
+const CLOCK_SKEW = 60
+const MAX_TOKEN_AGE = 24 * 60 * 60
+const JWKS_TTL = 60 * 60
+const ALLOWED_ALGS = new Set(['RS256'])
 
 // Lambda@Edge は us-east-1 で動く。設定もそこに置く(リージョンを跨がない)
 const ssm = new SSMClient({ region: 'us-east-1' })
@@ -67,22 +72,37 @@ export const handler = async (event) => {
 // --- OIDC ------------------------------------------------------------------
 
 async function login(req, cfg, host, domain) {
-  const state = sign({ h: host, u: original(req), exp: now() + STATE_TTL, n: nonce() }, cfg.session_secret)
+  const n = nonce()
+  const state = sign({ h: host, u: original(req), exp: now() + STATE_TTL, n }, cfg.session_secret)
+  const binding = sign({ n, exp: now() + STATE_TTL }, cfg.session_secret)
   const url = new URL(cfg.authorization_endpoint)
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', cfg.client_id)
   url.searchParams.set('redirect_uri', redirectURI(domain))
   url.searchParams.set('scope', cfg.scope || 'openid email')
   url.searchParams.set('state', state)
+  url.searchParams.set('nonce', n)
   if (cfg.allowed_domain) url.searchParams.set('hd', cfg.allowed_domain)
-  return redirect(url.toString())
+  const response = redirect(url.toString())
+  response.headers['set-cookie'] = [{
+    key: 'Set-Cookie',
+    value: `${STATE_COOKIE}=${binding}; Domain=.${domain}; Path=${CALLBACK_PATH}; Secure; HttpOnly; SameSite=Lax; Max-Age=${STATE_TTL}`,
+  }]
+  return response
 }
 
 async function callback(req, cfg, domain) {
   const q = new URLSearchParams(req.querystring || '')
   const code = q.get('code')
   const state = verify(q.get('state'), cfg.session_secret)
-  if (!code || !state) return deny('invalid callback')
+  const binding = verify(cookie(req, STATE_COOKIE), cfg.session_secret)
+  if (!code || !state || !binding || !safeStringEqual(state.n, binding.n)) {
+    return deny('invalid callback')
+  }
+  if (typeof state.h !== 'string' || !state.h.endsWith('.' + domain) ||
+      typeof state.u !== 'string' || !state.u.startsWith('/') || state.u.startsWith('//')) {
+    return deny('invalid callback target')
+  }
 
   const res = await fetch(cfg.token_endpoint, {
     method: 'POST',
@@ -98,14 +118,21 @@ async function callback(req, cfg, domain) {
   if (!res.ok) return deny('token exchange failed: ' + res.status)
   const token = await res.json()
 
-  const claims = decodeJWT(token.id_token)
-  if (!claims) return deny('no id_token')
+  let claims
+  try {
+    claims = await verifyIDToken(token.id_token, cfg, state.n)
+  } catch (err) {
+    return deny('invalid id_token: ' + err.message)
+  }
   // 誰でもログインできる IdP(Google の個人アカウント等)で全公開にしないため、
   // allowed_domain を設定していたらここで弾く。hd パラメータは省略可能な
   // ヒントでしかなく、これが最終的な関門になる。
   if (cfg.allowed_domain) {
     const email = String(claims.email || '')
-    if (claims.hd !== cfg.allowed_domain && !email.endsWith('@' + cfg.allowed_domain)) {
+    const allowed = cfg.allowed_domain.toLowerCase()
+    const emailDomain = email.slice(email.lastIndexOf('@') + 1).toLowerCase()
+    if (claims.email_verified !== true || String(claims.hd || '').toLowerCase() !== allowed ||
+        !email.includes('@') || emailDomain !== allowed) {
       return deny('not allowed: ' + (email || 'unknown'))
     }
   }
@@ -120,6 +147,9 @@ async function callback(req, cfg, domain) {
         // Domain=.<domain> で全プレビュー環境に効かせる(環境ごとに
         // ログインし直させない)。Secure/HttpOnly は常に付ける。
         value: `${COOKIE}=${session}; Domain=.${domain}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL}`,
+      }, {
+        key: 'Set-Cookie',
+        value: `${STATE_COOKIE}=; Domain=.${domain}; Path=${CALLBACK_PATH}; Secure; HttpOnly; SameSite=Lax; Max-Age=0`,
       }],
       'cache-control': [{ key: 'Cache-Control', value: 'no-store' }],
     },
@@ -160,12 +190,102 @@ async function load(domain) {
   for (const k of ['issuer', 'client_id', 'client_secret', 'session_secret']) {
     if (!out[k]) throw new Error(`${prefix}${k} is not set`)
   }
+  if (!isHTTPS(out.issuer)) throw new Error('issuer must be an https URL')
   const disco = await fetch(out.issuer.replace(/\/$/, '') + '/.well-known/openid-configuration')
   if (!disco.ok) throw new Error('discovery failed: ' + disco.status)
   const meta = await disco.json()
+  if (meta.issuer !== out.issuer) throw new Error('discovery issuer does not match configured issuer')
+  for (const k of ['authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
+    if (!isHTTPS(meta[k])) throw new Error(`discovery ${k} must be an https URL`)
+  }
+  const supported = Array.isArray(meta.id_token_signing_alg_values_supported)
+    ? meta.id_token_signing_alg_values_supported.filter((alg) => ALLOWED_ALGS.has(alg))
+    : []
+  if (supported.length === 0) throw new Error('discovery has no supported ID token signing algorithm')
+  out.issuer = meta.issuer
   out.authorization_endpoint = meta.authorization_endpoint
   out.token_endpoint = meta.token_endpoint
+  out.jwks_uri = meta.jwks_uri
+  out.allowed_algs = new Set(supported)
+  await refreshJWKS(out)
   return out
+}
+
+function isHTTPS(value) {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+async function refreshJWKS(cfg) {
+  const res = await fetch(cfg.jwks_uri)
+  if (!res.ok) throw new Error('jwks fetch failed: ' + res.status)
+  const body = await res.json()
+  if (!Array.isArray(body.keys)) throw new Error('jwks has no keys array')
+  cfg.jwks = body.keys
+  cfg.jwks_loaded_at = now()
+}
+
+async function signingKey(cfg, kid, alg) {
+  if (!cfg.jwks || cfg.jwks_loaded_at + JWKS_TTL < now()) await refreshJWKS(cfg)
+  let keys = cfg.jwks.filter((key) => key.kid === kid)
+  if (keys.length === 0) {
+    // IdP の鍵ローテーション直後は、cold start 時のJWKSに新しいkidが無い。
+    await refreshJWKS(cfg)
+    keys = cfg.jwks.filter((key) => key.kid === kid)
+  }
+  if (keys.length !== 1) throw new Error('signing key not found or ambiguous')
+  const key = keys[0]
+  if (key.kty !== 'RSA' || (key.use && key.use !== 'sig') ||
+      (key.alg && key.alg !== alg) || (key.key_ops && !key.key_ops.includes('verify'))) {
+    throw new Error('signing key is not valid for ID token verification')
+  }
+  return createPublicKey({ key, format: 'jwk' })
+}
+
+async function verifyIDToken(jwt, cfg, expectedNonce) {
+  const parts = String(jwt || '').split('.')
+  if (parts.length !== 3 || parts.some((part) => !part)) throw new Error('malformed JWT')
+
+  let header
+  let claims
+  try {
+    header = JSON.parse(Buffer.from(parts[0], 'base64url').toString())
+    claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString())
+  } catch {
+    throw new Error('malformed JWT JSON')
+  }
+  if (!cfg.allowed_algs.has(header.alg) || !ALLOWED_ALGS.has(header.alg) || typeof header.kid !== 'string') {
+    throw new Error('disallowed alg or missing kid')
+  }
+
+  const key = await signingKey(cfg, header.kid, header.alg)
+  const valid = verifySignature(
+    'RSA-SHA256',
+    Buffer.from(parts[0] + '.' + parts[1]),
+    key,
+    Buffer.from(parts[2], 'base64url'),
+  )
+  if (!valid) throw new Error('signature verification failed')
+
+  const t = now()
+  if (claims.iss !== cfg.issuer) throw new Error('issuer mismatch')
+  const audiences = typeof claims.aud === 'string' ? [claims.aud] : claims.aud
+  if (!Array.isArray(audiences) || !audiences.includes(cfg.client_id)) throw new Error('audience mismatch')
+  if ((audiences.length > 1 && typeof claims.azp !== 'string') ||
+      (claims.azp !== undefined && claims.azp !== cfg.client_id)) {
+    throw new Error('authorized party mismatch')
+  }
+  if (!Number.isInteger(claims.exp) || claims.exp <= t - CLOCK_SKEW) throw new Error('token expired')
+  if (!Number.isInteger(claims.iat) || claims.iat > t + CLOCK_SKEW || claims.iat < t - MAX_TOKEN_AGE ||
+      claims.exp <= claims.iat) {
+    throw new Error('invalid issued-at time')
+  }
+  if (typeof claims.sub !== 'string' || !claims.sub) throw new Error('missing subject')
+  if (!safeStringEqual(claims.nonce, expectedNonce)) throw new Error('nonce mismatch')
+  return claims
 }
 
 // --- 署名付きの値 ----------------------------------------------------------
@@ -202,22 +322,18 @@ function b64url(buf) {
 }
 
 function nonce() {
-  return b64url(randomBytes(9))
+  return b64url(randomBytes(16))
+}
+
+function safeStringEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false
+  const a = Buffer.from(left)
+  const b = Buffer.from(right)
+  return a.length === b.length && timingSafeEqual(a, b)
 }
 
 function now() {
   return Math.floor(Date.now() / 1000)
-}
-
-// decodeJWT は id_token の payload を読むだけ。**署名は検証しない**。
-// token_endpoint とは TLS 越しに client_secret で直接やり取りしており、
-// この id_token はその応答そのものなので、間に第三者は入れない。
-function decodeJWT(jwt) {
-  try {
-    return JSON.parse(Buffer.from(String(jwt).split('.')[1], 'base64url').toString())
-  } catch {
-    return null
-  }
 }
 
 // --- CloudFront の小道具 ---------------------------------------------------

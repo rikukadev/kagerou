@@ -130,8 +130,10 @@ func TestScaffoldEdgeAuth(t *testing.T) {
 
 	fn := read(t, dir, "deploy/edge-auth/index.mjs")
 	for _, want := range []string{
-		"GetParametersByPathCommand", // 設定は SSM から(Lambda@Edge に env は無い)
-		"timingSafeEqual",            // セッション署名の比較
+		"GetParametersByPathCommand",   // 設定は SSM から(Lambda@Edge に env は無い)
+		"timingSafeEqual",              // セッション署名の比較
+		"verifySignature",              // discovery/JWKS で ID token の署名を検証
+		"url.searchParams.set('nonce'", // nonce を認可requestへ送り、browser cookieとも結ぶ
 		"Secure; HttpOnly",
 		"allowed_domain", // 誰でもログインできる IdP で全公開にしない
 	} {
