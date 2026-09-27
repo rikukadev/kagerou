@@ -904,18 +904,74 @@ func CheckDriftActions(gen map[string]bool, attached []byte) (extra, missing []s
 		}
 	}
 	for a := range att {
-		if !gen[a] {
+		if !matchedByAny(a, gen) {
 			extra = append(extra, a)
 		}
 	}
 	for a := range gen {
-		if !att[a] {
+		if !matchedByAny(a, att) {
 			missing = append(missing, a)
 		}
 	}
 	sort.Strings(extra)
 	sort.Strings(missing)
 	return extra, missing, nil
+}
+
+// matchedByAny は action が集合のどれかに一致するかを返す。**ワイルドカードを
+// 展開する。**
+//
+// IAM の Action は "*" や "s3:*" や "s3:Get*" を書ける。素の文字列比較だと
+// AdministratorAccess(Action: "*")を attach したロールが「生成器の全アクションが
+// 不足」と出て、**admin なのに 403 になると読める**。逆の案内になるので必ず展開する。
+//
+// 逆向き(生成器側のワイルドカード)も同じ関数で効く。生成器は今のところ
+// apigateway:* を出すため、attach 側の apigateway:GetRestApis が過剰として
+// 出ないようにする必要がある。
+func matchedByAny(action string, set map[string]bool) bool {
+	if set[action] {
+		return true
+	}
+	for pat := range set {
+		if strings.ContainsRune(pat, '*') && matchAction(pat, action) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchAction は IAM のワイルドカード(* は 0 文字以上、? は 1 文字)で照合する。
+// IAM は大文字小文字を区別しないので畳んで比べる。
+func matchAction(pattern, action string) bool {
+	return wildcardMatch(strings.ToLower(pattern), strings.ToLower(action))
+}
+
+// wildcardMatch は * と ? のグロブ照合。正規表現に変換せず線形に見る
+// (アクション名は短く、パターン数も少ないため)。
+func wildcardMatch(pat, s string) bool {
+	pi, si := 0, 0
+	star, mark := -1, 0
+	for si < len(s) {
+		switch {
+		case pi < len(pat) && (pat[pi] == '?' || pat[pi] == s[si]):
+			pi++
+			si++
+		case pi < len(pat) && pat[pi] == '*':
+			star = pi
+			pi++
+			mark = si
+		case star >= 0:
+			pi = star + 1
+			mark++
+			si = mark
+		default:
+			return false
+		}
+	}
+	for pi < len(pat) && pat[pi] == '*' {
+		pi++
+	}
+	return pi == len(pat)
 }
 
 // cloudMapStatements は Cloud Map 経由の apigw 構成に足りるぶん(#105)。
