@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.1](https://github.com/rikukadev/kagerou/compare/v0.16.0...v0.16.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **diagnose:** Dockerfile の無いフロントエンドが環境に載らないことを言う ([#235](https://github.com/rikukadev/kagerou/issues/235)) ([9ea4423](https://github.com/rikukadev/kagerou/commit/9ea44237c681673a19970c1677357c23fbdb7f4d)), closes [#227](https://github.com/rikukadev/kagerou/issues/227)
+* **init:** compute ecs × 複数サービスを理由つきで止め、build を検出した Dockerfile に向ける ([#233](https://github.com/rikukadev/kagerou/issues/233)) ([c12f2ca](https://github.com/rikukadev/kagerou/commit/c12f2ca522a4a16baf82ced97feff1c9ae5e4227)), closes [#226](https://github.com/rikukadev/kagerou/issues/226)
+
 ## [0.16.0](https://github.com/rikukadev/kagerou/compare/v0.15.0...v0.16.0) (2026-09-27)
 
 
