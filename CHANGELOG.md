@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.2](https://github.com/rikukadev/kagerou/compare/v0.16.1...v0.16.2) (2026-09-27)
+
+
+### Bug Fixes
+
+* **auth:** verify generated Edge OIDC sessions ([#242](https://github.com/rikukadev/kagerou/issues/242)) ([081246e](https://github.com/rikukadev/kagerou/commit/081246eb2102d3e88e25d004d41214a0383cc6a2))
+* **init:** Next steps が生成結果を反映する(雛形を出した直後に「Write a Dockerfile」と言わない) ([#234](https://github.com/rikukadev/kagerou/issues/234)) ([e5e6dca](https://github.com/rikukadev/kagerou/commit/e5e6dca1d97eeba7ae1e3c0664b8513b93414c56)), closes [#95](https://github.com/rikukadev/kagerou/issues/95)
+
 ## [0.16.1](https://github.com/rikukadev/kagerou/compare/v0.16.0...v0.16.1) (2026-09-27)
 
 
