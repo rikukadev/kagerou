@@ -3,6 +3,7 @@ package appscan
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -688,4 +689,69 @@ func TestScanKeepsLargerServiceCount(t *testing.T) {
 	if f := Scan(dir); f.Services != 3 {
 		t.Fatalf("Services = %d, want 3 (compose のほうが多い)", f.Services)
 	}
+}
+
+// 実物のモノレポにかけて見つけた3件(#259)。いずれも「それらしい文字列を拾う」
+// 実装が、**別の持ち主のもの**や**URL でないもの**を拾っていた。
+func TestScanIgnoresNonAppHealthAndLibraries(t *testing.T) {
+	t.Run("curl の -o の出力先を health path にしない", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, dir, "Dockerfile", "FROM node:22\nEXPOSE 3000\n")
+		write(t, dir, "compose.yaml", `services:
+  web:
+    build: .
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:3000/ || exit 1"]
+`)
+		// URL のパスはルートだけ = 言わない。/dev/null は拾わない
+		if got := Scan(dir).HealthPath; got != "" {
+			t.Errorf("HealthPath = %q (want 空。/dev/null を拾っていないか)", got)
+		}
+	})
+
+	t.Run("infra の healthcheck をアプリのものにしない", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, dir, "Dockerfile", "FROM golang:1.26\nEXPOSE 8080\n")
+		// infra が先に並ぶ compose。以前はファイル先頭から探して localstack を拾った
+		write(t, dir, "compose.yaml", `services:
+  localstack:
+    image: localstack/localstack:4
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+  app:
+    build: .
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz || exit 1"]
+`)
+		if got := Scan(dir).HealthPath; got != "/healthz" {
+			t.Errorf("HealthPath = %q (want /healthz)", got)
+		}
+	})
+
+	t.Run("ライブラリに Dockerfile を足せと言わない", func(t *testing.T) {
+		dir := t.TempDir()
+		// サービス: main パッケージあり + Dockerfile 無し → 出す
+		write(t, dir, "svc/go.mod", "module svc\n")
+		write(t, dir, "svc/main.go", "package main\n")
+		// 共有ライブラリ: main が無い → 出さない
+		write(t, dir, "lib/go.mod", "module lib\n")
+		write(t, dir, "lib/lib.go", "package lib\n")
+		// 生成クライアント: main が無い → 出さない
+		write(t, dir, "client/go.mod", "module client\n")
+		write(t, dir, "client/client.gen.go", "package client\n")
+		// フロントの npm パッケージ: private かつ start スクリプト無し → 出さない
+		write(t, dir, "pkg/package.json", `{"private": true, "main": "src/index.ts", "dependencies": {"react-router": "7"}}`)
+		// フロントのアプリ: start がある → 出す
+		write(t, dir, "app/package.json", `{"scripts": {"start": "vite"}, "dependencies": {"react-router": "7"}}`)
+
+		var names []string
+		for _, s := range Scan(dir).WithoutImage {
+			names = append(names, s.Name)
+		}
+		sort.Strings(names)
+		want := []string{"app", "svc"}
+		if strings.Join(names, ",") != strings.Join(want, ",") {
+			t.Errorf("WithoutImage = %v (want %v)", names, want)
+		}
+	})
 }
