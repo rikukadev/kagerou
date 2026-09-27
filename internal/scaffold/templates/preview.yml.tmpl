@@ -47,7 +47,9 @@ jobs:
         run: |
           aws ecr get-login-password | docker login --username AWS \
             --password-stdin "${ECR_REPOSITORY%%/*}"
-          docker build -t "$ECR_REPOSITORY:pr-$PR" .
+          # 検出した Dockerfile の場所で build する。ルート直書きだと、モノレポ
+          # (services/api/Dockerfile)で「ルートに Dockerfile が無い」で落ちる(#226)
+          docker build -t "$ECR_REPOSITORY:pr-$PR" -f "{{.DockerContext}}/{{.DockerfileOrDefault}}" "{{.DockerContext}}"
           docker push "$ECR_REPOSITORY:pr-$PR"
         env:
           ECR_REPOSITORY: ${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}
