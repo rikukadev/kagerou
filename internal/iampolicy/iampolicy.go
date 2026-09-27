@@ -390,8 +390,15 @@ func Build(o Options) (Policy, error) {
 		sts = append(sts, Statement{
 			// 共有 preview base バケットへの成果物 sync(post_up の aws s3 sync)。
 			// バケットの作成・削除・ポリシー変更は含めない(base は別スタックの持ち物)
+			// GetBucketLocation は **バケットの region を引くために毎回呼ぶ**。
+			// static driver の clientFor がここを通るので、無いと up / sync /
+			// 孤児スキャンが全部 403 になる(実際に踏んだ)。
+			// バケットが別 region にある構成があるため、決め打ちにはできない。
 			Sid: "SharedWebBucketSync", Effect: "Allow",
-			Action: []string{"s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+			Action: []string{
+				"s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+				"s3:GetBucketLocation",
+			},
 			Resource: []string{
 				fmt.Sprintf("arn:aws:s3:::%s", o.BaseBucket),
 				fmt.Sprintf("arn:aws:s3:::%s/*", o.BaseBucket),
