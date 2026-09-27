@@ -58,6 +58,9 @@ type diagnosisFacts struct {
 	// URLShape は web と api を別オリジンに割るかどうかを決めている値。
 	// 図の形が変わる根拠なので、機械可読側にも出す("" | "path" | "cross")。
 	URLShape string `json:"url_shape,omitempty"`
+	// WithoutImage は framework は検出できたが Dockerfile が無く、環境に載らない
+	// ディレクトリ(#227)。黙って落とすと framework 表示と生成物が食い違う。
+	WithoutImage []diagnosisService `json:"without_image,omitempty"`
 }
 
 type diagnosisService struct {
@@ -119,6 +122,7 @@ func cmdDiagnose(args []string, out *os.File) error {
 			ImageRegistry: facts.ImageRegistry,
 			URLShape:      facts.URLShape,
 			ServiceFacts:  serviceFacts(facts),
+			WithoutImage:  withoutImage(facts),
 		},
 	}
 	if facts.Owner != "" {
@@ -141,6 +145,14 @@ func cmdDiagnose(args []string, out *os.File) error {
 }
 
 // serviceFacts は appscan のサービスごとの事実を出力形に写す。
+func withoutImage(f appscan.Facts) []diagnosisService {
+	out := make([]diagnosisService, 0, len(f.WithoutImage))
+	for _, s := range f.WithoutImage {
+		out = append(out, diagnosisService{Name: s.Name, Dir: s.Dir, Framework: s.Framework})
+	}
+	return out
+}
+
 func serviceFacts(f appscan.Facts) []diagnosisService {
 	out := make([]diagnosisService, 0, len(f.ServiceFacts))
 	for _, s := range f.ServiceFacts {
@@ -268,6 +280,15 @@ func writeDiagnosis(out *os.File, d diagnosis) error {
 				b.WriteString("  " + strings.Join(extra, " / "))
 			}
 			b.WriteString("\n")
+		}
+	}
+	// サービス(コンテナ)になるものを並べた直後に、**ならないもの**も言う。
+	// framework には出るのに環境のどこにも現れない、が一番読めない(#227)
+	if len(d.Facts.ServiceFacts) > 0 && len(d.Facts.WithoutImage) > 0 {
+		b.WriteString("\nnot in this environment (no Dockerfile)\n")
+		for _, s := range d.Facts.WithoutImage {
+			fmt.Fprintf(&b, "  %s (%s) — add a Dockerfile to include it, or init it separately (e.g. driver: static)\n",
+				s.Name, s.Framework)
 		}
 	}
 	if d.Facts.HealthPath != "" {
