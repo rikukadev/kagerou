@@ -271,8 +271,10 @@ func scanDir(dir, rel string, f *Facts) {
 	// 既存のフィールドは「先着が勝つ」で 1 つに畳むので、ここを後から復元できない。
 	recordService(dir, rel, fw, f)
 	// フレームワークの痕跡はあるのにコンテナにできないディレクトリを覚える。
-	// ルート(rel=="")は「リポジトリ全体」の話なのでサービス扱いしない
-	if rel != "" && fw != "" && len(dockerfilesIn(dir)) == 0 {
+	// ルート(rel=="")は「リポジトリ全体」の話なのでサービス扱いしない。
+	// **ライブラリは除く**: 共有パッケージや生成クライアントに「Dockerfile を足せ」と
+	// 言うと、本当に足すべきもの(サービスなのに Dockerfile が無い)が埋もれる(#259)
+	if rel != "" && fw != "" && len(dockerfilesIn(dir)) == 0 && looksServable(dir) {
 		f.WithoutImage = append(f.WithoutImage, ServiceFact{
 			Name: filepath.Base(rel), Dir: rel, Framework: fw,
 		})
@@ -411,6 +413,38 @@ func goModuleMain(dir string) bool {
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "main.go"))
 	return err == nil && packageMainRe.Match(b)
+}
+
+// looksServable は「そのディレクトリが起動できるものか」。
+//
+// 完全に割り切れないので **サーバらしさが無いものは黙る** 側に倒す。出しすぎると、
+// 本当に足すべきもの(サービスなのに Dockerfile が無い)が一覧に埋もれる(#259)。
+func looksServable(dir string) bool {
+	// Go: main パッケージが無ければライブラリ。cmd/<name>/main.go 形も見る
+	if exists(filepath.Join(dir, "go.mod")) {
+		return goModuleMain(dir) || cmdMainCount(dir) > 0
+	}
+	// Node: 起動スクリプトが無く、ライブラリの印(private / exports / main)があるものは除く
+	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+		var pkg struct {
+			Private bool              `json:"private"`
+			Main    string            `json:"main"`
+			Exports any               `json:"exports"`
+			Scripts map[string]string `json:"scripts"`
+		}
+		if json.Unmarshal(b, &pkg) == nil {
+			for _, k := range []string{"start", "serve", "dev"} {
+				if pkg.Scripts[k] != "" {
+					return true
+				}
+			}
+			if pkg.Private || pkg.Main != "" || pkg.Exports != nil {
+				return false
+			}
+		}
+	}
+	// Java / PHP などは判定材料を持たないので、従来どおり出す
+	return true
 }
 
 var composeServiceEntryRe = regexp.MustCompile(`(?m)^  ([a-zA-Z0-9_.-]+):\s*$`)
@@ -827,6 +861,10 @@ type composeService struct {
 	build  bool
 	ports  []string
 	expose []string
+	// health は healthcheck ブロックの行。**サービスごとに持つ**のが要点で、
+	// ファイル全体を先頭から探すと infra(localstack / mysql 等)の healthcheck を
+	// アプリのものとして拾う(#259。ポートで同じ間違いをしたのが #154)
+	health []string
 }
 
 // parseComposeServices は services: 直下を読む。YAML パーサは持ち込まない
@@ -865,12 +903,18 @@ func parseComposeServices(s string) []composeService {
 				out[cur].image = strings.TrimSpace(m[2])
 			case "build":
 				out[cur].build = true
-			case "ports", "expose":
+			case "ports", "expose", "healthcheck":
 				mode = m[1]
 			}
 			continue
 		}
 		if mode == "" {
+			continue
+		}
+		if mode == "healthcheck" {
+			// healthcheck の中身はリスト形式でも `test: [...]` の1行でも来る。
+			// 行ごと覚えて、後で URL を探す
+			out[cur].health = append(out[cur].health, line)
 			continue
 		}
 		if m := composeListItemRe.FindStringSubmatch(line); m != nil {
@@ -1097,7 +1141,14 @@ func dockerfilesIn(dir string) []string {
 
 // healthPathRe は URL か、パスだけの記述からパス部分を取る。
 // クエリは落とす(readiness は素のパスを叩く)。
-var healthPathRe = regexp.MustCompile(`https?://[^\s"']*?(/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*)|(?:^|\s)(/[A-Za-z0-9._~%!$&'()*+,;=:@/-]+)`)
+// healthPathRe は **URL の中のパスだけ**を拾う。
+//
+// 以前は「空白の後の裸の /...」も拾っていたが、healthcheck のコマンド行には
+// URL でないパスが普通に混ざる。実物のリポジトリで
+// `curl -s -o /dev/null http://localhost:9000/` から **`/dev/null`** を拾い、
+// それが readiness_path として生成物に書かれていた(#259)。
+// 裸のパスを拾わないと落ちるケースは、既存のテストには無い。
+var healthPathRe = regexp.MustCompile(`https?://[^\s"']*?(/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*)`)
 
 // lwaHealthRe は LWA の readiness パス(Dockerfile の ENV)。
 var lwaHealthRe = regexp.MustCompile(`(?i)AWS_LWA_READINESS_CHECK_PATH[=\s]+["']?([^\s"']+)`)
@@ -1125,13 +1176,34 @@ func healthcheckPath(dir string, dockerfiles []string) string {
 			return p
 		}
 	}
+	// compose は **サービス単位**で見る。ファイル全体を先頭から探すと、
+	// infra(localstack / mysql / minio 等)の healthcheck を拾う(#259)。
+	// 選ぶ順はポート検出(#154)と同じ: build がある → 既製 image でない → 何でも
 	for _, name := range composeFiles {
 		b, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			continue
 		}
-		if p := healthPathIn(string(b), "healthcheck"); p != "" {
-			return p
+		svcs := parseComposeServices(string(b))
+		for _, pick := range []func(composeService) bool{
+			func(s composeService) bool { return s.build },
+			func(s composeService) bool { return !isInfraImage(s.image) },
+			func(composeService) bool { return true },
+		} {
+			for _, svc := range svcs {
+				if !pick(svc) {
+					continue
+				}
+				for _, line := range svc.health {
+					for _, m := range healthPathRe.FindAllStringSubmatch(line, -1) {
+						for _, g := range m[1:] {
+							if p := cleanHealthPath(g); p != "" {
+								return p
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 	return ""
