@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/rikukadev/kagerou/compare/v0.18.0...v0.18.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **action:** アセットのアップロード待ちを有限回リトライする ([#261](https://github.com/rikukadev/kagerou/issues/261)) ([7c3098a](https://github.com/rikukadev/kagerou/commit/7c3098a99b98b96d40de3ece00a8997f0dc055c7)), closes [#260](https://github.com/rikukadev/kagerou/issues/260)
+* **driver:** tag:GetResources が拒否されたら全件走査に落ちる ([#257](https://github.com/rikukadev/kagerou/issues/257)) ([83a7da4](https://github.com/rikukadev/kagerou/commit/83a7da42c01a463a2de2e20e616986c7e127287c)), closes [#256](https://github.com/rikukadev/kagerou/issues/256)
+
 ## [0.18.0](https://github.com/rikukadev/kagerou/compare/v0.17.0...v0.18.0) (2026-09-27)
 
 
