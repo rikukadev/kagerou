@@ -291,6 +291,29 @@ hooks:
 CI の drift ガードに使える。判定はアクション集合の比較で、resource スコープの緩さは見ない
 (Access Analyzer / Cloudsplaining の前段の軽い網)。
 
+`--check-role <role-name>` は**ファイルではなく AWS の実物**を読む(#230)。drift を見る層は
+3 つあり、3 つ目だけ穴が空いていた。
+
+| 層 | 見るもの |
+|---|---|
+| 生成ファイル(workflow / base)の古さ | `upgrade --check` |
+| リポジトリの `ci-policy.json` と生成器の差分 | `iam-policy --check <file>` |
+| **AWS に適用済みのロール**と生成器の差分 | **`iam-policy --check-role <role>`** |
+
+3 つ目は実行時に 403 を踏むまで分からず、踏むのは schedule の reap(人が見ていない時間)。
+
+- **inline も attached も全部読んで和集合にする。** 権限は加算されるので、1 つだけ見ると
+  他のポリシーにある権限が「不足」として出る。どれを足し合わせたかは stderr に出す
+- 不足(これから踏む 403)と過剰(権限の化石)を分けて出し、**直すコマンドまで印字する**
+- 要る権限は `iam:ListRolePolicies` / `iam:GetRolePolicy` / `iam:ListAttachedRolePolicies` /
+  `iam:GetPolicy` / `iam:GetPolicyVersion`
+- ポリシーが 1 つも無いロールは差分ゼロではなく**エラー**にする。「no drift」と出すと、
+  権限を付け忘れたロールを緑と読んでしまう
+
+`--allow-extra <action>[,<action>...]` は、デプロイとは別目的のポリシーが同じロールに
+付いている場合に、その分を過剰から除く(点検自身のための権限など)。**許したものは stderr に
+出す** — 黙って落とすと宣言が古くなっても気づけない。
+
 導出に使うテンプレートは `template` → **設定ファイルの隣の `template.yaml`** →
 カレント直下の `template.yaml` の順に探す。1 つも見つからなければ生成は
 `--with-*` だけに落ちるので、**`--check` は比較せずエラーにする**(基準そのものが

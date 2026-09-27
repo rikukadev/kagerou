@@ -548,17 +548,17 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Check the live deploy role against the repository policy
+      # --check-role が実ロールの inline + attached を全部読んで和集合にし、
+      # 生成器と突き合わせる(#230)。以前はここで aws iam get-role-policy を
+      # 叩いて --check <file> に渡していたが、**inline policy を 1 つしか
+      # 見ていなかった**ので、権限を別ポリシーに分けた時点で過剰判定が出る形だった。
+      #
+      # --allow-extra は kge2e-selfcheck の分。あれは **この点検自身のための権限**で
+      # デプロイには要らないため生成器には出ない。黙って無視すると宣言が古くなっても
+      # 気づけないので、明示したものだけ許す(許したものは stderr に出る)。
+      - name: Check the live deploy role against the generated policy
         run: |
           set -euo pipefail
-          role=${AWS_ROLE_ARN##*/}
-          if ! aws iam get-role-policy --role-name "$role" --policy-name kge2e-deploy \
-                 --query PolicyDocument --output json > /tmp/live-policy.json; then
-            echo "::error::実ロール $role の kge2e-deploy を読めない。" \
-                 "kge2e-selfcheck(e2e/aws/selfcheck-policy.json)が attach されているか確認する:" \
-                 "./scripts/apply-e2e-policy.sh"
-            exit 1
-          fi
           if ! go run ./cmd/kagerou iam-policy \
                  --config e2e/aws/3tier/kagerou.yaml \
                  --config e2e/aws/ssr/kagerou.yaml \
@@ -568,7 +568,8 @@ jobs:
                  --config e2e/aws/alb/kagerou.yaml \
                  --template e2e/aws/alb/base.yaml \
                  --template e2e/aws/apigw/base.yaml \
-                 --check /tmp/live-policy.json; then
+                 --check-role "${AWS_ROLE_ARN##*/}" \
+                 --allow-extra iam:GetPolicy,iam:GetPolicyVersion; then
             echo "::error::attach されているポリシーが生成器とずれている。" \
                  "リポジトリの JSON を適用する: ./scripts/apply-e2e-policy.sh" \
                  "(差分だけ見るなら --dry-run)"

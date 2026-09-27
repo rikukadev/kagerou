@@ -99,6 +99,13 @@ v0.x の間も後方互換を守る(変更はフィールド/タグの追加の�
 ./scripts/apply-e2e-policy.sh             # 適用する
 ```
 
+手元で実ロールとの差分だけ見るなら `--check-role` でよい(AWS の実物を読む)。
+
+```bash
+go run ./cmd/kagerou iam-policy --config e2e/aws/3tier/kagerou.yaml \
+  --check-role kagerou-e2e-github-actions --allow-extra iam:GetPolicy,iam:GetPolicyVersion
+```
+
 実ロールを読んで同じ `--check` にかける `iam-policy-live` job があるので、
 ずれていれば足りないアクションと適用コマンドが出る。ただし `e2e-aws-*` の
 `needs` にはしていない(skip が required check の成功として数えられるため)、
