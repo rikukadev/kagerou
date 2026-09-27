@@ -65,4 +65,30 @@ fi
 [ ! -e "$bin/kagerou" ] || fail "空なのにバイナリが置かれた"
 echo "  OK"
 
+echo "=== アセットが遅れて現れても成功する(リリース直後、#260) ==="
+REL2="$WORK/release2/$VER"
+mkdir -p "$REL2"
+cp "$REL/$ASSET" "$WORK/pending.tar.gz" 2>/dev/null || true
+tar -czf "$WORK/pending.tar.gz" -C "$WORK" kagerou
+sum2=$(sha256sum "$WORK/pending.tar.gz" | awk '{print $1}')
+printf '%s  %s\n' "$sum2" "$ASSET" > "$REL2/checksums.txt"
+# tar.gz は少し遅れて現れる(goreleaser のアップロード待ちを模す)
+( sleep 2; cp "$WORK/pending.tar.gz" "$REL2/$ASSET" ) &
+bin="$WORK/bin-late"
+KAGEROU_RELEASE_BASE="file://$WORK/release2" KAGEROU_FETCH_RETRIES=5 KAGEROU_FETCH_DELAY=1 \
+  "$INSTALL" "$VER" amd64 "$bin" >/dev/null 2>&1 || fail "遅れて現れたアセットで install できない"
+wait
+[ -x "$bin/kagerou" ] || fail "遅れて現れたのにバイナリが置かれていない"
+echo "  OK"
+
+echo "=== 無いものは有限回で失敗し、試行回数を出す ==="
+bin="$WORK/bin-404"
+if out=$(KAGEROU_RELEASE_BASE="file://$WORK/nothing" KAGEROU_FETCH_RETRIES=3 KAGEROU_FETCH_DELAY=0 \
+    "$INSTALL" "$VER" amd64 "$bin" 2>&1); then
+  fail "存在しないアセットで install が成功した"
+fi
+grep -q "3 回試行" <<<"$out" || fail "試行回数が出ていない: $out"
+[ ! -e "$bin/kagerou" ] || fail "失敗したのにバイナリが置かれた"
+echo "  OK"
+
 echo "ACTION INSTALL TEST PASSED"
