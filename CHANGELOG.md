@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.17.0](https://github.com/rikukadev/kagerou/compare/v0.16.2...v0.17.0) (2026-09-27)
+
+
+### Features
+
+* **iam-policy:** 適用済みロールと生成器の差分を --check-role で見る ([#249](https://github.com/rikukadev/kagerou/issues/249)) ([0244329](https://github.com/rikukadev/kagerou/commit/024432916ce37009e75999c92e12c823f34a3f11)), closes [#230](https://github.com/rikukadev/kagerou/issues/230)
+
+
+### Bug Fixes
+
+* **action:** Release バイナリの checksum を検証する ([#251](https://github.com/rikukadev/kagerou/issues/251)) ([14b5a63](https://github.com/rikukadev/kagerou/commit/14b5a637f62fcf6e8628d73959ec53f355ad8705)), closes [#239](https://github.com/rikukadev/kagerou/issues/239)
+* **static:** S3 を先に消し、DeleteObjects の要素ごとの失敗を見る ([#250](https://github.com/rikukadev/kagerou/issues/250)) ([9638a98](https://github.com/rikukadev/kagerou/commit/9638a984b3c9603e68d2e16ed276dc710df8023a)), closes [#238](https://github.com/rikukadev/kagerou/issues/238)
+
 ## [0.16.2](https://github.com/rikukadev/kagerou/compare/v0.16.1...v0.16.2) (2026-09-27)
 
 
