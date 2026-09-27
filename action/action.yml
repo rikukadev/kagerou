@@ -68,32 +68,11 @@ runs:
           aarch64|arm64) arch=arm64 ;;
           *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
         esac
-        ver="$VERSION"
-        if [ "$ver" = "latest" ]; then
-          # latest のリダイレクト先から実際の版を取る(資産名に版が入るため)
-          ver=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-            https://github.com/rikukadev/kagerou/releases/latest | sed 's#.*/tag/##')
-          if [ -z "$ver" ]; then
-            echo "could not resolve the latest release; set version explicitly or use ref" >&2
-            exit 1
-          fi
-        fi
-        case "$ver" in
-          v*) ;;
-          *) echo "could not resolve the latest release (no releases yet?): $ver" >&2
-             echo "set version explicitly or use ref (go install)" >&2
-             exit 1 ;;
-        esac
-        asset="kagerou_${ver#v}_linux_${arch}.tar.gz"
-        url="https://github.com/rikukadev/kagerou/releases/download/${ver}/${asset}"
-        echo "installing kagerou ${ver} (${asset})"
         # self-hosted runner は /usr/local/bin に書けないことがあるため RUNNER_TEMP に置く
         bin="${RUNNER_TEMP}/kagerou-bin"
-        mkdir -p "$bin"
-        tmp=$(mktemp -d)
-        curl -fsSL "$url" -o "$tmp/k.tar.gz"
-        tar -xzf "$tmp/k.tar.gz" -C "$tmp"
-        install -m 755 "$tmp/kagerou" "$bin/kagerou"
+        # ダウンロードと checksum 検証は install.sh に切り出してある(#239)。
+        # 不一致で本当に止まるかをテストできる形にするため
+        "${GITHUB_ACTION_PATH}/install.sh" "$VERSION" "$arch" "$bin"
         echo "$bin" >> "$GITHUB_PATH"
         "$bin/kagerou" version
 
