@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -64,7 +65,9 @@ type Driver struct {
 	sts *sts.Client
 	// tagging は project 指定の List で使う(#243)。タグで絞って ARN を引くため、
 	// IAM 側で「この project のスタックしか見えない」を作れる。
-	tagging *resourcegroupstaggingapi.Client
+	// インターフェースにしてあるのは、**権限が無いときの fallback をテストする**ため
+	// (#256)。SDK の GetResourcesAPIClient をそのまま満たす。
+	tagging resourcegroupstaggingapi.GetResourcesAPIClient
 	// reserve は共有リスナーの空き優先度を確保する(#189)。テストで差し替える。
 	reserve func(ctx context.Context, listenerARN string, n int, seed string) ([]int, error)
 }
@@ -409,6 +412,38 @@ func (d *Driver) Info(ctx context.Context, stackName string) (*Info, error) {
 	return infoFromStack(out.Stacks[0]), nil
 }
 
+// isAccessDenied は IAM で拒否されたかを返す。Resource Groups Tagging API は
+// AccessDeniedException を返す。SDK の型に依存せずエラーコードで見る。
+func isAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr interface{ ErrorCode() string }
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "AccessDeniedException", "AccessDenied", "UnauthorizedOperation":
+			return true
+		}
+	}
+	return false
+}
+
+// tagEnumWarned は警告を 1 プロセスで 1 回だけ出すための番。reap は環境ごとに
+// List を呼ばないが、list と peer で複数回通る経路があるため。
+var tagEnumWarned sync.Once
+
+// warnTagEnumFallback は **黙って落ちないため** の警告。黙ると「権限を狭めた
+// つもりで狭まっていない」状態に気づけない。
+func warnTagEnumFallback() {
+	tagEnumWarned.Do(func() {
+		fmt.Fprintln(os.Stderr, "kagerou: warning: tag:GetResources が拒否されたため、"+
+			"全スタックを走査して列挙します(従来の動作)。"+
+			"デプロイロールに tag:GetResources を足すと、"+
+			"cloudformation:DescribeStacks を Resource: \"*\" で持つ必要がなくなります"+
+			"(= 全スタックの Outputs を読める状態を外せます)。kagerou iam-policy で生成できます")
+	})
+}
+
 // List は kagerou 管理(kagerou:managed=true)のスタックを列挙する。
 //
 // project を渡すとその project のものだけを返す。空文字なら全 project
@@ -432,6 +467,17 @@ func (d *Driver) List(ctx context.Context, project string) ([]*Info, error) {
 	var err error
 	if project != "" {
 		infos, err = d.listByTag(ctx, project)
+		// **権限が無いだけなら従来の全件走査に落ちる**(#256)。
+		// tag:GetResources は v0.16.0 で要求し始めたもので、それ以前に作った
+		// ロールには無い。action を @v0 で参照していると勝手に版が上がるので、
+		// 利用者が何もしていないのに reap が落ちる。実際に壊した。
+		//
+		// 落ちるのは AccessDenied のときだけ。他のエラーで走査に切り替えると、
+		// 通信断や API の不調を「権限が無い」と読み替えて隠してしまう。
+		if isAccessDenied(err) {
+			warnTagEnumFallback()
+			infos, err = d.listAllStacks(ctx)
+		}
 	} else {
 		infos, err = d.listAllStacks(ctx)
 	}

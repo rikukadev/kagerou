@@ -5,6 +5,9 @@ package stack
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"os"
 	"slices"
 	"strings"
@@ -492,4 +495,105 @@ func TestListByProjectUsesTagFilter(t *testing.T) {
 	if !slices.Contains(allNames, mine) || !slices.Contains(allNames, other) {
 		t.Errorf("project 未指定の List が全件を返さない: %v", allNames)
 	}
+}
+
+// AccessDenied のときだけ全件走査に落ちる(#256)。
+//
+// v0.16.0 で tag:GetResources を要求し始めたが、それ以前に作ったロールには
+// 無い。action を @v0 で参照していると版が勝手に上がるので、利用者が何も
+// していないのに reap が落ちる(実際に kagerou-ssr-demo を壊した)。
+//
+// **他のエラーでは落ちない。** 通信断や API の不調を「権限が無い」と読み替えて
+// 隠してしまうため。
+func TestIsAccessDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"AccessDeniedException", &fakeAPIErr{code: "AccessDeniedException"}, true},
+		{"AccessDenied", &fakeAPIErr{code: "AccessDenied"}, true},
+		{"UnauthorizedOperation", &fakeAPIErr{code: "UnauthorizedOperation"}, true},
+		{"Throttling は落ちない", &fakeAPIErr{code: "Throttling"}, false},
+		{"ValidationError は落ちない", &fakeAPIErr{code: "ValidationError"}, false},
+		{"素のエラーは落ちない", errors.New("dial tcp: connection refused"), false},
+		{"包んでも見える", fmt.Errorf("get resources: %w", &fakeAPIErr{code: "AccessDeniedException"}), true},
+	} {
+		if got := isAccessDenied(tc.err); got != tc.want {
+			t.Errorf("%s: isAccessDenied = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+type fakeAPIErr struct{ code string }
+
+func (e *fakeAPIErr) Error() string     { return e.code }
+func (e *fakeAPIErr) ErrorCode() string { return e.code }
+
+// **権限が無くても list / reap が成功すること**(#256)。
+//
+// tag:GetResources を AccessDenied にしても、全件走査に落ちて同じ環境が見える。
+// ここが崩れると、v0.16.0 より前に作ったロールの reap が 6 時間おきに落ちる
+// (実際に kagerou-ssr-demo を壊した)。
+func TestListFallsBackWhenTagDenied(t *testing.T) {
+	d, ctx := testDriver(t)
+	name := "kagerou-test-fallback"
+	t.Cleanup(func() { _ = d.Down(ctx, name) })
+	if _, err := d.Up(ctx, UpInput{
+		StackName: name, Name: "fallback", Project: "fb", TemplateBody: testTemplate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// tagging を拒否する口に差し替える
+	orig := d.tagging
+	t.Cleanup(func() { d.tagging = orig })
+	denier := &deniedTagging{}
+	d.tagging = denier
+
+	infos, err := d.List(ctx, "fb")
+	if err != nil {
+		t.Fatalf("AccessDenied で落ちてしまった(fallback していない): %v", err)
+	}
+	if denier.calls == 0 {
+		t.Error("tag 経路を試していない")
+	}
+	var found bool
+	for _, i := range infos {
+		if i.StackName == name {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("fallback 後に環境が見えない: %d 件", len(infos))
+	}
+}
+
+// AccessDenied 以外では fallback しない。通信断や API の不調を「権限が無い」と
+// 読み替えて隠さないため。
+func TestListDoesNotFallBackOnOtherErrors(t *testing.T) {
+	d, ctx := testDriver(t)
+	orig := d.tagging
+	t.Cleanup(func() { d.tagging = orig })
+	d.tagging = &deniedTagging{code: "Throttling"}
+
+	if _, err := d.List(ctx, "fb"); err == nil {
+		t.Error("AccessDenied 以外でも fallback してエラーを隠した")
+	}
+}
+
+type deniedTagging struct {
+	code  string
+	calls int
+}
+
+func (d *deniedTagging) GetResources(context.Context, *resourcegroupstaggingapi.GetResourcesInput,
+	...func(*resourcegroupstaggingapi.Options)) (*resourcegroupstaggingapi.GetResourcesOutput, error) {
+	d.calls++
+	code := d.code
+	if code == "" {
+		code = "AccessDeniedException"
+	}
+	return nil, &fakeAPIErr{code: code}
 }
