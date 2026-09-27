@@ -40,10 +40,38 @@ esac
 asset="kagerou_${ver#v}_linux_${ARCH}.tar.gz"
 echo "installing kagerou ${ver} (${asset})"
 
+# リリース直後はタグだけ先にでき、アセットは goreleaser が後から上げる。
+# version: latest はタグを見るので、**アセットがまだ無い版に解決する**(#260)。
+# リリースごとに 1〜2 分の窓が開き、その間に走った利用者は 404 で落ちていた。
+# 待てば解決するので有限回リトライする。使い切ったら普通に失敗する。
+RETRIES=${KAGEROU_FETCH_RETRIES:-8}
+DELAY=${KAGEROU_FETCH_DELAY:-15}
+
+fetch() {
+  url=$1
+  out=$2
+  i=1
+  while :; do
+    if curl -fsSL "$url" -o "$out"; then
+      return 0
+    fi
+    if [ "$i" -ge "$RETRIES" ]; then
+      # 何回試したかを出す。黙って時間だけ延びると、ネットワークの問題と
+      # 「アセットがまだ無い」を区別できない
+      echo "取得できません($i 回試行): $url" >&2
+      echo "リリース直後ならアセットの生成待ちかもしれません。少し待って再実行してください" >&2
+      return 1
+    fi
+    echo "取得に失敗($i/$RETRIES)。${DELAY}s 待って再試行: $url" >&2
+    sleep "$DELAY"
+    i=$((i + 1))
+  done
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "${BASE}/${ver}/${asset}" -o "$tmp/$asset"
-curl -fsSL "${BASE}/${ver}/checksums.txt" -o "$tmp/checksums.txt"
+fetch "${BASE}/${ver}/${asset}" "$tmp/$asset"
+fetch "${BASE}/${ver}/checksums.txt" "$tmp/checksums.txt"
 
 want=$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/checksums.txt")
 # 項目が無いときも **fail closed**。空の want で比較すると「一致しなかった」ではなく
