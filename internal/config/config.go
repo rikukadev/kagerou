@@ -183,17 +183,31 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// Rel は設定に書かれた相対パスを、**設定ファイルのある場所**から解決する。
+// Rel は設定に書かれた相対パスを解決する。**cwd 基準で見つかればそのまま**、
+// 無ければ設定ファイルの隣を見る(#225)。
 //
-// kagerou.yaml の `template: template.yaml` は「この設定の隣」を指す。cwd 基準に
-// すると、モノレポでルートから `--config services/api/kagerou.yaml` と呼んだときに
-// ルートの template.yaml を探して落ちる(#225)。設定と同じ場所で動かす従来の
-// 使い方では BaseDir が "." になるので、挙動は変わらない。
+// 素直に設定ファイル基準へ寄せると、**リポジトリルート基準で書かれた既存の設定が
+// 壊れる**(実際に E2E の fixture が `template: e2e/aws/3tier/template.yaml` と
+// 書いており、パスが二重になって落ちた)。どちらの書き方も動かす必要がある。
+//
+// 探す順は「利用者が書いたまま」→「設定の隣」。どちらにも無ければ書かれた値を
+// そのまま返し、エラーメッセージが利用者の書いた文字列で出るようにする。
 func (c Config) Rel(path string) string {
 	if path == "" || filepath.IsAbs(path) || c.BaseDir == "" || c.BaseDir == "." {
 		return path
 	}
-	return filepath.Join(c.BaseDir, path)
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	if joined := filepath.Join(c.BaseDir, path); fileExists(joined) {
+		return joined
+	}
+	return path
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // LoadOrDefault は path が存在しなければデフォルト設定を返す。

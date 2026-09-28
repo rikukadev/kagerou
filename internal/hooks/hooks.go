@@ -17,13 +17,6 @@ const Timeout = 10 * time.Minute
 // Run は hook を sh -c で実行する。command が空なら何もしない。
 // extraEnv は親プロセスの環境に重ねて渡す(KAGEROU_* の受け渡し。CONTRACT §6)。
 // hook の出力は診断情報なので stderr に流す(stdout は kagerou の結果用)。
-// Dir は hook を実行する作業ディレクトリ。空なら呼び出し元の cwd。
-//
-// 設定ファイルのある場所にするのは、hook が書くパス(`./dist` など)が
-// **kagerou.yaml の隣**を指すのが自然だから。モノレポでルートから
-// `--config services/api/kagerou.yaml` と呼んでも同じ意味になる(#225)。
-var Dir string
-
 func Run(ctx context.Context, name, command string, extraEnv map[string]string) error {
 	if command == "" {
 		return nil
@@ -31,7 +24,6 @@ func Run(ctx context.Context, name, command string, extraEnv map[string]string) 
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	cmd.Dir = Dir
 	cmd.Env = os.Environ()
 	for k, v := range extraEnv {
 		cmd.Env = append(cmd.Env, k+"="+v)

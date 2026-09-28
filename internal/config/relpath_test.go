@@ -20,6 +20,10 @@ func TestRelResolvesFromConfigDir(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Rel は実在するほうを選ぶので、設定の隣に実体を置く
+	if err := os.WriteFile(filepath.Join(app, "template.yaml"), []byte("Resources: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg, err := Load(cfgPath)
 	if err != nil {
@@ -54,6 +58,9 @@ func TestRelIsIdentityAtConfigDir(t *testing.T) {
 	if got := cfg.Rel("template.yaml"); got != "template.yaml" {
 		t.Errorf("同じ場所なのにパスが変わった: %q", got)
 	}
+	if cfg.BaseDir != "." {
+		t.Errorf("BaseDir = %q, want \".\"", cfg.BaseDir)
+	}
 }
 
 // 絶対パス(--template で渡された値)は触らない。
@@ -65,5 +72,44 @@ func TestRelLeavesAbsoluteAlone(t *testing.T) {
 	}
 	if got := cfg.Rel(""); got != "" {
 		t.Errorf("空を埋めた: %q", got)
+	}
+}
+
+// リポジトリルート基準で書かれた既存の設定を壊さない(E2E の fixture がこの形)。
+//
+// `template: e2e/aws/3tier/template.yaml` のように、**設定ファイルの場所ではなく
+// 実行場所からのパス**で書かれているものがある。設定基準へ素直に寄せるとパスが
+// 二重になって落ちる。実際に E2E 4 本がこれで落ちた。
+func TestRelKeepsPathsWrittenFromTheRunDir(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "e2e", "aws", "3tier")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join("e2e", "aws", "3tier", "template.yaml")
+	if err := os.WriteFile(filepath.Join(root, rel), []byte("Resources: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	cfg := Config{BaseDir: filepath.Join("e2e", "aws", "3tier")}
+	if got := cfg.Rel(rel); got != rel {
+		t.Errorf("実行場所基準のパスを書き換えた: %q (want %q)", got, rel)
+	}
+}
+
+// どちらにも無いときは、利用者が書いた値をそのまま返す(エラーに出るのはその文字列)。
+func TestRelKeepsUnknownPathAsWritten(t *testing.T) {
+	cfg := Config{BaseDir: "services/api"}
+	if got := cfg.Rel("nope.yaml"); got != "nope.yaml" {
+		t.Errorf("見つからないパスを書き換えた: %q", got)
 	}
 }

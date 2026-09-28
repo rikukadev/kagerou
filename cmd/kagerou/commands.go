@@ -77,8 +77,6 @@ func loadConfigFor(f upFlags) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
-	// hook は設定のある場所で走らせる。設定中の相対パスと基点を揃えるため(#225)
-	hooks.Dir = cfg.BaseDir
 	if f.template != "" {
 		// CLI で渡されたパスは cwd 基準。設定基準の解決(Rel)に巻き込まない
 		if abs, err := filepath.Abs(f.template); err == nil {
