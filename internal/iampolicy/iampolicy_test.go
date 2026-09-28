@@ -823,3 +823,66 @@ func TestPeerStackReads(t *testing.T) {
 		}
 	}
 }
+
+// pub/sub を別プロジェクトに分けると、購読側のテンプレートには Subscription だけが
+// あり、トピックは相手が持つ(#268)。自分の prefix だけに絞ると SNS:Subscribe が
+// 相手のトピックで 403 になる。
+func TestSNSSubscriptionCoversPeerTopics(t *testing.T) {
+	subOnly := &TemplateFacts{Counts: map[string]int{"AWS::SNS::Subscription": 1}}
+
+	// peer 無しなら自分の prefix だけ
+	alone, err := Build(Options{Prefix: "sub-demo-", Template: subOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snsResources(t, alone); len(got) != 1 || got[0] != "arn:aws:sns:*:*:sub-demo-*" {
+		t.Errorf("peer 無しの Resource = %v", got)
+	}
+
+	// peer があれば相手の prefix も入る
+	withPeer, err := Build(Options{Prefix: "sub-demo-", PeerPrefix: "pub-demo-", Template: subOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := snsResources(t, withPeer)
+	want := map[string]bool{"arn:aws:sns:*:*:sub-demo-*": true, "arn:aws:sns:*:*:pub-demo-*": true}
+	if len(got) != 2 {
+		t.Fatalf("Resource = %v, want 2 件(自分 + peer)", got)
+	}
+	for _, r := range got {
+		if !want[r] {
+			t.Errorf("想定外の Resource: %s", r)
+		}
+	}
+
+	// **トピックだけの構成では peer を足さない。** 購読しないなら相手のトピックに
+	// 触る理由が無い
+	topicOnly := &TemplateFacts{Counts: map[string]int{"AWS::SNS::Topic": 1}}
+	pubSide, err := Build(Options{Prefix: "pub-demo-", PeerPrefix: "sub-demo-", Template: topicOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snsResources(t, pubSide); len(got) != 1 || got[0] != "arn:aws:sns:*:*:pub-demo-*" {
+		t.Errorf("トピックだけなのに peer が入っている: %v", got)
+	}
+}
+
+// snsResources は SNSTopicLifecycle の Resource を文字列の並びで返す。
+func snsResources(t *testing.T, p Policy) []string {
+	t.Helper()
+	for _, s := range p.Statement {
+		if s.Sid != "SNSTopicLifecycle" {
+			continue
+		}
+		switch r := s.Resource.(type) {
+		case string:
+			return []string{r}
+		case []string:
+			return r
+		default:
+			t.Fatalf("Resource の型が想定外: %T", s.Resource)
+		}
+	}
+	t.Fatal("SNSTopicLifecycle が無い")
+	return nil
+}
