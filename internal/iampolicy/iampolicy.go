@@ -439,7 +439,15 @@ func Build(o Options) (Policy, error) {
 
 	if o.ECR {
 		sts = append(sts,
-			Statement{Sid: "EcrAuth", Effect: "Allow", Action: []string{"ecr:GetAuthorizationToken"}, Resource: "*"},
+			// ecr-public は **ベースイメージを引くため**。Dockerfile が
+			// public.ecr.aws から取る構成は普通にあり、匿名 pull は帯域で制限される
+			// (toomanyrequests: Data limit exceeded)。runner は IP を共有するので
+			// 混んでいる時間に当たると build ごと落ちる。認証すれば上限が上がる。
+			// どちらも ARN で絞れない(トークンの発行対象がリソースを持たない)。
+			Statement{Sid: "EcrAuth", Effect: "Allow", Action: []string{
+				"ecr:GetAuthorizationToken",
+				"ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken",
+			}, Resource: "*"},
 			Statement{
 				Sid: "EcrPush", Effect: "Allow",
 				Action: []string{

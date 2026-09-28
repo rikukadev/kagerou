@@ -179,6 +179,40 @@ kagerou url --name e2e-1    # URL を取る(E2E のターゲットに)
 kagerou down --name e2e-1   # 消す。忘れても TTL(既定 72h)+ reap が回収
 ```
 
+## 1 周を実測で(spa-demo)
+
+上の 3 コマンドが実際にどう動くか。SPA(driver: static)での実測:
+
+```console
+$ kagerou diagnose            # 読み取り専用。ファイルも AWS も触らずに構成を推測する
+recommended
+❯ static      サーバが見つからない。最安・最速(環境は S3 プレフィックスだけ)
+
+$ npm run build               # ビルドはアプリの仕事。kagerou は成果物を環境にするだけ
+
+$ kagerou up --name demo-cli  # 34 秒
+kagerou: creating spa-demo-demo-cli done (30s)
+demo-cli	ready	https://demo-cli.spa-demo.rikuka.dev
+
+$ curl -so /dev/null -w '%{http_code}' https://demo-cli.spa-demo.rikuka.dev/
+200
+$ curl -s https://demo-cli.spa-demo.rikuka.dev/config.json
+{"env": "demo-cli", ...}      # post_up フックが環境ごとに書いた値。ビルドは全環境で同一
+
+$ kagerou list                # TTL 期限つき。この日時を過ぎると reap が回収する
+demo-cli	ready	2026-10-01T14:02:24Z	https://demo-cli.spa-demo.rikuka.dev
+
+$ kagerou down --name demo-cli   # 31 秒。スタックも S3 も残骸ゼロ
+$ curl -so /dev/null -w '%{http_code}' https://demo-cli.spa-demo.rikuka.dev/index.html
+403
+```
+
+URL は `url_template` で **作成前に確定**している(`https://{name}.spa-demo.rikuka.dev`)。
+だから CORS の許可元や OAuth のコールバックを、環境を作る前にテンプレートへ書ける。
+
+CI の pr-preview はこの up / down を PR の open / close に紐付けているだけで、
+特別なことは何もしていない。
+
 ## CI から(composite action)
 
 PR を開くと環境が生え、URL コメントが付き、閉じると消える:
@@ -203,8 +237,10 @@ PR を開くと環境が生え、URL コメントが付き、閉じると消え�
 
 | リポジトリ | 構成 |
 |---|---|
+| [kagerou-spa-demo](https://github.com/rikukadev/kagerou-spa-demo) | compute の無い SPA(driver: static)。環境 = S3 プレフィックス |
 | [kagerou-ssr-demo](https://github.com/rikukadev/kagerou-ssr-demo) | React Router(SSR)を 1 Lambda で受ける最小構成 |
 | [kagerou-3tier-demo](https://github.com/rikukadev/kagerou-3tier-demo) | React SPA / Go API / RDB を別オリジンで分離した構成 |
+| [kagerou-pub-demo](https://github.com/rikukadev/kagerou-pub-demo) / [sub-demo](https://github.com/rikukadev/kagerou-sub-demo) | SNS/SQS で繋がる 2 アプリの連動 preview(peer、CONTRACT §10) |
 
 Sibling projects:
 [sashiki](https://github.com/rikukadev/sashiki) — disposable database branches.
