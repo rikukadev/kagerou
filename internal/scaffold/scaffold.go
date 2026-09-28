@@ -278,6 +278,10 @@ func fileSpecs(p Params, sel Targets) []fileSpec {
 	return []fileSpec{
 		{sel.KagerouYaml, "kagerou.yaml", "kagerou.yaml.tmpl", true,
 			"環境の設定(driver / TTL / URL / hooks)"},
+		// 生成に使った入力。upgrade --check がここから作り直して比べる(#224)。
+		// kagerou.yaml のコメントに置くと YAML 整形器に黙って消されるため独立させた
+		{sel.KagerouYaml, GenRecordPath, "genrecord.json.tmpl", true,
+			"生成に使った入力(kagerou upgrade --check が読む)"},
 		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true,
 			"PR を開くと環境が生え、閉じると消える"},
 		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true,
