@@ -323,3 +323,17 @@ func scanSSMParameterTypes(params map[string]tmplParameter, f *TemplateFacts) {
 	}
 	sort.Strings(f.SSMParams)
 }
+
+// KnownResourceTypes は権限の対応を知っているリソース型を返す(ソート済み)。
+//
+// 「コードが呼ぶ API を生成器が覆っているか」のテストで、**union を本当の上限に
+// する**ために使う。テンプレート由来の statement を入れ忘れると、覆っているのに
+// 不足として誤報する(実際に ALB で誤報した)。
+func KnownResourceTypes() []string {
+	out := make([]string, 0, len(knownTypes))
+	for t := range knownTypes {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
