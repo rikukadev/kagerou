@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -22,9 +23,12 @@ const DefaultFile = "kagerou.yaml"
 const TTLNone = "none"
 
 type Config struct {
-	Project    string `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
-	Driver     string `yaml:"driver"`
-	Template   string `yaml:"template"`
+	Project  string `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
+	Driver   string `yaml:"driver"`
+	Template string `yaml:"template"`
+	// BaseDir は設定ファイルのあるディレクトリ。設定中の相対パスの基点になる(#225)。
+	// yaml のキーではない(利用者が書くものではなく、読み込み時に埋まる)。
+	BaseDir    string `yaml:"-"`
 	Region     string `yaml:"region"`
 	NamePrefix string `yaml:"name_prefix"`
 	// URLTemplate は環境 URL を作成前に確定させる(例 "https://{name}.preview.example.com")。
@@ -175,7 +179,35 @@ func Load(path string) (Config, error) {
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
+	cfg.BaseDir = filepath.Dir(path)
 	return cfg, nil
+}
+
+// Rel は設定に書かれた相対パスを解決する。**cwd 基準で見つかればそのまま**、
+// 無ければ設定ファイルの隣を見る(#225)。
+//
+// 素直に設定ファイル基準へ寄せると、**リポジトリルート基準で書かれた既存の設定が
+// 壊れる**(実際に E2E の fixture が `template: e2e/aws/3tier/template.yaml` と
+// 書いており、パスが二重になって落ちた)。どちらの書き方も動かす必要がある。
+//
+// 探す順は「利用者が書いたまま」→「設定の隣」。どちらにも無ければ書かれた値を
+// そのまま返し、エラーメッセージが利用者の書いた文字列で出るようにする。
+func (c Config) Rel(path string) string {
+	if path == "" || filepath.IsAbs(path) || c.BaseDir == "" || c.BaseDir == "." {
+		return path
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	if joined := filepath.Join(c.BaseDir, path); fileExists(joined) {
+		return joined
+	}
+	return path
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // LoadOrDefault は path が存在しなければデフォルト設定を返す。
