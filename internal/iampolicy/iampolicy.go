@@ -385,6 +385,18 @@ func Build(o Options) (Policy, error) {
 		})
 	}
 	if o.Template != nil && o.Template.has("AWS::SNS::Topic", "AWS::SNS::Subscription") {
+		// **購読先は自分のトピックとは限らない。** pub/sub を別プロジェクトに
+		// 分ける構成(#99)では、購読側のテンプレートに Subscription だけがあり、
+		// トピックは相手のプロジェクトが持つ。自分の prefix だけに絞ると
+		// SNS:Subscribe が相手のトピックで 403 になる(実際に踏んだ、#268)。
+		res := []string{fmt.Sprintf("arn:aws:sns:*:*:%s*", p)}
+		if o.Template.has("AWS::SNS::Subscription") && o.PeerPrefix != "" {
+			res = append(res, fmt.Sprintf("arn:aws:sns:*:*:%s*", o.PeerPrefix))
+		}
+		var resource any = res
+		if len(res) == 1 {
+			resource = res[0]
+		}
 		sts = append(sts, Statement{
 			// Subscribe/Unsubscribe は AWS::SNS::Subscription のデプロイ用
 			Sid: "SNSTopicLifecycle", Effect: "Allow",
@@ -392,7 +404,7 @@ func Build(o Options) (Policy, error) {
 				"sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes",
 				"sns:Subscribe", "sns:Unsubscribe", "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource",
 			},
-			Resource: fmt.Sprintf("arn:aws:sns:*:*:%s*", p),
+			Resource: resource,
 		})
 	}
 	if o.Template != nil && o.Template.has("AWS::SQS::Queue") {
