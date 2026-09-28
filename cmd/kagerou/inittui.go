@@ -214,6 +214,10 @@ func newInitModel(dir string, p scaffold.Params, det scaffold.Detection, force b
 		selected: setupDefault,
 	})
 
+	// workflow はリポジトリルートにしか置けない(#225)。ルートが分かるならその位置を持たせる
+	if _, rel, ok := scaffold.RepoRoot(dir); ok {
+		p.AppDir = rel
+	}
 	return initModel{dir: dir, force: force, det: det, params: p, questions: qs}
 }
 

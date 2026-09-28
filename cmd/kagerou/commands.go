@@ -455,7 +455,17 @@ func cmdInit(args []string, out *os.File) error {
 	if *entrypoint != "alb" && *entrypoint != "apigateway" {
 		return fmt.Errorf("--entrypoint %q: want alb or apigateway", *entrypoint)
 	}
-	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki,
+	// workflow はリポジトリルートの .github/workflows/ にしか置けない(#225)。
+	// ルートが分からない(git リポジトリでない)ときは今までどおり --dir に書き、
+	// **動かない可能性がある**ことを言う。黙って死んだ workflow を置かない
+	appDir := ""
+	if _, rel, ok := scaffold.RepoRoot(*dir); ok {
+		appDir = rel
+	} else {
+		fmt.Fprintln(os.Stderr, "kagerou init: not a git repository — writing workflows under "+*dir+
+			". GitHub Actions only reads .github/workflows/ at the repository root")
+	}
+	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki, AppDir: appDir,
 		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
 		DockerfileName: det.DockerfileName, DockerfileDir: det.DockerfileDir,
 		// 検出したヘルスチェックのパス(#182)。渡さないと readiness_path が出ず、

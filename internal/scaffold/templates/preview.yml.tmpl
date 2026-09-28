@@ -7,11 +7,18 @@
 {{- else}}
 # Required repository variables: AWS_ROLE_ARN / AWS_REGION / ECR_REPOSITORY
 {{- end}}
-name: pr-preview
+name: pr-preview{{if .InSubdir}} ({{.Project}}){{end}}
 
 on:
   pull_request:
     types: [opened, reopened, synchronize, closed]
+{{- if .InSubdir}}
+    # このアプリに関係のない変更でプレビューを作り直さない。
+    # 閉じたときの cleanup も同じフィルタを通るので、paths に触れない PR では
+    # そもそも環境が作られていない
+    paths:
+      - "{{.PathsFilter}}"
+{{- end}}
 
 permissions:
   id-token: write
@@ -19,13 +26,19 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: preview-${{"{{"}} github.event.pull_request.number {{"}}"}}
+  group: preview{{if .InSubdir}}-{{.Project}}{{end}}-${{"{{"}} github.event.pull_request.number {{"}}"}}
   cancel-in-progress: false
 
 jobs:
   preview:
     if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+{{- if .InSubdir}}
+    # workflow はルートにあるが、ビルドはアプリの場所で動かす
+    defaults:
+      run:
+        working-directory: {{.AppDir}}
+{{- end}}
     steps:
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v5
@@ -74,6 +87,10 @@ jobs:
       - uses: rikukadev/kagerou/action@v0
         with:
           name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
+{{- if .InSubdir}}
+          # uses: のステップに working-directory は効かないので、設定の場所を渡す
+          config: {{.ConfigPath}}
+{{- end}}
 {{- if .ECS}}
           env: |
             IMAGE_URI=${{"{{"}} vars.ECR_REPOSITORY {{"}}"}}:pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
@@ -91,4 +108,7 @@ jobs:
       - uses: rikukadev/kagerou/action@v0
         with:
           name: pr-${{"{{"}} github.event.pull_request.number {{"}}"}}
+{{- if .InSubdir}}
+          config: {{.ConfigPath}}
+{{- end}}
           down: "true"

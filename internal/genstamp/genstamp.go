@@ -51,6 +51,11 @@ type Fix struct {
 var Fixes = []Fix{
 	{
 		Version: "v0.19.0",
+		Files:   ".github/workflows/kagerou-*.yml(サブディレクトリで init した場合)",
+		Summary: "workflow がアプリのディレクトリ配下に生成され、GitHub Actions がルートの .github/workflows/ しか読まないため一度も動かない",
+	},
+	{
+		Version: "v0.19.0",
 		Files:   "kagerou.yaml(生成記録のコメント)",
 		Summary: "生成記録が kagerou.yaml のコメントにあり、YAML 整形器(yamlfmt / yq / Prettier)に消されると `upgrade --check` が黙って効かなくなる。記録は .kagerou/generated.json へ移した",
 	},
