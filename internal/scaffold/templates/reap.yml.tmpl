@@ -1,7 +1,7 @@
 {{generatedBy "#"}}
 # Reap expired environments (the last safety net). Environments whose
 # close event was lost are also collected here.
-name: kagerou-reap
+name: kagerou-reap{{if .InSubdir}} ({{.Project}}){{end}}
 
 on:
   schedule:
@@ -25,3 +25,6 @@ jobs:
         with:
           reap: "true"
           grace: 1h
+{{- if .InSubdir}}
+          config: {{.ConfigPath}}
+{{- end}}

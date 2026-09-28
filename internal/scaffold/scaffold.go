@@ -33,7 +33,11 @@ func parseTmpl(name string) (*template.Template, error) {
 }
 
 type Params struct {
-	Project       string `json:"project,omitempty"`
+	Project string `json:"project,omitempty"`
+	// AppDir はリポジトリルートから見たアプリの位置("" = ルート直下)。
+	// workflow だけはルートの .github/workflows/ に置く必要があるので、
+	// 生成先の出し分けと workflow の中身(config パス / paths フィルタ)に使う(#225)。
+	AppDir        string `json:"app_dir,omitempty"`
 	Region        string `json:"region,omitempty"`
 	Sashiki       bool   `json:"sashiki,omitempty"`       // sashiki 併用の hooks / DB env を含める
 	Port          string `json:"port,omitempty"`          // アプリの listen ポート(検出値。空なら framework 既定)
@@ -174,11 +178,17 @@ func Run(dir string, p Params, sel Targets, force bool) (Result, error) {
 		}
 	}
 
+	// workflow だけはリポジトリルートへ書く。GitHub Actions はそこしか読まない(#225)
+	root := repoRootFrom(dir, p.AppDir)
 	for _, f := range fileSpecs(p, sel) {
 		if !f.enabled {
 			continue
 		}
-		dst := filepath.Join(dir, f.path)
+		base := dir
+		if f.atRoot {
+			base = root
+		}
+		dst := filepath.Join(base, filepath.FromSlash(f.path))
 		if _, err := os.Stat(dst); err == nil {
 			if !force || !f.overwrite {
 				res.Skipped = append(res.Skipped, f.path)
@@ -272,49 +282,52 @@ type fileSpec struct {
 	tmpl      string
 	overwrite bool   // force 時に上書きしてよいか
 	note      string // 何のためのファイルか(1 行)
+	// atRoot はリポジトリルートからの相対で書くか(workflow だけ true)。
+	// GitHub Actions はルートの .github/workflows/ しか読まない(#225)
+	atRoot bool
 }
 
 func fileSpecs(p Params, sel Targets) []fileSpec {
 	return []fileSpec{
 		{sel.KagerouYaml, "kagerou.yaml", "kagerou.yaml.tmpl", true,
-			"環境の設定(driver / TTL / URL / hooks)"},
+			"環境の設定(driver / TTL / URL / hooks)", false},
 		// 生成に使った入力。upgrade --check がここから作り直して比べる(#224)。
 		// kagerou.yaml のコメントに置くと YAML 整形器に黙って消されるため独立させた
 		{sel.KagerouYaml, GenRecordPath, "genrecord.json.tmpl", true,
-			"生成に使った入力(kagerou upgrade --check が読む)"},
-		{sel.Preview, filepath.Join(".github", "workflows", "kagerou-preview.yml"), "preview.yml.tmpl", true,
-			"PR を開くと環境が生え、閉じると消える"},
-		{sel.Reap, filepath.Join(".github", "workflows", "kagerou-reap.yml"), "reap.yml.tmpl", true,
-			"TTL を過ぎた環境を回収する(削除の取りこぼし対策)"},
+			"生成に使った入力(kagerou upgrade --check が読む)", false},
+		{sel.Preview, workflowPath(p, "preview"), "preview.yml.tmpl", true,
+			"PR を開くと環境が生え、閉じると消える", true},
+		{sel.Reap, workflowPath(p, "reap"), "reap.yml.tmpl", true,
+			"TTL を過ぎた環境を回収する(削除の取りこぼし対策)", true},
 		// static には compute が無いので template.yaml も Dockerfile も要らない。
 		// ここで落とさないと「消してから手で workflow を書く」ことになる(#81)。
 		{sel.Template && !p.Static() && !p.ECS() && !p.MultiService(), "template.yaml", "template.yaml.tmpl", false,
-			"環境 1 個ぶんの CloudFormation(Lambda)"},
+			"環境 1 個ぶんの CloudFormation(Lambda)", false},
 		// 複数サービスの環境は ALB のホストで分ける(1 環境 = 複数ホスト。DESIGN §13)
 		{sel.Template && p.MultiService(), "template.yaml", "template.multi.yaml.tmpl", false,
-			"環境 1 個ぶんの CloudFormation(サービスごとにホストを分ける)"},
+			"環境 1 個ぶんの CloudFormation(サービスごとにホストを分ける)", false},
 		// compute: ecs は Lambda/LWA で包まず Fargate を動かす。入口は 2 通り:
 		// 共有 ALB(固定費あり・上限なし)か HTTP API + VPC Link(固定費なし・30 秒)。
 		{sel.Template && p.ECS() && !p.APIGatewayVPCLink(), "template.yaml", "template.ecs.yaml.tmpl", false,
-			"環境 1 個ぶんの CloudFormation(共有 ALB + Fargate)"},
+			"環境 1 個ぶんの CloudFormation(共有 ALB + Fargate)", false},
 		{sel.Template && p.APIGatewayVPCLink(), "template.yaml", "template.apigw.yaml.tmpl", false,
-			"環境 1 個ぶんの CloudFormation(HTTP API + VPC Link + Fargate)"},
+			"環境 1 個ぶんの CloudFormation(HTTP API + VPC Link + Fargate)", false},
 		// 共有 ALB を入口にするなら(ecs / lambda どちらでも)ベースを同梱する
 		{p.ALB(), filepath.Join("deploy", "alb-base.yaml"), "albbase.yaml.tmpl", true,
-			"共有 ALB + ECS クラスタ。一度だけ deploy する(既にあれば不要)"},
+			"共有 ALB + ECS クラスタ。一度だけ deploy する(既にあれば不要)", false},
 		{p.APIGatewayVPCLink(), filepath.Join("deploy", "apigw-base.yaml"), "apigwbase.yaml.tmpl", true,
-			"共有 VPC Link + Cloud Map + ECS クラスタ。一度だけ deploy する(固定費なし)"},
+			"共有 VPC Link + Cloud Map + ECS クラスタ。一度だけ deploy する(固定費なし)", false},
 		{p.SetupBase && !p.Auth, filepath.Join("deploy", "preview-base.yaml"), "previewbase.yaml.tmpl", true,
-			"共有 CloudFront + S3。一度だけ deploy する(既にあれば不要)"},
+			"共有 CloudFront + S3。一度だけ deploy する(既にあれば不要)", false},
 		// 認証ありの共有ベース。preview base と同じ SSM キーを書くので、環境側から
 		// 見た契約は変わらない(入口に認証が挟まるだけ)。
 		//
 		// preview base と違い SetupBase で条件しない: 認証を求めた時点でこの 2 つが
 		// 無いと認証が成立しないので、「既にあるかも」で省いてよいものではない。
 		{p.Auth, filepath.Join("deploy", "edge-base.yaml"), "edgebase.yaml.tmpl", true,
-			"共有 CloudFront + Lambda@Edge 認証。us-east-1 に一度だけ deploy する"},
+			"共有 CloudFront + Lambda@Edge 認証。us-east-1 に一度だけ deploy する", false},
 		{p.Auth, filepath.Join("deploy", "edge-auth", "index.mjs"), "edgeauth.mjs.tmpl", true,
-			"Lambda@Edge の認証本体(OIDC。client_secret は SSM に置く)"},
+			"Lambda@Edge の認証本体(OIDC。client_secret は SSM に置く)", false},
 	}
 }
 
