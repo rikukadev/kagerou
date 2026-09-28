@@ -77,8 +77,15 @@ func loadConfigFor(f upFlags) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
+	// hook は設定のある場所で走らせる。設定中の相対パスと基点を揃えるため(#225)
+	hooks.Dir = cfg.BaseDir
 	if f.template != "" {
-		cfg.Template = f.template
+		// CLI で渡されたパスは cwd 基準。設定基準の解決(Rel)に巻き込まない
+		if abs, err := filepath.Abs(f.template); err == nil {
+			cfg.Template = abs
+		} else {
+			cfg.Template = f.template
+		}
 	}
 	if f.ttl != "" {
 		cfg.TTL = f.ttl
@@ -119,7 +126,7 @@ func cmdUp(args []string, out *os.File) error {
 		return upStatic(out, f, cfg)
 	}
 
-	body, err := os.ReadFile(cfg.Template)
+	body, err := os.ReadFile(cfg.Rel(cfg.Template))
 	if err != nil {
 		return fmt.Errorf("template: %w", err)
 	}
@@ -268,7 +275,7 @@ func upStatic(out *os.File, f upFlags, cfg config.Config) error {
 		},
 		Bucket: cfg.Static.Bucket,
 		Prefix: cfg.StaticPrefix(f.name), // 共有 base では <project>/<name>
-		Dist:   cfg.Static.Dist,
+		Dist:   cfg.Rel(cfg.Static.Dist),
 	}
 	// static は「同期 = 公開」なので、post_up(環境固有ファイルの生成)は
 	// 同期より前に走らせないと反映されない。URL は url_template で作成前に
@@ -1247,7 +1254,12 @@ func cmdValidate(args []string, out *os.File) error {
 		return err
 	}
 	if f.template != "" {
-		cfg.Template = f.template
+		// CLI で渡されたパスは cwd 基準。設定基準の解決(Rel)に巻き込まない
+		if abs, err := filepath.Abs(f.template); err == nil {
+			cfg.Template = abs
+		} else {
+			cfg.Template = f.template
+		}
 	}
 	// name があれば {name} 展開後の env で検査(dev@{name} 等を実値に)
 	name := f.name

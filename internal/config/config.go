@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -22,9 +23,12 @@ const DefaultFile = "kagerou.yaml"
 const TTLNone = "none"
 
 type Config struct {
-	Project    string `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
-	Driver     string `yaml:"driver"`
-	Template   string `yaml:"template"`
+	Project  string `yaml:"project"` // kagerou:project タグ(Backstage 連携の紐付けキー)
+	Driver   string `yaml:"driver"`
+	Template string `yaml:"template"`
+	// BaseDir は設定ファイルのあるディレクトリ。設定中の相対パスの基点になる(#225)。
+	// yaml のキーではない(利用者が書くものではなく、読み込み時に埋まる)。
+	BaseDir    string `yaml:"-"`
 	Region     string `yaml:"region"`
 	NamePrefix string `yaml:"name_prefix"`
 	// URLTemplate は環境 URL を作成前に確定させる(例 "https://{name}.preview.example.com")。
@@ -175,7 +179,21 @@ func Load(path string) (Config, error) {
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
+	cfg.BaseDir = filepath.Dir(path)
 	return cfg, nil
+}
+
+// Rel は設定に書かれた相対パスを、**設定ファイルのある場所**から解決する。
+//
+// kagerou.yaml の `template: template.yaml` は「この設定の隣」を指す。cwd 基準に
+// すると、モノレポでルートから `--config services/api/kagerou.yaml` と呼んだときに
+// ルートの template.yaml を探して落ちる(#225)。設定と同じ場所で動かす従来の
+// 使い方では BaseDir が "." になるので、挙動は変わらない。
+func (c Config) Rel(path string) string {
+	if path == "" || filepath.IsAbs(path) || c.BaseDir == "" || c.BaseDir == "." {
+		return path
+	}
+	return filepath.Join(c.BaseDir, path)
 }
 
 // LoadOrDefault は path が存在しなければデフォルト設定を返す。
