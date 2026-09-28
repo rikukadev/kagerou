@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.18.2](https://github.com/rikukadev/kagerou/compare/v0.18.1...v0.18.2) (2026-09-28)
+
+
+### Bug Fixes
+
+* **appscan:** health path に URL でないパスを拾わず、infra とライブラリを取り違えない ([#262](https://github.com/rikukadev/kagerou/issues/262)) ([446c1a6](https://github.com/rikukadev/kagerou/commit/446c1a6fd7755c335408767d0358d8fd6323d794)), closes [#259](https://github.com/rikukadev/kagerou/issues/259)
+* **iam-policy:** --check-role でワイルドカードを展開する ([#264](https://github.com/rikukadev/kagerou/issues/264)) ([b1fcd94](https://github.com/rikukadev/kagerou/commit/b1fcd94eaf38f0bab9be747708e968154deff943))
+* **iam-policy:** base バケットに s3:GetBucketLocation を足す ([#265](https://github.com/rikukadev/kagerou/issues/265)) ([a778ff6](https://github.com/rikukadev/kagerou/commit/a778ff6c40a812442a0fba04f29de1cd0fe5231d))
+* **iam-policy:** peer 連動の相手スタックへの読み取りを出す ([#266](https://github.com/rikukadev/kagerou/issues/266)) ([2e5d5ac](https://github.com/rikukadev/kagerou/commit/2e5d5ac0d6292bb1414f9df4ebbdf9174aece875))
+* **iam-policy:** SNS の Resource に peer のトピックを入れる ([#268](https://github.com/rikukadev/kagerou/issues/268)) ([068590f](https://github.com/rikukadev/kagerou/commit/068590f464d5a56463e576f2e555ae4fe8961ea9))
+
 ## [0.18.1](https://github.com/rikukadev/kagerou/compare/v0.18.0...v0.18.1) (2026-09-27)
 
 
