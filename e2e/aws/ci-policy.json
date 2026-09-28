@@ -298,7 +298,9 @@
       "Sid": "EcrAuth",
       "Effect": "Allow",
       "Action": [
-        "ecr:GetAuthorizationToken"
+        "ecr:GetAuthorizationToken",
+        "ecr-public:GetAuthorizationToken",
+        "sts:GetServiceBearerToken"
       ],
       "Resource": "*"
     },
