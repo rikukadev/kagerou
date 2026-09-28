@@ -50,6 +50,11 @@ type Fix struct {
 // Fixes は新しい順。生成物に影響した修正だけを載せる。
 var Fixes = []Fix{
 	{
+		Version: "v0.19.0",
+		Files:   "kagerou.yaml(生成記録のコメント)",
+		Summary: "生成記録が kagerou.yaml のコメントにあり、YAML 整形器(yamlfmt / yq / Prettier)に消されると `upgrade --check` が黙って効かなくなる。記録は .kagerou/generated.json へ移した",
+	},
+	{
 		// Version はこの修正が **実際に入ったリリース**。PR を書いた時点の
 		// 次リリース見込みを書くと、間のリリースで init した人(まさに
 		// このバグを持つ人)に警告が出ない
