@@ -72,6 +72,11 @@ type Options struct {
 	BaseBucket   string // 共有 preview base バケットへの成果物 sync(post_up の aws s3 sync)
 	BaseDomain   bool   // url_template 等で {base_domain} を使う(SSM 契約からドメインを引く)
 
+	// PeerPrefix は peer 連動(#99)の相手プロジェクトの name_prefix。
+	// peer 解決は **相手のスタックを読む** ので、自分の name_prefix で絞った
+	// 権限だけでは 403 になる(#266)。読み取りだけを足す。
+	PeerPrefix string
+
 	// AllProjects は list --all-projects / serve を回すロールで立てる(#243)。
 	// この 2 つは project を絞らないので、StackName を渡さない DescribeStacks
 	// による全件走査が要る。この呼び方はリソースを特定しないため IAM で絞れず、
@@ -231,6 +236,20 @@ func Build(o Options) (Policy, error) {
 			},
 			Resource: []string{"arn:aws:s3:::aws-sam-cli-managed-*", "arn:aws:s3:::aws-sam-cli-managed-*/*"},
 		},
+	}
+
+	if o.PeerPrefix != "" {
+		// peer 連動は up の前に「相手プロジェクトの同名 env が ready か」を見る
+		// (CONTRACT §10)。tag:GetResources で ARN を引いたあと、その ARN に対して
+		// DescribeStacks を呼ぶので、**相手の name_prefix にも読み取りが要る**。
+		// 書き込みは足さない。相手の環境を作ったり消したりはしない。
+		sts = append(sts, Statement{
+			Sid: "PeerStackReads", Effect: "Allow",
+			Action: []string{
+				"cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents",
+			},
+			Resource: fmt.Sprintf("arn:aws:cloudformation:*:*:stack/%s*/*", o.PeerPrefix),
+		})
 	}
 
 	if o.AllProjects {

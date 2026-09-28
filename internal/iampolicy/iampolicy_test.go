@@ -783,3 +783,43 @@ func TestNoSSMWritesWithoutParameters(t *testing.T) {
 		t.Error("SSM を作らない構成に書き込み権限が出ている")
 	}
 }
+
+// peer 連動は **相手プロジェクトのスタックを読む**(#266)。自分の name_prefix で
+// 絞った権限だけでは 403 になる。書き込みは足さない。
+func TestPeerStackReads(t *testing.T) {
+	without, err := Build(Options{Prefix: "pub-demo-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range without.Statement {
+		if s.Sid == "PeerStackReads" {
+			t.Fatal("peer が無いのに PeerStackReads が出た")
+		}
+	}
+
+	with, err := Build(Options{Prefix: "pub-demo-", PeerPrefix: "sub-demo-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Statement
+	for i := range with.Statement {
+		if with.Statement[i].Sid == "PeerStackReads" {
+			found = &with.Statement[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("PeerStackReads が出ていない")
+	}
+	res, ok := found.Resource.(string)
+	if !ok || res != "arn:aws:cloudformation:*:*:stack/sub-demo-*/*" {
+		t.Errorf("Resource = %v, want 相手の prefix", found.Resource)
+	}
+	// 読み取りだけ。相手の環境を作ったり消したりはしない
+	for _, a := range found.Action {
+		switch a {
+		case "cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents":
+		default:
+			t.Errorf("読み取り以外が入っている: %s", a)
+		}
+	}
+}

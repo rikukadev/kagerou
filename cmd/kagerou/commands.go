@@ -938,6 +938,10 @@ func cmdIamPolicy(args []string, out *os.File) error {
 			BaseDomain: cfg.UsesBaseDomain(),
 			CloudFront: *cf, Route53: *r53, HostedZoneID: *zone,
 			BaseBucket: *baseBucket,
+			// peer 連動の相手のスタックを読む権限(#266)。フラグにすると付け忘れて
+			// 403 になるので、設定から導く。相手の name_prefix は自分と同じ規則
+			// (<project>-)である前提で組む — kagerou init が生成する形
+			PeerPrefix: peerPrefixFor(cfg),
 			// 横断ビュー(--all-projects / serve)だけが要る広い読み取り。
 			// 既定で出さないので、単一 project の CI ロールは狭いままになる(#243)
 			AllProjects: *allProjects,
@@ -1219,6 +1223,18 @@ func reapOrphans(ctx context.Context, sdrv *staticdrv.Driver, cfg config.Config,
 		}
 	}
 	return nil
+}
+
+// peerPrefixFor は peer 連動の相手の name_prefix を返す。peer を使っていなければ空。
+//
+// 相手の kagerou.yaml は手元に無いので、name_prefix は推測になる。kagerou init が
+// 生成するのは <project>- なので、それを使う。違う規則にしている相手なら
+// --check-role で不足として出る(そこで気づける)。
+func peerPrefixFor(cfg config.Config) string {
+	if cfg.Peer.Project == "" {
+		return ""
+	}
+	return cfg.Peer.Project + "-"
 }
 
 func cmdValidate(args []string, out *os.File) error {
