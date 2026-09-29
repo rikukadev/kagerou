@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/rikukadev/kagerou/internal/appscan"
 	"os"
 	"path/filepath"
 	"slices"
@@ -219,6 +220,65 @@ func TestDiagnoseJSON(t *testing.T) {
 	for _, want := range []string{"kagerou.yaml", "template.yaml", "deploy/alb-base.yaml"} {
 		if !slices.Contains(paths, want) {
 			t.Errorf("%q が files に無い: %v", want, paths)
+		}
+	}
+}
+
+// #195: 指摘が無いリポジトリでは節ごと出さない。空の見出しが毎回出ると、
+// 出ているときにも読まれなくなる。
+func TestDiagnoseOmitsAppWorkWhenClean(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	if err := writeDiagnosis(f, diagnosis{Dir: "/x", Recommend: "lambda"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "work left in your app") {
+		t.Errorf("指摘が無いのに節が出ている:\n%s", b)
+	}
+}
+
+// 指摘があるときは、場所と「なぜ困るか」と「どうするか」が出る。
+// 場所だけでは直せず、理由だけでは探せない。
+func TestDiagnoseShowsAppWork(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	d := diagnosis{Dir: "/x", Recommend: "lambda", AppWork: groupAppWork([]appscan.AppWork{
+		{Kind: appscan.WorkWritableFS, File: "a.go", Line: 10},
+		{Kind: appscan.WorkWritableFS, File: "b.go", Line: 20},
+		{Kind: appscan.WorkWritableFS, File: "c.go", Line: 30},
+		{Kind: appscan.WorkWritableFS, File: "d.go", Line: 40},
+		{Kind: appscan.WorkSecretsAtInit, File: "boot.go", Line: 5},
+	})}
+	if err := writeDiagnosis(f, d); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		"work left in your app",
+		"kagerou does not change your code", // 直すのは利用者
+		"read-only",                         // なぜ困るか
+		"a.go:10",                           // どこか
+		"(+1 more)",                         // 多いときは畳む
+		"cold start",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q が無い:\n%s", want, got)
 		}
 	}
 }
