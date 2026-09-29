@@ -53,7 +53,12 @@ func mergeKV(base, over map[string]string) map[string]string {
 
 type upFlags struct {
 	name, cfgPath, template, ttl, output, source string
-	env, params                                  kvFlag
+	// expiresAt は期限を絶対時刻(RFC3339)で指定する(#280)。ttl と排他。
+	// 付随するリソース(DB のブランチなど)と寿命を揃えたいときに使う —
+	// 相対指定だと「コマンドを実行した時刻」が起点になるので、同じ期限を
+	// 狙って別々のシステムへ指示しても揃わない。
+	expiresAt   string
+	env, params kvFlag
 }
 
 func parseUpFlags(cmd string, args []string) (upFlags, error) {
@@ -63,12 +68,20 @@ func parseUpFlags(cmd string, args []string) (upFlags, error) {
 	fs.StringVar(&f.cfgPath, "config", config.DefaultFile, "config file")
 	fs.StringVar(&f.template, "template", "", "template file (overrides kagerou.yaml)")
 	fs.StringVar(&f.ttl, "ttl", "", "lifetime (e.g. 72h / none; overrides kagerou.yaml)")
+	fs.StringVar(&f.expiresAt, "expires-at", "", "absolute expiry, RFC3339 (mutually exclusive with --ttl)")
 	fs.StringVar(&f.output, "output", "text", "text | json")
 	fs.StringVar(&f.source, "source", "", "where the environment came from (opaque string set by the adapter)")
 	fs.Var(f.env, "env", "env var delivered to the app, KEY=VALUE (repeatable)")
 	fs.Var(f.params, "param", "template parameter KEY=VALUE (repeatable)")
-	err := fs.Parse(args)
-	return f, err
+	if err := fs.Parse(args); err != nil {
+		return f, err
+	}
+	// 片方を暗黙に優先すると、渡し間違いが黙って通って期限がずれる(#280)。
+	// kagerou.yaml の ttl とは衝突させない — 明示したフラグ同士だけ見る。
+	if f.ttl != "" && f.expiresAt != "" {
+		return f, fmt.Errorf("--ttl and --expires-at are mutually exclusive")
+	}
+	return f, nil
 }
 
 // loadConfigFor は設定を読み、フラグを重ね、{name} 展開まで済ませて返す。
@@ -124,14 +137,11 @@ func cmdUp(args []string, out *os.File) error {
 		return fmt.Errorf("template: %w", err)
 	}
 
-	var expiresAt *time.Time
-	d, hasTTL, err := config.ParseTTL(cfg.TTL)
+	// static 側と同じ規則で出す(以前はここだけインライン展開していて、
+	// --expires-at のような追加が片方に入らない形になっていた)。
+	expiresAt, err := expiryFor(cfg, f.expiresAt)
 	if err != nil {
 		return err
-	}
-	if hasTTL {
-		t := time.Now().Add(d)
-		expiresAt = &t
 	}
 	var maxLife time.Duration
 	if cfg.MaxLifetime != "" {
@@ -227,8 +237,27 @@ func hookEnv(name string, info *stack.Info) map[string]string {
 	return env
 }
 
-// expiryFor は ttl から期限を出す(規則は cmdUp と同じ)。
-func expiryFor(cfg config.Config) (*time.Time, error) {
+// expiryFor は ttl(相対)か --expires-at(絶対)から期限を出す(規則は cmdUp と同じ)。
+//
+// 絶対時刻を受けるのは、付随するリソース(DB のブランチなど)と寿命を揃えるため
+// (#280)。相対だとコマンドを実行した時刻が起点になるので、CI で順に作ると
+// 起点がずれて片方が先に消える。呼び出し側で計算し直しても、実際に処理される
+// までのラグは消せない。絶対時刻ならどこで何回処理しても同じ値になる。
+func expiryFor(cfg config.Config, expiresAt string) (*time.Time, error) {
+	if expiresAt != "" {
+		// ttl は kagerou.yaml にも書けるので、フラグで明示されたときだけ排他に
+		// する(設定ファイルの既定値と衝突させない)。判定は parseUpFlags 側。
+		t, err := time.Parse(time.RFC3339, expiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --expires-at (need RFC3339): %w", err)
+		}
+		if !t.After(time.Now()) {
+			// 作った瞬間に reap 対象になる環境を作らせない。
+			return nil, fmt.Errorf("--expires-at must be in the future: %s", expiresAt)
+		}
+		t = t.UTC()
+		return &t, nil
+	}
 	d, hasTTL, err := config.ParseTTL(cfg.TTL)
 	if err != nil {
 		return nil, err
@@ -243,7 +272,7 @@ func expiryFor(cfg config.Config) (*time.Time, error) {
 // upStatic は driver: static の up。compute が無いので template も
 // readiness も使わず、メタスタック + プレフィックス同期で環境を作る。
 func upStatic(out *os.File, f upFlags, cfg config.Config) error {
-	expiresAt, err := expiryFor(cfg)
+	expiresAt, err := expiryFor(cfg, f.expiresAt)
 	if err != nil {
 		return err
 	}

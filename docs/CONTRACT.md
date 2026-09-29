@@ -105,7 +105,11 @@ driver は個別に付ける責務を負う。
 - `state`: `creating | starting | updating | ready | deleting | failed`
   - `starting` はスタックは完成したが `readiness_path` がまだ 200 を返さない状態
     (kagerou.yaml で `readiness_path` を設定したときだけ現れる)
-- `expires_at`: TTL なしのときは `null`
+- `expires_at`: TTL なしのときは `null`。`up` では **`--ttl`(相対)か
+  `--expires-at`(RFC3339 の絶対時刻)のどちらか**で決まる(排他。両方を明示すると
+  エラー)。付随するリソース(DB のブランチなど)と寿命を揃えたいときは
+  `--expires-at` を使う — 相対だとコマンドを実行した時刻が起点になるので、
+  同じ期限を狙って別々のシステムへ指示しても揃わない。過去の時刻は拒否する
 - `source`: opaque 文字列(URI 形式推奨)。未指定のときは `null`。kagerou は解釈しない
 - driver 固有の情報は driver 名のキー(`stack` 等)の下に入れ子にする
 
