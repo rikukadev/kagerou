@@ -50,6 +50,18 @@ type Config struct {
 	// up 時に相手の同名 env を探し、居なければ fallback の env に繋ぐ。
 	// 解決結果はテンプレートの EnvPeerEnv / EnvPeerUrl に宣言時のみ届く。
 	Peer Peer `yaml:"peer"`
+	// Base はベース(共有 CloudFront / ALB / ドメイン)の SSM 名前空間(#196)。
+	//
+	// 既定は project と同じ。**project とは別物**で、project は
+	// `kagerou:project` タグとして環境に焼かれ list / reap の絞り込みと
+	// Backstage の紐付けキーを兼ねる(CONTRACT §1)。1 製品が複数リポジトリに
+	// 分かれていて同じ土台に乗る場合、project はリポジトリ固有のまま
+	// base だけを揃える。
+	//
+	// **明示したら他の名前空間へ落ちない。** 空振りしたときに _shared へ
+	// 落ちると、別製品の土台に黙って繋がる。
+	Base string `yaml:"base"`
+
 	// Auth はプレビューにログインを必須にする宣言(#112)。
 	Auth Auth `yaml:"auth"`
 }
@@ -416,6 +428,18 @@ func (c Config) expandable(fn func(string) string) Config {
 	out.Hooks.PostDown = fn(c.Hooks.PostDown)
 	return out
 }
+
+// BaseNamespace はベースを探す SSM 名前空間。未指定なら project(従来どおり)。
+func (c Config) BaseNamespace() string {
+	if c.Base != "" {
+		return c.Base
+	}
+	return c.Project
+}
+
+// BaseExplicit は名前空間が設定で明示されているか。明示されていれば
+// 解決に失敗しても他の名前空間へ落とさない(#196)。
+func (c Config) BaseExplicit() bool { return c.Base != "" }
 
 // UsesBaseDomain は {base_domain} がどこかで使われているかを返す。
 // 使っていなければ SSM を一切読まない(既存の挙動と必要権限のまま)。

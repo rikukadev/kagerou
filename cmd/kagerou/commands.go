@@ -95,7 +95,7 @@ func loadConfigFor(f upFlags) (config.Config, error) {
 	// {base_domain} は SSM の preview base 契約から引く(#136)。使っていなければ
 	// 読みに行かない — 既存の構成に SSM の権限を要求しないため
 	if cfg.UsesBaseDomain() {
-		domain, key, err := basedomain.Resolve(context.Background(), cfg.Project, cfg.Region)
+		domain, key, err := basedomain.Resolve(context.Background(), cfg.BaseNamespace(), cfg.Region, cfg.BaseExplicit())
 		if err != nil {
 			return config.Config{}, err
 		}
@@ -465,8 +465,13 @@ func cmdInit(args []string, out *os.File) error {
 		fmt.Fprintln(os.Stderr, "kagerou init: not a git repository — writing workflows under "+*dir+
 			". GitHub Actions only reads .github/workflows/ at the repository root")
 	}
+	baseNS := ""
+	if _, ns, _, ok := det.BaseNamespaceFor(*project); ok && ns != "" {
+		baseNS = ns // 共有ベースに相乗り。名前空間を生成物に残す(#196)
+	}
 	p := scaffold.Params{Project: *project, Region: *region, Sashiki: *sashiki, AppDir: appDir,
-		Port: det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
+		BaseNamespace: baseNS,
+		Port:          det.AppPort, HasDockerfile: det.HasDockerfile, Framework: det.Framework,
 		DockerfileName: det.DockerfileName, DockerfileDir: det.DockerfileDir,
 		// 検出したヘルスチェックのパス(#182)。渡さないと readiness_path が出ず、
 		// LWA の readiness も /healthz 固定になる — アプリが別のパスを使っていると

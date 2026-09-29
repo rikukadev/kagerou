@@ -39,7 +39,7 @@ type source struct {
 // `domain` は入口によらず「このアプリのプレビュードメイン」なのでキー名は同じ。
 // 入口が alb かどうかを解決側は知らないので、両方を順に見るしかない。
 // ALB が既定の入口(#131)なのでアプリのリージョンを先に見る。
-func sources(project, region string) []source {
+func sources(namespace, region string, explicit bool) []source {
 	var out []source
 	add := func(key string) {
 		if region != "" && region != "us-east-1" {
@@ -47,7 +47,12 @@ func sources(project, region string) []source {
 		}
 		out = append(out, source{key: key, region: "us-east-1"})
 	}
-	add("/kagerou/base/" + project + "/domain")
+	add("/kagerou/base/" + namespace + "/domain")
+	// 設定で名前空間を明示したなら、そこだけを見る。空振りして _shared に
+	// 落ちると**別製品の土台に黙って繋がる**(#196)
+	if explicit {
+		return out
+	}
 	add("/kagerou/base/_shared/domain")
 	// ALB を全アプリで 1 本に共有する運用(alb-base の Project に _shared-alb を
 	// 渡すオプトイン)。ALB ベースなのでアプリのリージョンにしか無い
@@ -75,11 +80,11 @@ var getParameter = func(ctx context.Context, region, key string) (string, error)
 	return *out.Parameter.Value, nil
 }
 
-// Resolve はドメインと、それが見つかったキーを返す。
-// どの段でも見つからなければ、探した順にキーを並べたエラーを返す。
-func Resolve(ctx context.Context, project, region string) (domain, key string, err error) {
+// Resolve はドメインと、それが見つかったキーを返す。namespace はベースの
+// SSM 名前空間(既定は project)。explicit なら他の名前空間へ落ちない。
+func Resolve(ctx context.Context, namespace, region string, explicit bool) (domain, key string, err error) {
 	var tried []string
-	for _, s := range sources(project, region) {
+	for _, s := range sources(namespace, region, explicit) {
 		tried = append(tried, fmt.Sprintf("%s (%s)", s.key, s.region))
 		v, err := getParameter(ctx, s.region, s.key)
 		if err != nil {
@@ -90,6 +95,11 @@ func Resolve(ctx context.Context, project, region string) (domain, key string, e
 			continue
 		}
 		return v, s.key, nil
+	}
+	if explicit {
+		return "", "", fmt.Errorf("%s: base %q not found; looked for %s "+
+			"(it is set explicitly in kagerou.yaml, so kagerou does not fall back to another base)",
+			Placeholder, namespace, strings.Join(tried, ", "))
 	}
 	return "", "", fmt.Errorf("%s: no base domain found; looked for %s "+
 		"(create a preview base, or replace the placeholder with a literal domain)",

@@ -112,8 +112,8 @@ func TestWorkflowPointsAtTheApp(t *testing.T) {
 	}
 	got := string(b)
 	for _, want := range []string{
-		`- "services/api/**"`,              // 関係ない変更で作り直さない
-		"working-directory: services/api",  // sam build / docker build の場所
+		`- "services/api/**"`,               // 関係ない変更で作り直さない
+		"working-directory: services/api",   // sam build / docker build の場所
 		"config: services/api/kagerou.yaml", // uses: には working-directory が効かない
 		"group: preview-mono-api-",          // 別アプリの PR と混ざらない
 	} {

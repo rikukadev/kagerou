@@ -29,7 +29,7 @@ func TestResolveOrder(t *testing.T) {
 		"us-east-1 /kagerou/base/_shared/domain":          "shared.example.com",
 		"ap-northeast-1 /kagerou/base/_shared-alb/domain": "alb.example.com",
 	})
-	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestResolveFallsBackToShared(t *testing.T) {
 		"us-east-1 /kagerou/base/_shared/domain":          "shared.example.com",
 		"ap-northeast-1 /kagerou/base/_shared-alb/domain": "alb.example.com",
 	})
-	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,14 +58,14 @@ func TestResolveSharedAlbUsesCallerRegion(t *testing.T) {
 	stub(t, map[string]string{
 		"ap-northeast-1 /kagerou/base/_shared-alb/domain": "alb.example.com",
 	})
-	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d != "alb.example.com" {
 		t.Errorf("_shared-alb を呼び出し側の region で引くはず: %q", d)
 	}
-	if _, _, err := Resolve(context.Background(), "todo", "us-west-2"); err == nil {
+	if _, _, err := Resolve(context.Background(), "todo", "us-west-2", false); err == nil {
 		t.Error("別 region では引けないはず")
 	}
 }
@@ -76,7 +76,7 @@ func TestResolveSkipsEmpty(t *testing.T) {
 		"us-east-1 /kagerou/base/todo/domain":    "   ",
 		"us-east-1 /kagerou/base/_shared/domain": "shared.example.com",
 	})
-	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestResolveSkipsEmpty(t *testing.T) {
 
 func TestResolveNotFoundListsKeys(t *testing.T) {
 	stub(t, nil)
-	_, _, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	_, _, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err == nil {
 		t.Fatal("見つからなければエラーのはず(空文字で続行しない)")
 	}
@@ -110,7 +110,7 @@ func TestResolveProjectKeyInAppRegion(t *testing.T) {
 	stub(t, map[string]string{
 		"ap-northeast-1 /kagerou/base/todo/domain": "todo.example.com",
 	})
-	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	d, k, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err != nil {
 		t.Fatalf("ALB ベースのドメインを解決できていない: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestResolveWorksWithBothBases(t *testing.T) {
 		"ap-northeast-1 /kagerou/base/todo/domain": "todo.example.com",
 		"us-east-1 /kagerou/base/todo/domain":      "todo.example.com",
 	})
-	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1")
+	d, _, err := Resolve(context.Background(), "todo", "ap-northeast-1", false)
 	if err != nil || d != "todo.example.com" {
 		t.Errorf("got %q %v", d, err)
 	}
@@ -141,7 +141,7 @@ func TestResolveNoDuplicateLookupInUsEast1(t *testing.T) {
 		calls++
 		return "", errors.New("ParameterNotFound")
 	}
-	_, _, _ = Resolve(context.Background(), "todo", "us-east-1")
+	_, _, _ = Resolve(context.Background(), "todo", "us-east-1", false)
 	// project / _shared / _shared-alb の 3 本だけ
 	if calls != 3 {
 		t.Errorf("引いた回数 = %d (want 3)", calls)
