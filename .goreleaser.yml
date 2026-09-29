@@ -5,7 +5,6 @@ project_name: kagerou
 builds:
   - id: kagerou
     main: ./cmd/kagerou
-    binary: kagerou
     env: [CGO_ENABLED=0]
     goos: [linux, darwin]
     goarch: [amd64, arm64]
@@ -32,3 +31,36 @@ release:
   mode: append
   draft: false
   prerelease: auto
+
+# Homebrew tap(#128)。常用する人の入れ口。npx は「まず 1 回試す」用で、
+# 毎回 node を起こすのは日常使いに向かない。
+#
+# formula ではなく cask にするのは goreleaser 2.16 で brews が非推奨になったため
+# (以前は Linuxbrew のために formula しか無かったが、今は cask で足りる)。
+#
+# **token が無ければ skip する。** tap は別リポジトリなので GITHUB_TOKEN では
+# push できず、PAT(HOMEBREW_TAP_TOKEN)が要る。未設定のときに落とすと、
+# cask の都合でリリース全体が止まる — バイナリの配布のほうが優先度が高い。
+homebrew_casks:
+  - name: kagerou
+    repository:
+      owner: rikukadev
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    skip_upload: "{{ .Env.HOMEBREW_SKIP_UPLOAD }}"
+    directory: Casks
+    homepage: https://github.com/rikukadev/kagerou
+    description: Ephemeral preview environments on AWS, built from the container definitions you already have
+    license: Apache-2.0
+    commit_author:
+      name: rikuka
+      email: 46627430+rikukaInoue@users.noreply.github.com
+    commit_msg_template: "kagerou {{ .Tag }}"
+    hooks:
+      post:
+        # 署名も notarize もしていないので、Gatekeeper の隔離属性を外さないと
+        # 初回起動が「開けません」で止まる
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kagerou"]
+          end
