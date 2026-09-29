@@ -1,6 +1,12 @@
 {{generatedBy "#"}}
 # kagerou configuration (https://github.com/rikukadev/kagerou)
 project: {{.Project}}
+{{- if .WriteBase}}
+# ベース(共有 CloudFront / ALB / ドメイン)の SSM 名前空間。project とは別物で、
+# project はこの環境のタグ(list / reap の絞り込み)。1 製品が複数リポジトリに
+# 分かれていて同じ土台に乗るときだけ、ここを揃える
+base: {{.BaseNamespace}}
+{{- end}}
 {{- if .Static}}
 driver: static # no compute; the built site is synced under the preview base
 {{- else if .ECS}}

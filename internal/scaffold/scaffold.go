@@ -34,6 +34,10 @@ func parseTmpl(name string) (*template.Template, error) {
 
 type Params struct {
 	Project string `json:"project,omitempty"`
+	// BaseNamespace はベースの SSM 名前空間。project と違うときだけ生成物に
+	// `base:` として書き出す(#196)。1 製品が複数リポジトリに分かれていて
+	// 同じ土台に乗る場合、project はリポジトリ固有のまま base だけ揃える
+	BaseNamespace string `json:"base_namespace,omitempty"`
 	// AppDir はリポジトリルートから見たアプリの位置("" = ルート直下)。
 	// workflow だけはルートの .github/workflows/ に置く必要があるので、
 	// 生成先の出し分けと workflow の中身(config パス / paths フィルタ)に使う(#225)。
@@ -951,4 +955,9 @@ func InjectLWA(dir, name string) (changed bool, err error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// WriteBase は生成物に `base:` を書くか。project と同じなら書かない(既定と同じ意味)。
+func (p Params) WriteBase() bool {
+	return p.BaseNamespace != "" && p.BaseNamespace != p.Project
 }

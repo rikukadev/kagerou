@@ -264,6 +264,11 @@ func (m *initModel) buildPlan() (scaffold.Targets, scaffold.Params) {
 	if b, ok := m.det.Base(p.Project); ok {
 		p.BaseBucket = b.Bucket
 	}
+	// 共有ベースに相乗りしているなら、その名前空間を生成物に残す(#196)。
+	// 残さないと次の up で project 名前空間を探して見つからない
+	if _, ns, _, ok := m.det.BaseNamespaceFor(p.Project); ok && ns != "" {
+		p.BaseNamespace = ns
+	}
 	p.Port = m.det.AppPort
 	p.HealthPath = m.det.HealthPath // #182: 非対話側と同じ値を使う
 	p.HasDockerfile = m.det.HasDockerfile || m.answer("docker") == 0

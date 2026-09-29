@@ -89,14 +89,22 @@ func (d Detection) Base(project string) (BaseInfo, bool) {
 // BaseFor は Base に加えて「共有 base か」を返す。URL 規約と
 // static のプレフィックスが共有かどうかで変わるため。
 func (d Detection) BaseFor(project string) (info BaseInfo, shared, ok bool) {
+	info, _, shared, ok = d.BaseNamespaceFor(project)
+	return info, shared, ok
+}
+
+// BaseNamespaceFor は BaseFor に加えて、**どの名前空間で見つかったか**を返す(#196)。
+// init はこれを生成物の `base:` に反映する。project 自身の名前空間で見つかったなら
+// 書く必要はないので空を返す。
+func (d Detection) BaseNamespaceFor(project string) (info BaseInfo, namespace string, shared, ok bool) {
 	if b, hit := d.Bases[project]; hit {
-		return b, false, true
+		return b, "", false, true
 	}
 	if b, hit := d.Bases[SharedBaseKey]; hit {
-		return b, true, true
+		return b, SharedBaseKey, true, true
 	}
 	b, hit := d.Bases[""]
-	return b, false, hit
+	return b, "", false, hit
 }
 
 // HasSharedALB は共有 ALB ベースが既にあるか(あれば相乗りで固定費が増えない)。

@@ -436,7 +436,33 @@ us-east-1 のものを受けない。preview base が作るのは前者、ALB / 
 展開されず、`Fn::Split` の中では素の文字列のまま渡る(cfn-lint E1018)。そのため
 環境テンプレートは `BaseSubnets` というリスト型の SSM パラメータで受け取る:
 
+```
+
+### ベースの名前空間は `project` とは別物 [Stable]
+
+`<project>` の位置は **ベースの名前空間**で、`kagerou.yaml` の `base:` で明示できる(#196)。
+未指定なら `project` と同じ値になる(従来の挙動)。
+
 ```yaml
+project: authense        # 環境のタグ / list・reap の絞り込み / 紐付けキー
+base: bengo4-legal       # ベースの SSM 名前空間だけ製品群で共有する
+```
+
+**この 2 つを混ぜてはいけない。** `project` は `kagerou:project` タグとして環境に焼かれ、
+`list` / `reap` の分離境界(§1)になる。1 製品が複数リポジトリに分かれていて同じ土台に
+乗る場合、`project` を揃えると**片方の `reap` がもう片方の環境を回収対象に見る**。
+揃えるのは `base` だけにする。
+
+解決順:
+
+| `base:` | 探す順 |
+|---|---|
+| 未指定 | `<project>` → `_shared` → `_shared-alb` |
+| **明示** | **`<base>` のみ** |
+
+**明示したときに他の名前空間へ落ちないのは意図した挙動**(#196)。空振りして `_shared` に
+落ちると、別製品の土台に黙って繋がる。見つからなければ、探したキーと「明示しているので
+落とさない」ことを添えて失敗する。yaml
   BaseSubnets:
     Type: AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
     Default: /kagerou/base/<project>/alb_subnets   # apigateway 入口なら apigw_subnets
