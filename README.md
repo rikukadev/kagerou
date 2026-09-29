@@ -36,6 +36,14 @@ kagerou init
 - mysql2 等を検出したら [sashiki](https://github.com/rikukadev/sashiki)
   (使い捨て DB ブランチ)との連携が既定の選択肢になる
 
+## 入れる
+
+```bash
+brew install rikukadev/tap/kagerou     # 常用するなら
+npx kagerou diagnose                   # まず 1 回試すなら(入れない)
+go install github.com/rikukadev/kagerou/cmd/kagerou@latest
+```
+
 他のリポジトリで**診断だけ**したいときは:
 
 ```bash
