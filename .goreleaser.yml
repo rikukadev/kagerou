@@ -39,15 +39,15 @@ release:
 # (以前は Linuxbrew のために formula しか無かったが、今は cask で足りる)。
 #
 # **token が無ければ skip する。** tap は別リポジトリなので GITHUB_TOKEN では
-# push できず、PAT(HOMEBREW_TAP_TOKEN)が要る。未設定のときに落とすと、
+# push できず、PAT(HOMEBREW_TAP_GITHUB_TOKEN。sashiki と同じ名前)が要る。未設定のときに落とすと、
 # cask の都合でリリース全体が止まる — バイナリの配布のほうが優先度が高い。
 homebrew_casks:
   - name: kagerou
     repository:
       owner: rikukadev
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    skip_upload: "{{ .Env.HOMEBREW_SKIP_UPLOAD }}"
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: "{{ if index .Env \"HOMEBREW_TAP_GITHUB_TOKEN\" }}false{{ else }}true{{ end }}"
     directory: Casks
     homepage: https://github.com/rikukadev/kagerou
     description: Ephemeral preview environments on AWS, built from the container definitions you already have

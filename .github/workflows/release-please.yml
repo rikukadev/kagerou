@@ -73,8 +73,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # tap は別リポジトリなので GITHUB_TOKEN では push できない(#128)。
           # PAT が無いときは formula の更新だけ飛ばす — バイナリの配布を止めない
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          HOMEBREW_SKIP_UPLOAD: ${{ secrets.HOMEBREW_TAP_TOKEN == '' && 'true' || 'false' }}
+          # sashiki と同じ名前にしてある(同じ tap に push する PAT は 1 つで済む)
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
       # 利用者が参照する移動メジャータグ(action@v0)を最新リリースに追従させる。
       # examples / scaffold / README は @v0 を指しており、これが無いと解決できない。
