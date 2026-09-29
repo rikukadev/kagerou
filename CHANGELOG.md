@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.19.0](https://github.com/rikukadev/kagerou/compare/v0.18.2...v0.19.0) (2026-09-29)
+
+
+### Features
+
+* **config:** base: でベースの名前空間を指定できるようにする ([05c7108](https://github.com/rikukadev/kagerou/commit/05c7108dcfb3fb40ffcdc795e7cfd499051e99e0)), closes [#196](https://github.com/rikukadev/kagerou/issues/196)
+* **diagnose:** アプリ側に残る作業を出す ([296c166](https://github.com/rikukadev/kagerou/commit/296c166e1e5b1ac90719a9695363aeaefd42e193)), closes [#195](https://github.com/rikukadev/kagerou/issues/195)
+
+
+### Bug Fixes
+
+* **config:** 設定中の相対パスを設定ファイルの場所からも解決する ([86c6998](https://github.com/rikukadev/kagerou/commit/86c6998631c37b843b508171098b10cc618da82d))
+* **iam-policy:** ECR Public の認証を EcrAuth に足す ([#269](https://github.com/rikukadev/kagerou/issues/269)) ([689ac27](https://github.com/rikukadev/kagerou/commit/689ac27718168e8e485097581941d1fc3644b3d0))
+* **init:** workflow をリポジトリルートに置き、中身をアプリの場所に向ける ([a1259ca](https://github.com/rikukadev/kagerou/commit/a1259caa5a6cf5e80a6714e94eb81f10c03ac5dd)), closes [#225](https://github.com/rikukadev/kagerou/issues/225)
+* **init:** 生成記録を .kagerou/generated.json へ移す ([c7d198a](https://github.com/rikukadev/kagerou/commit/c7d198a4ef50ec39b512d2210e7dfa802de2fcaa)), closes [#224](https://github.com/rikukadev/kagerou/issues/224)
+
+
+### Documentation
+
+* **readme:** 最近入った 4 つを書く ([2145711](https://github.com/rikukadev/kagerou/commit/21457111fff57b9773a0d0c9e5496139182670f5))
+
 ## [0.18.2](https://github.com/rikukadev/kagerou/compare/v0.18.1...v0.18.2) (2026-09-28)
 
 
