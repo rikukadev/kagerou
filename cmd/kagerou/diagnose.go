@@ -27,6 +27,8 @@ type diagnosis struct {
 	// EntryNote は compute とは別に決まる入口の注記(#152)。
 	EntryNote string            `json:"entrypoint_note,omitempty"`
 	Reasons   []diagnosisReason `json:"reasons"`
+	// AppWork はアプリ側に残る作業(#195)。kagerou は直さない。空なら出さない
+	AppWork []diagnosisWork `json:"app_work,omitempty"`
 	// Diagram は推薦した入口の構成図(1 要素 1 行)。JSON でも行の配列で返す。
 	// 呼び出し側が自前で組み直さずに、そのまま貼れる形にしておく。
 	Diagram []string `json:"diagram"`
@@ -102,6 +104,9 @@ func cmdDiagnose(args []string, out *os.File) error {
 		return err
 	}
 	facts := appscan.Scan(abs)
+	// アプリ側に残る作業(#195)。ファイルしか読まないので diagnose の
+	// 「書かない・呼ばない」は変わらない
+	appWork := appscan.ScanAppWork(abs)
 	opts := recommend.Options{
 		Auth: *auth, AllowFixedCost: *fixed, ExistingALB: *existingALB,
 		CustomDomain: *customDomain,
@@ -125,6 +130,7 @@ func cmdDiagnose(args []string, out *os.File) error {
 			WithoutImage:  withoutImage(facts),
 		},
 	}
+	d.AppWork = groupAppWork(appWork)
 	if facts.Owner != "" {
 		d.Repo = facts.Owner + "/" + facts.Repo
 	}
@@ -218,6 +224,57 @@ func scaffoldFor(f appscan.Facts, e recommend.Entrypoint, dirName string) scaffo
 		}
 	}
 	return p
+}
+
+// diagnosisWork は --json 用。種類ごとにまとめて出す。
+type diagnosisWork struct {
+	Kind  string   `json:"kind"`
+	What  string   `json:"what"`
+	Fix   string   `json:"fix"`
+	Where []string `json:"where"`
+}
+
+// appWorkText は種類ごとの「何が起きるか」と「どうするか」。
+// **直すのは利用者**なので、現象と方針だけを言って手順は書かない。
+var appWorkText = map[appscan.AppWorkKind][2]string{
+	appscan.WorkWritableFS: {
+		"writes outside /tmp",
+		"Lambda's root filesystem is read-only — move these to /tmp, or pick compute: ecs",
+	},
+	appscan.WorkSecretsAtInit: {
+		"fetches secrets at package init",
+		"this runs on every cold start — move it inside the handler",
+	},
+	appscan.WorkFixedHost: {
+		"cookie / redirect bound to a fixed host",
+		"each environment gets its own host — read it from the request or an env var",
+	},
+	appscan.WorkHardcodedResource: {
+		"hardcoded bucket / ARN",
+		"these do not change per environment — pass them via env (CONTRACT §4)",
+	},
+}
+
+// groupAppWork は種類ごとにまとめる。同じ話を 20 行並べても読まれない。
+func groupAppWork(ws []appscan.AppWork) []diagnosisWork {
+	order := []appscan.AppWorkKind{
+		appscan.WorkWritableFS, appscan.WorkSecretsAtInit,
+		appscan.WorkFixedHost, appscan.WorkHardcodedResource,
+	}
+	byKind := map[appscan.AppWorkKind][]string{}
+	for _, w := range ws {
+		byKind[w.Kind] = append(byKind[w.Kind], fmt.Sprintf("%s:%d", w.File, w.Line))
+	}
+	var out []diagnosisWork
+	for _, k := range order {
+		where := byKind[k]
+		if len(where) == 0 {
+			continue
+		}
+		t := appWorkText[k]
+		out = append(out, diagnosisWork{Kind: string(k), What: t[0], Fix: t[1], Where: where})
+	}
+	return out
 }
 
 func writeDiagnosis(out *os.File, d diagnosis) error {
@@ -351,6 +408,25 @@ func writeDiagnosis(out *os.File, d diagnosis) error {
 		}
 		for _, f := range d.Files {
 			fmt.Fprintf(&b, "  %-*s  %s\n", w, f.Path, f.Note)
+		}
+	}
+
+	// アプリ側に残る作業(#195)。kagerou が作る層は生成できるが、時間を食うのは
+	// たいていここ。**直すのは利用者**なので、場所と理由だけを出す
+	if len(d.AppWork) > 0 {
+		b.WriteString("\nwork left in your app (kagerou does not change your code)\n")
+		for _, w := range d.AppWork {
+			fmt.Fprintf(&b, "  %-20s %s\n", w.Kind, w.What)
+			fmt.Fprintf(&b, "  %-20s %s\n", "", w.Fix)
+			shown := w.Where
+			if len(shown) > 3 {
+				shown = shown[:3]
+			}
+			fmt.Fprintf(&b, "  %-20s %s", "", strings.Join(shown, ", "))
+			if len(w.Where) > len(shown) {
+				fmt.Fprintf(&b, " (+%d more)", len(w.Where)-len(shown))
+			}
+			b.WriteString("\n")
 		}
 	}
 
