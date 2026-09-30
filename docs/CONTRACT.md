@@ -229,15 +229,36 @@ Lambda function URL に AWS Lambda Web Adapter(LWA)越しで置く想定(`$PORT`
 プレビュー URL が外から読める**。プレビュー本体を `auth:` で守っていても、
 その一覧が素通しでは意味が薄い。
 
-置き方は次のどちらかにする:
+前提として、**function URL は常にパブリックな HTTPS エンドポイント**。
+`AuthType: NONE` は「リソースベースポリシーでパブリックアクセスを許可する」
+という意味で、function URL 用の PrivateLink は無いため **VPC の中に閉じる
+ことはできない**([Control access to Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html))。
+以前ここに書いていた「VPC 内からのみ到達させる」は成立しないので削った(#282)。
 
-- **function URL を `AuthType: AWS_IAM`** にして、ポータル側が SigV4 で署名して叩く
-  (Backstage のバックエンドから呼ぶならこれが素直)
-- **VPC 内からのみ到達させる**(社内ネットワーク / VPC エンドポイント経由)
+推奨は **`AuthType: AWS_IAM`** にして、ポータル側が SigV4 で署名して叩くこと。
 
-どちらも取れない場合に何が出るかは把握しておくこと: 環境名、URL、TTL、
+- **Backstage 標準の proxy プラグインは SigV4 を送れない**(静的ヘッダしか
+  書けず、署名はリクエストごとにメソッド・パス・時刻から計算する)。既製の
+  [`@segment/backstage-plugin-proxy-sigv4-backend`](https://www.npmjs.com/package/@segment/backstage-plugin-proxy-sigv4-backend)
+  (Apache-2.0)を使えば backend 追加 1 行 + config で済む。認証情報は
+  EC2 のインスタンスプロファイル / ECS のタスクロール / EKS の IRSA を
+  そのまま拾う
+- 呼び出し側の IAM には `lambda:InvokeFunctionUrl` に加えて
+  **`lambda:InvokeFunction` も要る**(2025 年 10 月以降に作った function URL
+  は両方を要求する)。片方だけだと新規作成した URL で権限不足になる
+
+`AuthType: AWS_IAM` を取らない場合の緩和はリソースベースポリシーの
+`aws:SourceIp` で呼び出し元を絞ることだが、NAT・EIP の変更・複数 AZ で
+壊れやすい。本当にネットワークへ閉じたいなら function URL をやめて
+ALB / API Gateway の private エンドポイントにする(固定費が乗るので
+kagerou の既定構成からは外れる)。
+
+どれも取れない場合に何が出るかは把握しておくこと: 環境名、URL、TTL、
 `source`(リポジトリ名と PR 番号)、`owner`(IAM プリンシパル)。
 **`AuthType: NONE` で置くのは、これらが公開されてよいときだけ。**
+
+ローカル開発では裸の HTTP(`kagerou serve --addr :PORT`)で足りる。
+「ローカルは素通し / 本番は署名」の切り替えはポータル側の設定で行う。
 
 ## 7. Hooks に渡る環境変数 [Stable]
 
