@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.0](https://github.com/rikukadev/kagerou/compare/v0.19.0...v0.20.0) (2026-09-30)
+
+
+### Features
+
+* **dist:** Homebrew tap に載せる ([b3edf4b](https://github.com/rikukadev/kagerou/commit/b3edf4be24a6fdf71ce9cb92570d9c1e9514f8f5)), closes [#128](https://github.com/rikukadev/kagerou/issues/128)
+* **up:** --expires-at で絶対時刻の期限を指定できるようにする ([#281](https://github.com/rikukadev/kagerou/issues/281)) ([6be602a](https://github.com/rikukadev/kagerou/commit/6be602a1e04a6401c462f8ffd6f20be4edf7655a)), closes [#280](https://github.com/rikukadev/kagerou/issues/280)
+
+
+### Bug Fixes
+
+* **dist:** tap のトークン名を sashiki と揃える ([0fd9698](https://github.com/rikukadev/kagerou/commit/0fd9698fced960ab9da7997f0a0ed58ef08665d2))
+
 ## [0.19.0](https://github.com/rikukadev/kagerou/compare/v0.18.2...v0.19.0) (2026-09-29)
 
 
