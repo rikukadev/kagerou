@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/rikukadev/kagerou/compare/v0.20.0...v0.20.1) (2026-09-30)
+
+
+### Documentation
+
+* **contract:** §6 の置き方を実態に合わせて書き直す ([#283](https://github.com/rikukadev/kagerou/issues/283)) ([ea76458](https://github.com/rikukadev/kagerou/commit/ea76458566df137e4687f32f6d0513344244ed3d)), closes [#282](https://github.com/rikukadev/kagerou/issues/282)
+
 ## [0.20.0](https://github.com/rikukadev/kagerou/compare/v0.19.0...v0.20.0) (2026-09-30)
 
 
