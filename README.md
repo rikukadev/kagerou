@@ -9,6 +9,8 @@ Ephemeral environments on AWS.
 Named after 陽炎 — a heat shimmer — and 蜉蝣, the mayfly that lives for a day.
 Environments that appear, flicker, and are gone.
 
+解説記事: [kagerou の使い方](https://rikuka.dev/blog/kagerou-walkthrough/) / [一時環境という考え方と設計](https://rikuka.dev/blog/kagerou-ephemeral-environments/)
+
 > Status: alpha. `init` / `validate` / `up` / `down` / `url` / `list` / `reap` /
 > `iam-policy`、composite action、PR デモ 2 種まで動作。長期運用の実績はまだ。
 > The first adapter is GitHub pull requests; the core is not PR-specific.
